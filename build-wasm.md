@@ -61,11 +61,11 @@ Done:
 
 Open:
 
-- `main_em.c` currently sets `collects_dir = NULL`, which *disables*
-  the collection path — fine for a first boot that needs only
-  `racket/base` builtins, but `require`-ing anything from a collection
-  will fail until a `/collects` tree is preloaded and this is pointed
-  at it. `config_dir` is `"etc"` (a MEMFS-relative path).
+- `main_em.c` now expects a `/collects` tree and `/etc` directory to
+  be preloaded into MEMFS. It also sets `cs_compiled_subdir = 1` so
+  the WASM runtime looks in a machine-specific `compiled` subdirectory
+  instead of accidentally loading host-native fasls from plain
+  `compiled/`.
 
 ## Prerequisites
 
@@ -268,6 +268,8 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      --preload-file em-tpb32l/boot/tpb32l/petite.boot@petite.boot \
      --preload-file em-tpb32l/boot/tpb32l/scheme.boot@scheme.boot \
      --preload-file ../build-cs-tpb32l/racket.boot@racket.boot \
+    --preload-file ../../collects@/collects \
+    --preload-file ../../etc@/etc \
      -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
      -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset \
      -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction \

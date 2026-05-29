@@ -56,15 +56,14 @@ int main(int argc, char **argv) {
   ba.run_file  = self;
   ba.k_file    = self;
 
-  /* No bundled collections / config yet. The io layer will use rktio
-     against Emscripten's MEMFS for anything that's not satisfied by
-     `racket/base` builtins. */
-  ba.collects_dir = NULL;
-  ba.config_dir   = "etc";
+  /* Mount the top-level Racket tree into MEMFS so the resolver can
+     find collections and config data using stable absolute paths. */
+  ba.collects_dir = "/collects";
+  ba.config_dir   = "/etc";
 
-  /* cs_compiled_subdir = 0: look in `compiled/` rather than a
-     machine-specific subdirectory of `compiled/`. */
-  ba.cs_compiled_subdir = 0;
+  /* Use a machine-specific compiled-file subdirectory so the WASM
+     runtime does not try to load host-native fasls from `compiled/`. */
+  ba.cs_compiled_subdir = 1;
 
   /* segment_offset is for `-k` embedded bytecode, which we never
      produce on this target. */
