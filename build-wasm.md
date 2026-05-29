@@ -1,0 +1,283 @@
+# Building Racket for WebAssembly (Emscripten)
+
+This document describes the in-progress port of Racket CS to WebAssembly,
+running under Emscripten. The pipeline reaches the point where Chez
+Scheme + libffi + a statically linked `librktio` + a tpb32l-compiled
+`racket.boot` boot together, execute libffi calls into rktio
+successfully, and reach Racket's own startup code — which then halts
+because nothing has populated the `racket_boot_arguments_t` struct that
+`racket/src/cs/c/boot.c` expects. Closing that gap is the only remaining
+work to get a Racket REPL inside the WASM module.
+
+## Status
+
+Working:
+
+- Chez Scheme builds for WebAssembly via the upstream `--emscripten`
+  configure path (basic pb).
+- First-class continuations work under Chez pb on WASM (the pb
+  interpreter manages its own Scheme stack independent of the WASM
+  call stack).
+- `librktio` cross-compiles cleanly to WASM via Emscripten with a
+  small `__EMSCRIPTEN__` platform branch (committed earlier; see
+  `racket/src/rktio/rktio_platform.h`).
+- libffi 3.5.2 cross-compiles to WASM (`emconfigure ../configure
+  --host=wasm32-unknown-emscripten ...`) and links into Chez's
+  `--enable-libffi` build.
+- A custom `racket.boot` compiled for the **tpb32l** machine type
+  (`uptr = uint32_t`, matching WASM32's pointer width) loads into Chez
+  Emscripten correctly. Racket's `io` layer initializes, calls
+  `rktio_init` through libffi, and successfully invokes follow-on
+  rktio operations on the result.
+- The pb interpreter's `pb_call_*` instructions on tpb32l do
+  `call_indirect` with the same WASM signatures as the C library's
+  actually-compiled functions, so the `null function or function
+  signature mismatch` class that plagues a basic-pb (`uptr =
+  uint64_t`) build does not occur.
+
+Open:
+
+- Chez Scheme's default `main.c` calls `Sbuild_heap` and then enters
+  the standard Scheme REPL. Racket's `racket.boot` instead expects to
+  be entered through `racket_boot(racket_boot_arguments_t *)` (see
+  `racket/src/cs/c/boot.c`), which sets `exec-file`, `run-file`,
+  `collects-dir`, `etc-dir`, `k-file`, `segment-offset`,
+  `embedded-interactive-mode?`, `is-gui?` and a handful of other
+  bindings before `racket.boot` is allowed to run its startup. When
+  loaded under Chez's default startup these bindings are unset and
+  `racket.boot` aborts with:
+  ```
+  /usr/local/bin/racket: expected `embedded-interactive-mode?`,
+  `exec-file`, `run-file`, `collects`, and `etc` paths plus `k-file`,
+  `segment-offset`, `cs-compiled-subdir?`, `is-gui?`,
+  `wm-is-gracket-or-x11-arg-count`, and `gracket-guid-or-x11-args` to
+  start
+  ```
+- An Emscripten-specific boot harness is therefore still to be
+  written. It should mirror `racket/src/cs/c/main.c` (the same C file
+  the native CS build uses) but use Emscripten-appropriate paths
+  (`MEMFS` for `--collects-dir`, etc.) and skip the dynamic boot-file
+  discovery in `racket/src/cs/c/boot.c` since the WASM build has the
+  boot files preloaded at fixed paths.
+- `racket/src/cs/c/main.c` already does almost all of this for the
+  native build. The Emscripten variant can plausibly be a small `#ifdef
+  __EMSCRIPTEN__` shim plus a tweaked link line rather than a fresh
+  entry point.
+
+## Prerequisites
+
+- `emsdk` — install via `git clone https://github.com/emscripten-core/emsdk.git`,
+  then `./emsdk install latest && ./emsdk activate latest`. The scripts
+  below assume `source <emsdk>/emsdk_env.sh` makes `emcc`/`emconfigure`/`emmake`
+  available.
+- A working native Racket CS build of the same source tree. Run
+  `make cs` from the repository root once. This produces:
+  - `racket/bin/racket` (the host Racket used during the cross-build),
+  - `racket/src/build/cs/c/ChezScheme/tarm64osx/...` (the native Chez
+    used as the cross-compiler host),
+  - `racket/src/build/cs/c/ChezScheme/pb/...` (a host-side basic-pb
+    Chez used for bootquick).
+- libffi source tarball (release 3.5.x). 3.5.2 is known to work; older
+  3.4.x versions use deprecated Emscripten JS-library names
+  (`generateFuncType`, `uleb128Encode`) that newer emsdk renames.
+
+## Build sequence
+
+The full pipeline is six stages. All paths below are relative to the
+repository root. The work directories that get created live under
+`racket/src/` and are gitignored.
+
+### 1. Cross-compile rktio for WebAssembly
+
+```sh
+cd racket/src/rktio
+mkdir -p build-em && cd build-em
+source $EMSDK/emsdk_env.sh
+emconfigure ../configure --host=wasm32-unknown-emscripten --disable-pthread
+emmake make librktio.a
+mv '@HIDE_NOT_STANDALONE@librktio.a' librktio.a   # configure leaves an
+                                                  # unsubstituted token
+                                                  # in the archive name
+                                                  # for standalone builds
+```
+
+This uses the `__EMSCRIPTEN__` branch added to `rktio_platform.h`
+(commit `1a2130c981`); no further patches are needed. The archive is
+~388 KB.
+
+### 2. Cross-compile libffi 3.5.2 for WebAssembly
+
+```sh
+cd racket/src/
+mkdir -p build-libffi-em && cd build-libffi-em
+curl -sL https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz | tar xz
+mv libffi-3.5.2 src
+cd src && mkdir -p build && cd build
+source $EMSDK/emsdk_env.sh
+emconfigure ../configure \
+  --host=wasm32-unknown-emscripten \
+  --enable-static --disable-shared --disable-docs \
+  --disable-multi-os-directory \
+  --prefix=$PWD/../../install
+emmake make -j4
+make install
+```
+
+The library appears at `racket/src/build-libffi-em/install/lib/libffi.a`
+with headers in `.../include/`.
+
+### 3. Generate tpb32l boot files and cross-compiler `xpatch`
+
+The Racket `thread` layer uses `make-pthread-parameter`, so the target
+must be a **threaded** pb variant: `tpb32l`. The cross-compiler is
+generated from the native `tarm64osx` (or whatever the host machine
+type is) Chez built by `make cs`, *not* from a basic-pb host scheme —
+the latter trips Chez's cp0 optimizer with `unexpected context ...
+call current-thread/in-racket` on `thread.sls`.
+
+```sh
+cd racket/src/ChezScheme
+# A native basic-pb host workarea, needed only to invoke bootquick:
+./configure --pb --workarea=pb-host && make
+# Cross-build pb32l boot files and the xpatch using tarm64osx as host:
+bin/zuo pb-host bootquick \
+  --host-scheme ../build/cs/c/ChezScheme/tarm64osx/bin/tarm64osx/scheme \
+  tpb32l
+```
+
+This produces `racket/src/ChezScheme/xc-tpb32l/boot/tpb32l/{petite,scheme}.boot`
+and `xc-tpb32l/s/xpatch`.  Copy the boot files into the place where
+Chez's `--emscripten` configure expects them:
+
+```sh
+mkdir -p boot/tpb32l
+cp xc-tpb32l/boot/tpb32l/petite.boot boot/tpb32l/
+cp xc-tpb32l/boot/tpb32l/scheme.boot boot/tpb32l/
+```
+
+### 4. Cross-build `racket.boot` for the tpb32l target
+
+The Racket CS build needs to be told the host machine type is the
+existing native tarm64osx (so it can run the compiler) but the target
+machine type is tpb32l (so the produced `racket.boot` matches what
+Chez Emscripten will load). The configure script doesn't expose this
+cleanly when `--enable-pb --enable-mach=tpb32l` are passed together —
+it sets `MACH = tpb32l` and tries to use a tpb32l host scheme. The
+workaround is to configure normally and then edit `MACH` in the
+generated Makefile to be the native host:
+
+```sh
+cd racket/src
+mkdir -p build-cs-tpb32l && cd build-cs-tpb32l
+CPPFLAGS="-I$XCODE_FFI" ../cs/c/configure \
+  --enable-pb --enable-mach=tpb32l --enable-target=tpb32l \
+  --disable-pbchunk \
+  --enable-scheme=$PWD/../build/cs/c
+# (Adjust XCODE_FFI / CPPFLAGS for your platform's libffi headers.)
+
+# Force cross-build: host is native, target is tpb32l.
+sed -i.bak 's/^MACH = tpb32l/MACH = tarm64osx/' Makefile
+
+# Make the cross-compile xpatch visible where build.zuo looks for it:
+mkdir -p ChezScheme/xc-tpb32l/s
+cp ../ChezScheme/xc-tpb32l/s/xpatch ChezScheme/xc-tpb32l/s/xpatch
+
+make
+```
+
+The `make` succeeds through all CS layers — chezpart, rumble, thread,
+io, regexp, schemify, linklet, expander, main — and writes
+`racket.boot` (~4.3 MB) to the workarea root. The final
+`bootstrap-racket` step fails cosmetically (`relative-path?: not a
+path string: ""`) but by then `racket.boot` is already written, so the
+error is non-blocking.
+
+### 5. Build Chez Emscripten for tpb32l with libffi and the rktio link
+
+```sh
+cd racket/src/ChezScheme
+source $EMSDK/emsdk_env.sh
+
+CPPFLAGS="-I$PWD/../build-libffi-em/install/include" \
+LDFLAGS="-L$PWD/../build-libffi-em/install/lib" \
+./configure --emscripten --pbarch --threads --enable-libffi \
+            --workarea=em-tpb32l \
+            --emboot=$PWD/../build-cs-tpb32l/racket.boot
+
+# libffi's wasm closures need a few extra link flags. Edit
+# em-tpb32l/Mf-config and replace the mdlinkflags line with:
+#   mdlinkflags=-s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
+#       -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset \
+#       -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction \
+#       -sALLOW_TABLE_GROWTH=1
+```
+
+Then build the rktio-init object and the kernel with `CUSTOM_INIT`:
+
+```sh
+emcc -DPORTABLE_BYTECODE \
+     -I ../rktio -I ../rktio/build-em \
+     -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ -I em-tpb32l/lz4/lib \
+     -O2 -pthread -s USE_ZLIB=1 \
+     -o em-tpb32l/boot/tpb32l/init_rktio.o -c c/init_rktio.c
+
+emcc -DPORTABLE_BYTECODE \
+     -DCUSTOM_INIT=init_rktio_symbols -include c/init_rktio.h \
+     -I ../build-libffi-em/install/include \
+     -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ -I em-tpb32l/lz4/lib \
+     -O2 -pthread -s USE_ZLIB=1 \
+     -Wpointer-arith -Wall -Wextra -Wno-implicit-fallthrough \
+     -o em-tpb32l/boot/tpb32l/main.o -c c/main.c
+```
+
+Finally link everything, including `librktio.a` and `-lffi`:
+
+```sh
+emcc -O2 -pthread -s USE_ZLIB=1 \
+     -o em-tpb32l/bin/tpb32l/scheme.html \
+     em-tpb32l/boot/tpb32l/main.o \
+     em-tpb32l/boot/tpb32l/init_rktio.o \
+     em-tpb32l/boot/tpb32l/libkernel.a \
+     em-tpb32l/lz4/lib/liblz4.a \
+     ../rktio/build-em/librktio.a \
+     -L ../build-libffi-em/install/lib \
+     --preload-file em-tpb32l/boot/tpb32l/petite.boot@petite.boot \
+     --preload-file em-tpb32l/boot/tpb32l/scheme.boot@scheme.boot \
+     --preload-file ../build-cs-tpb32l/racket.boot@racket.boot \
+     -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
+     -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset \
+     -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction \
+     -sALLOW_TABLE_GROWTH=1 \
+     -lffi
+```
+
+### 6. Run
+
+```sh
+cd em-tpb32l/bin/tpb32l
+echo '(+ 1 2)' | node scheme.js
+```
+
+You will see Chez's Petite banner print, then `racket.boot` begin
+loading, then a long sequence of libffi calls into rktio succeed, and
+finally Racket's startup raise the boot-arguments error described in
+the *Open* section above. That error is the next thing to fix.
+
+## What still has to be written
+
+The Emscripten boot harness. The shape is:
+
+1. Define a small C file (call it `c/embind.c` or similar) that builds
+   a `racket_boot_arguments_t` with reasonable defaults for the WASM
+   sandbox (`exec_file = "racket"`, `run_file = exec_file`,
+   `collects_dir = "/collects"`, `etc_dir = "/etc"`,
+   `embedded_interactive_mode = 1`, etc.) and calls `racket_boot(&ba)`.
+2. Replace Chez's default `main.c` with this in the Emscripten link
+   line.
+3. Statically link the rest of `boot.c` (which provides `racket_boot`)
+   alongside `init_rktio.o`, `libkernel.a`, `librktio.a`, and `-lffi`.
+
+Once that's in place, the same `node scheme.js` command should reach
+Racket's REPL prompt. From there, the original plan resumes:
+verifying continuations work end-to-end through Racket and building a
+browser shell with an xterm.js terminal.
