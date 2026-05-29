@@ -4,10 +4,11 @@ This document describes the in-progress port of Racket CS to WebAssembly,
 running under Emscripten. The pipeline reaches the point where Chez
 Scheme + libffi + a statically linked `librktio` + a tpb32l-compiled
 `racket.boot` boot together, execute libffi calls into rktio
-successfully, and reach Racket's own startup code — which then halts
-because nothing has populated the `racket_boot_arguments_t` struct that
-`racket/src/cs/c/boot.c` expects. Closing that gap is the only remaining
-work to get a Racket REPL inside the WASM module.
+successfully, and reach Racket's own startup code. A dedicated
+Emscripten entry point (`racket/src/cs/c/main_em.c`) now populates the
+`racket_boot_arguments_t` struct that `racket/src/cs/c/boot.c` expects
+and calls `racket_boot`, replacing Chez's default `main.c` in the WASM
+link line.
 
 ## Status
 
@@ -35,34 +36,36 @@ Working:
   signature mismatch` class that plagues a basic-pb (`uptr =
   uint64_t`) build does not occur.
 
-Open:
+Done:
 
 - Chez Scheme's default `main.c` calls `Sbuild_heap` and then enters
   the standard Scheme REPL. Racket's `racket.boot` instead expects to
   be entered through `racket_boot(racket_boot_arguments_t *)` (see
-  `racket/src/cs/c/boot.c`), which sets `exec-file`, `run-file`,
+  `racket/src/cs/c/boot.c`), which needs `exec-file`, `run-file`,
   `collects-dir`, `etc-dir`, `k-file`, `segment-offset`,
   `embedded-interactive-mode?`, `is-gui?` and a handful of other
-  bindings before `racket.boot` is allowed to run its startup. When
-  loaded under Chez's default startup these bindings are unset and
-  `racket.boot` aborts with:
-  ```
-  /usr/local/bin/racket: expected `embedded-interactive-mode?`,
-  `exec-file`, `run-file`, `collects`, and `etc` paths plus `k-file`,
-  `segment-offset`, `cs-compiled-subdir?`, `is-gui?`,
-  `wm-is-gracket-or-x11-arg-count`, and `gracket-guid-or-x11-args` to
-  start
-  ```
-- An Emscripten-specific boot harness is therefore still to be
-  written. It should mirror `racket/src/cs/c/main.c` (the same C file
-  the native CS build uses) but use Emscripten-appropriate paths
-  (`MEMFS` for `--collects-dir`, etc.) and skip the dynamic boot-file
-  discovery in `racket/src/cs/c/boot.c` since the WASM build has the
-  boot files preloaded at fixed paths.
-- `racket/src/cs/c/main.c` already does almost all of this for the
-  native build. The Emscripten variant can plausibly be a small `#ifdef
-  __EMSCRIPTEN__` shim plus a tweaked link line rather than a fresh
-  entry point.
+  bindings set before `racket.boot` runs its startup. Loaded under
+  Chez's default startup these are unset and `racket.boot` aborts with
+  the `expected ... to start` error.
+- The Emscripten boot harness `racket/src/cs/c/main_em.c` now exists.
+  Rather than mirroring the native `main.c` (which does Windows DLL
+  injection, OS X frameworks, ELF section probing, and embedded
+  boot-file offset discovery — none of it relevant under Emscripten),
+  it is a self-contained ~80-line entry point that `memset`s the
+  struct, points the three boot files at their preloaded MEMFS paths
+  (`/petite.boot`, `/scheme.boot`, `/racket.boot`, all with
+  `offset = 0`, `len = 0` for "read whole file"), passes `argv`
+  through (stripping `argv[0]` per the struct's convention), sets
+  `exec_file`/`run_file`/`k_file` to `argv[0]` (or `"racket"`), and
+  calls `racket_boot`.
+
+Open:
+
+- `main_em.c` currently sets `collects_dir = NULL`, which *disables*
+  the collection path — fine for a first boot that needs only
+  `racket/base` builtins, but `require`-ing anything from a collection
+  will fail until a `/collects` tree is preloaded and this is pointed
+  at it. `config_dir` is `"etc"` (a MEMFS-relative path).
 
 ## Prerequisites
 
@@ -230,12 +233,33 @@ emcc -DPORTABLE_BYTECODE \
      -o em-tpb32l/boot/tpb32l/main.o -c c/main.c
 ```
 
+For the Racket-on-WASM target, compile the Emscripten entry point
+`../cs/c/main_em.c` instead of Chez's `c/main.c`, plus `../cs/c/boot.c`
+(which provides `racket_boot`). Both need Racket's `boot.h` on the
+include path:
+
+```sh
+emcc -DPORTABLE_BYTECODE \
+     -I ../cs/c \
+     -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ \
+     -O2 -pthread -s USE_ZLIB=1 \
+     -Wall -Wextra \
+     -o em-tpb32l/boot/tpb32l/main_em.o -c ../cs/c/main_em.c
+
+emcc -DPORTABLE_BYTECODE \
+     -I ../cs/c \
+     -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ \
+     -O2 -pthread -s USE_ZLIB=1 \
+     -o em-tpb32l/boot/tpb32l/boot.o -c ../cs/c/boot.c
+```
+
 Finally link everything, including `librktio.a` and `-lffi`:
 
 ```sh
 emcc -O2 -pthread -s USE_ZLIB=1 \
      -o em-tpb32l/bin/tpb32l/scheme.html \
-     em-tpb32l/boot/tpb32l/main.o \
+     em-tpb32l/boot/tpb32l/main_em.o \
+     em-tpb32l/boot/tpb32l/boot.o \
      em-tpb32l/boot/tpb32l/init_rktio.o \
      em-tpb32l/boot/tpb32l/libkernel.a \
      em-tpb32l/lz4/lib/liblz4.a \
@@ -258,26 +282,20 @@ cd em-tpb32l/bin/tpb32l
 echo '(+ 1 2)' | node scheme.js
 ```
 
-You will see Chez's Petite banner print, then `racket.boot` begin
-loading, then a long sequence of libffi calls into rktio succeed, and
-finally Racket's startup raise the boot-arguments error described in
-the *Open* section above. That error is the next thing to fix.
+With `main_em.c` linked in, you will see Chez's Petite banner print,
+then `racket.boot` begin loading, then a long sequence of libffi calls
+into rktio succeed, and the boot-arguments struct is now populated so
+startup proceeds past the old `expected ... to start` error.
 
 ## What still has to be written
 
-The Emscripten boot harness. The shape is:
+The boot harness (`racket/src/cs/c/main_em.c`) is in place. Remaining
+work:
 
-1. Define a small C file (call it `c/embind.c` or similar) that builds
-   a `racket_boot_arguments_t` with reasonable defaults for the WASM
-   sandbox (`exec_file = "racket"`, `run_file = exec_file`,
-   `collects_dir = "/collects"`, `etc_dir = "/etc"`,
-   `embedded_interactive_mode = 1`, etc.) and calls `racket_boot(&ba)`.
-2. Replace Chez's default `main.c` with this in the Emscripten link
-   line.
-3. Statically link the rest of `boot.c` (which provides `racket_boot`)
-   alongside `init_rktio.o`, `libkernel.a`, `librktio.a`, and `-lffi`.
-
-Once that's in place, the same `node scheme.js` command should reach
-Racket's REPL prompt. From there, the original plan resumes:
-verifying continuations work end-to-end through Racket and building a
-browser shell with an xterm.js terminal.
+1. Preload a `/collects` tree and set `collects_dir` to it in
+   `main_em.c` so `require` of non-builtin collections resolves
+   (currently `collects_dir = NULL` disables the collection path).
+2. Verify first-class continuations work end-to-end *through Racket*
+   (not just at the Chez pb level) once the REPL is reachable.
+3. Build a browser shell with an xterm.js terminal around the WASM
+   module.
