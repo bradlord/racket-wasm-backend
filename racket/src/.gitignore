@@ -1,2 +1,8 @@
 # the conventional directory to run builds in
 /build/
+
+# WASM port (see ../../build-wasm.md): build workareas for cross-building
+# pb32l/tpb32l Racket-CS layers, host-side libffi for Emscripten, and any
+# build-cs-* attempts at different machine-type configurations.
+/build-cs-*/
+/build-libffi-em/

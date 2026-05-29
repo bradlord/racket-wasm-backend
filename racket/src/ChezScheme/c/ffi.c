@@ -573,26 +573,39 @@ void S_ffi_call(ptr types, ptr proc, ptr *arena) {
 ptr S_ffi_closure(ptr types, ptr proc) {
   ffi_cif *cif = make_cif(types);
   ffi_closure *closure;
-  ptr vec;
+  ptr vec, code_obj, closure_obj;
   void *code;
 
   closure = ffi_closure_alloc(sizeof(ffi_closure), &code);
 
+#ifdef __EMSCRIPTEN__
+  /* On WebAssembly, libffi's `code` is a function table index (a small
+     integer like 5, 12, 100), not a memory address.  Such indices have
+     arbitrary low bits and cannot be stored as a raw `ptr` in a Scheme
+     vector slot.  Box it as a Scheme unsigned integer; the decoder in
+     `foreign-callable-entry-point` (prims.ss) recognizes this case
+     because `Sintegerp` of the slot is true rather than `Sfixnump`. */
+  code_obj = Sunsigned((uptr)code);
+  closure_obj = Sunsigned((uptr)closure);
+#else
   if (!Sfixnump(TO_PTR(closure)) || !Sfixnump(TO_PTR(code)))
     S_error("foreign-callable", "libffi code allocation not sufficiently aligned");
+  code_obj = TO_PTR(code);
+  closure_obj = TO_PTR(closure);
+#endif
 
   vec = S_vector_in(get_thread_context(), space_immobile_impure, 0, 3);
   S_immobilize_object(vec);
 
   Svector_set(vec, 0, proc);
   Svector_set(vec, 1, types);
-  Svector_set(vec, 2, TO_PTR(code));
-  
+  Svector_set(vec, 2, code_obj);
+
   ffi_prep_closure_loc(closure, cif, closure_callback, TO_VOIDP(vec), code);
 
   tc_mutex_acquire();
-  S_G.foreign_callables = Scons(S_weak_cons(vec, Scons(TO_PTR(closure),
-                                                       TO_PTR(code))),
+  S_G.foreign_callables = Scons(S_weak_cons(vec, Scons(closure_obj,
+                                                       code_obj)),
                                 S_G.foreign_callables);
   check_prune_callables();
   tc_mutex_release();
@@ -799,6 +812,11 @@ static void closure_callback(UNUSED ffi_cif *cif, void *ret, void **args, void *
 
 ptr Sforeign_callable_code_object(void *addr) {
   ptr p, result = Sfalse;
+#ifdef __EMSCRIPTEN__
+  /* `code` was stored via Sunsigned (see S_ffi_closure), so compare
+     by extracting the integer value, not by pointer equality. */
+  uptr addr_uval = (uptr)addr;
+#endif
 
   tc_mutex_acquire();
 
@@ -806,10 +824,19 @@ ptr Sforeign_callable_code_object(void *addr) {
 
   while (p != Snil) {
     ptr a = Scar(p);
+#ifdef __EMSCRIPTEN__
+    ptr stored = Scdr(Scdr(a));
+    if ((Sfixnump(stored) || Sbignump(stored))
+        && Sunsigned_value(stored) == addr_uval) {
+      result = Scar(a);
+      break;
+    }
+#else
     if (Scdr(Scdr(a)) == TO_PTR(addr)) {
       result = Scar(a);
       break;
     }
+#endif
     p = Scdr(p);
   }
 
@@ -829,7 +856,11 @@ void check_prune_callables() {
     while (p != Snil) {
       ptr a = Scar(p);
       if (Scar(a) == Sbwp_object) {
+#ifdef __EMSCRIPTEN__
+        ffi_closure_free((void *)(uptr)Sunsigned_value(Scar(Scdr(a))));
+#else
         ffi_closure_free(TO_VOIDP(Scar(Scdr(a))));
+#endif
         p = Scdr(p);
         if (prev == (ptr)0)
           S_G.foreign_callables = p;
