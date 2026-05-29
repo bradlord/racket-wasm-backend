@@ -174,7 +174,7 @@ cd racket/src
 mkdir -p build-cs-tpb32l && cd build-cs-tpb32l
 CPPFLAGS="-I$XCODE_FFI" ../cs/c/configure \
   --enable-pb --enable-mach=tpb32l --enable-target=tpb32l \
-  --disable-pbchunk \
+  # --disable-pbchunk \
   --enable-scheme=$PWD/../build/cs/c
 # (Adjust XCODE_FFI / CPPFLAGS for your platform's libffi headers.)
 
@@ -289,15 +289,35 @@ then `racket.boot` begin loading, then a long sequence of libffi calls
 into rktio succeed, and the boot-arguments struct is now populated so
 startup proceeds past the old `expected ... to start` error.
 
+### WIP: pre-generate `compiled/tpb32l`
+
+This part is still in progress, but there is now a helper script for
+pre-generating target-specific compiled files in machine-specific
+subdirectories such as `compiled/tpb32l`.
+
+From the repository root:
+
+```sh
+./racket/bin/racket -c ./racket/src/precompile-target-compiled.rkt reader
+```
+
+That currently compiles the `reader` collection and writes output like
+`racket/collects/reader/lang/compiled/tpb32l/reader_rkt.zo` and its
+matching `.dep` file. The `-c` is currently important in this working
+tree: it prevents the host Racket process from loading stale
+host-side `compiled/` artifacts that were polluted during earlier
+cross-compilation experiments.
+
+The helper also accepts explicit collections, `--all`, `--target`, and
+`--build-dir`, but it should still be treated as experimental until it
+has been exercised on a broader set of collections.
+
 ## What still has to be written
 
 The boot harness (`racket/src/cs/c/main_em.c`) is in place. Remaining
 work:
 
-1. Preload a `/collects` tree and set `collects_dir` to it in
-   `main_em.c` so `require` of non-builtin collections resolves
-   (currently `collects_dir = NULL` disables the collection path).
-2. Verify first-class continuations work end-to-end *through Racket*
+1. Verify first-class continuations work end-to-end *through Racket*
    (not just at the Chez pb level) once the REPL is reachable.
-3. Build a browser shell with an xterm.js terminal around the WASM
+2. Build a browser shell with an xterm.js terminal around the WASM
    module.
