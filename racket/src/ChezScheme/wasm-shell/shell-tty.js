@@ -1,26 +1,33 @@
 /* shell-tty.js  --  linked into scheme-web.js via `emcc --post-js`.
  *
- * This runs inside the Emscripten module closure (on every thread that
- * loads the script, including the PROXY_TO_PTHREAD compute worker), so it
- * can see the internal `TTY`, `HEAP32`, and the exported ring accessors.
+ * This runs inside the Emscripten module closure (on the runtime
+ * worker -- see shell-worker.js), so it can see the internal `TTY`,
+ * `HEAP32`, and the exported ring accessors.
  *
- * It replaces the default TTY character ops so that stdin/stdout go
- * through the shared-memory rings defined in wasm_shell_io.c instead of
+ * It replaces the TTY stream ops so that stdin/stdout go through the
+ * shared-memory rings defined in wasm_shell_io.c instead of
  * window.prompt / console.log:
  *
- *   - get_char (stdin): blocks on the input ring with Atomics.wait until
- *     a byte arrives, then drains everything currently buffered. The
- *     browser build now runs the runtime in a dedicated Web Worker (the
- *     page itself spawns it -- see shell-worker.js), so blocking here is
- *     safe: Atomics.wait is permitted on a worker. The page's main
- *     thread, which is *not* allowed to Atomics.wait, only writes into
- *     the input ring and polls the output ring. This replaces the old
- *     -sPROXY_TO_PTHREAD design, where the FS was proxied back to the
- *     page main thread and the read had to be non-blocking, busy-polling
- *     the CPU between keystrokes.
- *   - put_char (stdout/stderr): push each byte into the output ring; the
- *     page polls and renders it (no newline buffering, so the REPL prompt
- *     shows immediately).
+ *   - read (stdin): blocks on the input ring with Atomics.wait until at
+ *     least one byte is available, then drains up to `length` bytes from
+ *     the ring into the syscall buffer and returns the count. Blocking
+ *     here is safe because the runtime lives on a dedicated worker (the
+ *     page itself spawns it). The page's main thread, which may NOT
+ *     Atomics.wait, only writes into the input ring and polls the
+ *     output ring.
+ *
+ *     *We override stream_ops.read directly, not default_tty_ops.get_char.*
+ *     Emscripten's TTY stream_ops.read implementation calls get_char in a
+ *     loop, breaking only when get_char returns null/undefined. A blocking
+ *     get_char would happily deliver the first byte(s), then block forever
+ *     inside the same read syscall waiting for the (length - bytesRead)
+ *     trailing characters that nobody will ever type. The syscall would
+ *     never return; Racket would never observe the typed line. Owning
+ *     the whole syscall and returning after one wait avoids that trap.
+ *
+ *   - write (stdout/stderr): push each byte into the output ring; the
+ *     page polls and renders it (no newline buffering, so the REPL
+ *     prompt shows immediately).
  *
  * The page side (browser-shell.js) is the peer producer/consumer.
  */
@@ -33,12 +40,6 @@
 
   var inBase = -1, inCap = 0;
   var outBase = -1, outCap = 0;
-
-  function resolveAddr(fn) {
-    // The accessor may be visible as a closure-scoped `_name` or on Module.
-    if (typeof fn === "function") return fn();
-    return null;
-  }
 
   function inReady() {
     if (inBase >= 0) return true;
@@ -64,33 +65,34 @@
     return true;
   }
 
-  // One read() pulls a burst of currently-available bytes from the ring,
-  // blocking with Atomics.wait when the ring is empty.
-  var pending = [];
+  function streamRead(stream, buffer, offset, length /*, pos */) {
+    if (length <= 0) return 0;
+    if (!inReady()) return 0;
 
-  function getChar() {
-    if (pending.length) return pending.shift();
-    if (!inReady()) return undefined;
-
-    // Re-read HEAP32 each time: ALLOW_MEMORY_GROWTH can swap the view.
+    // Re-read HEAP32 each time we touch it: ALLOW_MEMORY_GROWTH can
+    // swap the typed-array view.
     var H = HEAP32;
     var head = Atomics.load(H, inBase + HEAD);
     var tail = Atomics.load(H, inBase + TAIL);
 
-    // Block until the page bumps tail and notifies.
+    // Block until the page bumps tail and notifies. Wait at most once
+    // per syscall: when we wake (or were already past), we deliver
+    // whatever is currently buffered and return -- the rktio read path
+    // is happy to be called again for the remainder.
     while (head === tail) {
       Atomics.wait(H, inBase + TAIL, tail);
       H = HEAP32;
       tail = Atomics.load(H, inBase + TAIL);
     }
 
-    while (head !== tail) {
-      pending.push(Atomics.load(H, inBase + DATA + (head % inCap)) & 0xff);
+    var n = 0;
+    while (head !== tail && n < length) {
+      buffer[offset + n] = Atomics.load(H, inBase + DATA + (head % inCap)) & 0xff;
       head++;
+      n++;
     }
     Atomics.store(H, inBase + HEAD, head);
-
-    return pending.length ? pending.shift() : undefined;
+    return n;
   }
 
   function putByte(val) {
@@ -100,15 +102,25 @@
     var tail = Atomics.load(H, outBase + TAIL);
     H[outBase + DATA + (tail % outCap)] = val & 0xff;
     Atomics.store(H, outBase + TAIL, tail + 1);
-    // No notify: the main thread polls (it may not Atomics.wait).
+    // No notify: the page polls (it may not Atomics.wait).
   }
 
-  TTY.default_tty_ops.get_char = function () { return getChar(); };
-  TTY.default_tty_ops.put_char = function (tty, val) { putByte(val); };
-  TTY.default_tty_ops.fsync = function () {};
+  function streamWrite(stream, buffer, offset, length /*, pos */) {
+    if (length <= 0) return 0;
+    for (var i = 0; i < length; i++) putByte(buffer[offset + i]);
+    return length;
+  }
 
+  TTY.stream_ops.read  = streamRead;
+  TTY.stream_ops.write = streamWrite;
+
+  // Keep put_char overrides so anything that still calls them (fsync of
+  // a partially buffered line, future code paths) routes through the
+  // output ring rather than the default console.
+  TTY.default_tty_ops.put_char = function (tty, val) { putByte(val); };
+  TTY.default_tty_ops.fsync    = function () {};
   if (TTY.default_tty1_ops) {
     TTY.default_tty1_ops.put_char = function (tty, val) { putByte(val); };
-    TTY.default_tty1_ops.fsync = function () {};
+    TTY.default_tty1_ops.fsync    = function () {};
   }
 })();

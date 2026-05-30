@@ -104,7 +104,10 @@
   var pendingLine = "";
 
   function sendBytes(bytes) {
-    if (!ioReady) return;
+    if (!ioReady) {
+      debug("drop " + bytes.length + " bytes (runtime not ready)");
+      return;
+    }
     var H = HEAP32;
     var tail = Atomics.load(H, ringInBase + TAIL);
     for (var i = 0; i < bytes.length; i++) {
@@ -113,6 +116,41 @@
     }
     Atomics.store(H, ringInBase + TAIL, tail);
     Atomics.notify(H, ringInBase + TAIL);
+    debug("send " + bytes.length + "B, in.tail=" + tail +
+          ", in.head(observed)=" + Atomics.load(H, ringInBase + HEAD));
+    schedulePeek();
+  }
+
+  /* ---- on-page diagnostics --------------------------------------- */
+
+  var debugList = document.getElementById("debug-log");
+  var debugLines = [];
+  function debug(msg) {
+    if (!debugList) { console.log("[shell]", msg); return; }
+    debugLines.push("[" + new Date().toISOString().substr(11, 12) + "] " + msg);
+    if (debugLines.length > 40) debugLines.shift();
+    debugList.textContent = debugLines.join("\n");
+  }
+
+  // After we send bytes, poll the input ring's HEAD a few times: if it
+  // advances, the worker is reading from the same shared buffer we are
+  // writing to (the page<->worker memory wiring is correct). If HEAD
+  // stays stuck, the worker is blocked but cannot see our writes.
+  var peekTimer = null;
+  function schedulePeek() {
+    if (!ioReady || peekTimer) return;
+    var ticks = 0;
+    peekTimer = setInterval(function () {
+      ticks++;
+      var head = Atomics.load(HEAP32, ringInBase + HEAD);
+      var tail = Atomics.load(HEAP32, ringInBase + TAIL);
+      debug("peek " + ticks + ": in.head=" + head + " in.tail=" + tail +
+            (head === tail ? " (drained)" : " (still pending " + (tail - head) + ")"));
+      if (head === tail || ticks > 8) {
+        clearInterval(peekTimer);
+        peekTimer = null;
+      }
+    }, 250);
   }
 
   function sendText(text) { sendBytes(encoder.encode(text)); }
@@ -142,7 +180,10 @@
     }
   }
 
-  term.onData(handleTerminalInput);
+  term.onData(function (data) {
+    debug("onData " + JSON.stringify(data));
+    handleTerminalInput(data);
+  });
 
   focusButton.addEventListener("click", function () { term.focus(); });
   clearButton.addEventListener("click", function () { term.clear(); });
@@ -222,13 +263,18 @@
         return;
       }
       case "ready": {
-        HEAP32 = new Int32Array(msg.heap);
+        var sab = msg.heap;
+        HEAP32 = new Int32Array(sab);
         ringInBase = msg.inBase;
         ringInCap = msg.inCap;
         ringOutBase = msg.outBase;
         ringOutCap = msg.outCap;
         outHead = Atomics.load(HEAP32, ringOutBase + HEAD);
         ioReady = true;
+        debug("ready: SAB type=" + (sab && sab.constructor && sab.constructor.name) +
+              " bytes=" + (sab && sab.byteLength) +
+              " inBase=" + ringInBase + " inCap=" + ringInCap +
+              " outBase=" + ringOutBase + " outCap=" + ringOutCap);
         setStatus("Runtime ready", "ready");
         setProgress(1, "Ready");
         requestAnimationFrame(pollLoop);
