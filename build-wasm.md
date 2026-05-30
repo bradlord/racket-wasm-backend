@@ -222,6 +222,24 @@ error is non-blocking.
 
 ### 5. Build Chez Emscripten for tpb32l with libffi and the rktio link
 
+Once everything above (rktio, libffi, host pb, `racket.boot`) exists, the
+whole compile-and-link of the WASM runtime is automated by
+
+```sh
+racket/src/ChezScheme/wasm-shell/build.sh           # node + browser
+racket/src/ChezScheme/wasm-shell/build.sh node      # node only
+racket/src/ChezScheme/wasm-shell/build.sh browser   # browser only
+```
+
+The script (re)compiles `main_em.o`, `boot.o`, `init_rktio.o`, and (on
+first run) the 30 pbchunk objects, then links `scheme.{js,wasm,data}`
+and/or `scheme-web.{js,wasm,data}` and installs the page assets. It is
+the supported entry point — the rest of this section explains what it
+runs and why, so the recipe can be reproduced or modified by hand.
+
+The Chez Emscripten workarea has to be configured once before the
+script can be used:
+
 ```sh
 cd racket/src/ChezScheme
 source $EMSDK/emsdk_env.sh

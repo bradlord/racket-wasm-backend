@@ -20,8 +20,7 @@
 (define files
   '("browser-shell.html"
     "browser-shell.js"
-    "serve.py"
-    "stream.js"))
+    "serve.py"))
 
 (make-directory* target-dir)
 
