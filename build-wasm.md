@@ -617,6 +617,11 @@ below).
    itself is *correct* on WASM, just unusably slow; once this is
    addressed it should re-join the default test slice.
 
+   **Measured**: a full run of `port.rktl` under `node scheme.js`
+   takes about **6m49s wall time**, all 797 value tests + 278
+   exception-field tests pass. The same suite on a native build
+   takes a few seconds.
+
 3. **Persistent home via IDBFS.** Mount Emscripten's IDBFS at
    `/home/web_user` (or wherever) in `main_em.c`, with a sync hook
    on exit / idle so writes survive a reload. ~20 lines plus a
