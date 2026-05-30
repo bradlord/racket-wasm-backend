@@ -59,6 +59,20 @@ Done:
   `exec_file`/`run_file`/`k_file` to `argv[0]` (or `"racket"`), and
   calls `racket_boot`.
 
+- pbchunk is wired into the WASM link (§5): all three boot images are
+  used in their chunked form (`*-pbchunk.boot`) and the 30 generated
+  chunk C files are recompiled with emcc and linked, with `boot.c`
+  built `-DPBCHUNK_REGISTER`. This replaces interpreted boot bytecode
+  with compiled C and **dropped boot from ~5 minutes to ~2 seconds**
+  under `node scheme.js`. The cost is binary size: `scheme.wasm` grows
+  ~1 MB → ~26 MB and `scheme.data` ~47 MB → ~87 MB (irrelevant for the
+  node CLI; matters more for the browser shell's download).
+- Verified end-to-end through Racket: `(+ 4 2)` → `6`, a `for/sum`
+  loop, and `(require racket/list)` (collection load from `/collects`)
+  all evaluate correctly in ~2 s.
+- `boot.c` has `RACKET_BOOT_TIMING`-gated `[boot-timing]` checkpoints
+  to measure boot phases (native builds; see §6 for the node caveat).
+
 Open:
 
 - `main_em.c` now expects a `/collects` tree and `/etc` directory to
@@ -66,6 +80,17 @@ Open:
   the WASM runtime looks in a machine-specific `compiled` subdirectory
   instead of accidentally loading host-native fasls from plain
   `compiled/`.
+- The browser shell boots much more slowly than node and downloads the
+  larger (~26 MB wasm + ~87 MB data) assets; worth profiling/trimming
+  there (compression, streaming, lazy `/collects`).
+- An Emscripten linear-memory prewarm snapshot (dump WASM memory after
+  boot, restore to skip `Sbuild_heap`) remains the theoretical next
+  ceiling — Chez's own `Ssave_heap`/`Sregister_heap_file` are disabled
+  ("saved heap files are not presently supported"), so it would have to
+  be done at the Emscripten memory level, with `boot.c:215`
+  (`Sbuild_heap`) and the `scheme-start` call as snapshot boundaries.
+  **Deprioritized**: at ~2 s, node boot is already fast enough that
+  this is not worth the complexity for now.
 
 ## Prerequisites
 
@@ -236,7 +261,10 @@ emcc -DPORTABLE_BYTECODE \
 For the Racket-on-WASM target, compile the Emscripten entry point
 `../cs/c/main_em.c` instead of Chez's `c/main.c`, plus `../cs/c/boot.c`
 (which provides `racket_boot`). Both need Racket's `boot.h` on the
-include path:
+include path. Compile `boot.c` with `-DPBCHUNK_REGISTER` so that it
+registers the pbchunk C functions (see the pbchunk subsection below);
+without that define the chunked boot files reference chunks that are
+never installed:
 
 ```sh
 emcc -DPORTABLE_BYTECODE \
@@ -246,11 +274,47 @@ emcc -DPORTABLE_BYTECODE \
      -Wall -Wextra \
      -o em-tpb32l/boot/tpb32l/main_em.o -c ../cs/c/main_em.c
 
-emcc -DPORTABLE_BYTECODE \
-     -I ../cs/c \
+emcc -DPORTABLE_BYTECODE -DPBCHUNK_REGISTER \
+     -I ../cs/c -I ../rktio -I ../rktio/build-em \
      -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ \
      -O2 -pthread -s USE_ZLIB=1 \
      -o em-tpb32l/boot/tpb32l/boot.o -c ../cs/c/boot.c
+```
+
+#### pbchunk: compile the boot chunks to WASM (large boot-time win)
+
+The pb interpreter executes the boot images instruction-by-instruction,
+which dominates the (multi-minute) startup. "pbchunk" turns hot
+bytecode sequences into C functions; the cross-build in §4 already
+generated them in `../build-cs-tpb32l/`:
+
+- `petite-pbchunk.boot`, `scheme-pbchunk.boot`, `racket-pbchunk.boot`
+  — the chunked boot images (the racket one is ~16 MB vs. the plain
+  4.3 MB), with chunk *references* embedded in the bytecode.
+- `petite0.c … petite9.c`, `scheme0.c … scheme9.c`,
+  `racket0.c … racket9.c` — 30 generated C files holding the chunk
+  functions. (The matching `.o` files there are host-native Mach-O and
+  cannot be reused; recompile the `.c` with emcc.)
+
+All three boots share **one global chunk index space** (e.g. the racket
+chunks occupy indices ~14067–22867), so the chunked `racket.boot`
+assumes petite and scheme were chunked too. Use all three chunked
+boots together — do not mix a chunked racket boot with plain
+petite/scheme. `boot.c`'s `register_pbchunks()` likewise registers all
+30, which is why `-DPBCHUNK_REGISTER` is all-or-nothing.
+
+Recompile the 30 chunk sources with emcc:
+
+```sh
+for b in petite scheme racket; do
+  for i in 0 1 2 3 4 5 6 7 8 9; do
+    emcc -DPORTABLE_BYTECODE \
+         -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ \
+         -O2 -pthread -s USE_ZLIB=1 \
+         -o em-tpb32l/boot/tpb32l/$b$i.o \
+         -c ../build-cs-tpb32l/$b$i.c
+  done
+done
 ```
 
 Finally link everything, including `librktio.a` and `-lffi`:
@@ -261,13 +325,14 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      em-tpb32l/boot/tpb32l/main_em.o \
      em-tpb32l/boot/tpb32l/boot.o \
      em-tpb32l/boot/tpb32l/init_rktio.o \
+     em-tpb32l/boot/tpb32l/{petite,scheme,racket}{0,1,2,3,4,5,6,7,8,9}.o \
      em-tpb32l/boot/tpb32l/libkernel.a \
      em-tpb32l/lz4/lib/liblz4.a \
      ../rktio/build-em/librktio.a \
      -L ../build-libffi-em/install/lib \
-     --preload-file em-tpb32l/boot/tpb32l/petite.boot@petite.boot \
-     --preload-file em-tpb32l/boot/tpb32l/scheme.boot@scheme.boot \
-     --preload-file ../build-cs-tpb32l/racket.boot@racket.boot \
+     --preload-file ../build-cs-tpb32l/petite-pbchunk.boot@petite.boot \
+     --preload-file ../build-cs-tpb32l/scheme-pbchunk.boot@scheme.boot \
+     --preload-file ../build-cs-tpb32l/racket-pbchunk.boot@racket.boot \
     --preload-file ../../collects@/collects \
     --preload-file ../../etc@/etc \
      -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
@@ -288,6 +353,25 @@ With `main_em.c` linked in, you will see Chez's Petite banner print,
 then `racket.boot` begin loading, then a long sequence of libffi calls
 into rktio succeed, and the boot-arguments struct is now populated so
 startup proceeds past the old `expected ... to start` error.
+
+With pbchunk wired in (below), boot is fast: `echo '(+ 4 2)' | node
+scheme.js` returns `6` in **~2 seconds** wall time (down from ~5
+minutes of pure interpretation), e.g.:
+
+```
+$ /usr/bin/time -p node scheme.js <<< '(+ 4 2)'
+Welcome to Racket v9.2.0.5 [cs].
+> 6
+real 1.82
+```
+
+`boot.c` also has `RACKET_BOOT_TIMING`-gated `[boot-timing]` checkpoints
+around the heap-build and Racket-startup phases. These work for the
+**native** CS build, but note that **under node/Emscripten `getenv`
+does not see `process.env` by default**, so the checkpoints stay silent
+there unless the environment is forwarded into the Emscripten runtime
+(e.g. a `preRun` that populates `ENV`). Given the ~2s boot, per-phase
+profiling is no longer needed.
 
 ### Browser shell
 
@@ -344,8 +428,14 @@ has been exercised on a broader set of collections.
 
 ## What still has to be written
 
-The boot harness (`racket/src/cs/c/main_em.c`) is in place. Remaining
-work:
+The boot harness (`racket/src/cs/c/main_em.c`) is in place, pbchunk is
+wired into the link, and node boot is down to ~2 s with correct
+evaluation verified. Remaining work, roughly in order:
 
-1. Verify first-class continuations work end-to-end *through Racket*
-   (not just at the Chez pb level) once the REPL is reachable.
+1. Profile and trim the **browser** shell's startup and asset download
+   (the ~26 MB wasm + ~87 MB data is fine for node but heavy for the
+   web): compression, streaming instantiation, lazy `/collects`.
+2. Verify first-class continuations work end-to-end *through Racket*
+   (not just at the Chez pb level).
+3. (Stretch) Emscripten linear-memory prewarm snapshot — only if a
+   sub-second cold start is needed; see the *Open* section.

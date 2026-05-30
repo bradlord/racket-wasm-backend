@@ -30,6 +30,27 @@
 #include "../../start/self_exe.inc"
 #include "path_replace.inc"
 
+#include <time.h>
+
+/* Lightweight boot-phase timing, enabled by setting the
+   RACKET_BOOT_TIMING environment variable. Used to split the long
+   pb-interpreter boot (notably under the WebAssembly/Emscripten build)
+   into measurable phases. Prints cumulative seconds and the delta
+   since the previous checkpoint to stderr. */
+static void boot_timing(const char *label) {
+  static int on = -1;
+  static double prev = 0.0;
+  double now;
+  if (on < 0)
+    on = (getenv("RACKET_BOOT_TIMING") != NULL);
+  if (!on)
+    return;
+  now = (double)clock() / CLOCKS_PER_SEC;
+  fprintf(stderr, "[boot-timing] %-24s t=%8.2fs (+%.2fs)\n",
+          label, now, (prev == 0.0) ? 0.0 : now - prev);
+  prev = now;
+}
+
 #ifdef PBCHUNK_REGISTER
 static void register_pbchunks();
 #endif
@@ -212,7 +233,9 @@ void racket_boot(racket_boot_arguments_t *ba)
 # endif
   }
 
+  boot_timing("start heap build");
   Sbuild_heap(NULL, init_foreign);
+  boot_timing("heap built");
 
   if (cross_server) {
     /* Don't run Racket as usual. Instead, load the patch
@@ -250,10 +273,12 @@ void racket_boot(racket_boot_arguments_t *ba)
 #ifdef RACKET_AS_BOOT
     {
       ptr c, start, apply;
+      boot_timing("racket startup begin");
       c = Stop_level_value(Sstring_to_symbol("scheme-start"));
       start = Scall0(c);
       apply = Stop_level_value(Sstring_to_symbol("apply"));
       Scall2(apply, start, l);
+      boot_timing("racket startup end");
     }
 #else
     Sset_top_level_value(Sstring_to_symbol("bytes-command-line-arguments"), l);
