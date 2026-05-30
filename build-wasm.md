@@ -566,12 +566,79 @@ implement on Emscripten and hangs.)
 
 The boot harness (`racket/src/cs/c/main_em.c`) is in place, pbchunk is
 wired into the link, and node boot is down to ~2 s with correct
-evaluation verified. Remaining work, roughly in order:
+evaluation verified. The browser shell hosts the runtime in a
+dedicated Web Worker with `Atomics.wait`-blocked stdin, swapped from
+an xterm to a plain textarea + scrolling output pane so the browser
+handles all editing. ~319,500 Racket core-test assertions pass under
+`node scheme.js` (one known PRNG corner-case failure, documented
+below).
 
-1. Profile and trim the **browser** shell's startup and asset download
-   (the ~26 MB wasm + ~87 MB data is fine for node but heavy for the
-   web): compression, streaming instantiation, lazy `/collects`.
-2. Verify first-class continuations work end-to-end *through Racket*
-   (not just at the Chez pb level).
-3. (Stretch) Emscripten linear-memory prewarm snapshot — only if a
+### Capability gaps (concrete TODOs)
+
+1. **PRNG large-range corner case.** `(random N prng)` for
+   `N > 2^31` returns a value off by exactly `2^31` from the
+   reference. A 32-bit signed/unsigned interpretation specific to
+   `tpb32l` in the wide-range path of the PRNG; ordinary `random`
+   and the other ~76,000 number tests pass. Self-contained,
+   probably a one-line fix once located (look in the pb/wasm path of
+   `racket/src/cs/rumble/random.ss` or wherever the random
+   wide-range branch lives).
+
+2. **rktio gaps surfaced by `port.rktl`.** `port.rktl` is excluded
+   from `run-tests.sh`'s default slice because it hangs. Triage:
+   which rktio entry points does it exercise that aren't implemented
+   for Emscripten? Likely culprits are file-change notifications,
+   subprocess, and anything that calls into platform features rktio
+   marks as unsupported. Each gap is an `RKTIO_ERROR_UNSUPPORTED`
+   stub or a real implementation; finishing them broadens what real
+   Racket code runs.
+
+3. **Persistent home via IDBFS.** Mount Emscripten's IDBFS at
+   `/home/web_user` (or wherever) in `main_em.c`, with a sync hook
+   on exit / idle so writes survive a reload. ~20 lines plus a
+   `preRun` in the page. Lets the in-browser REPL keep a
+   `~/.racketrc`, saved files, and (eventually) a `.zo` cache. This
+   is the gateway feature for `raco` to make sense in the browser.
+
+4. **Networking via a WebSocket-bridged `rktio_network`.** Real TCP
+   isn't possible from a browser; a WebSocket tunnel back to a
+   small server can pretend to be one. The work is in
+   `racket/src/rktio/rktio_network.c` plus a JS shim. With this
+   `racket/tcp` would work, which is a prerequisite for the
+   package manager and for any web-shaped demo. Significant
+   effort, on the order of a week.
+
+5. **Native-feel line editing (libedit on WASM).** macOS / Linux
+   Racket gets readline-style line editing because `readline-lib`
+   FFIs against libedit/libreadline. We don't have either in the
+   WASM build. Two paths: (a) port libedit (~10k LOC of BSD-licensed
+   C, with termcap and signals to stub) and statically link it;
+   (b) write a pure-Racket readline-equivalent that uses raw-mode
+   terminal escapes. (a) is the smaller language project (~1-3
+   days) and would make `(require readline)` Just Work. (b) helps
+   every Racket user without readline installed and could be a new
+   package, but is a bigger ergonomics undertaking. The current
+   browser shell sidesteps both by using a `<textarea>`; a node
+   REPL still wants this.
+
+6. **Pre-generate `compiled/tpb32l`.** See the WIP section above
+   (`precompile-target-compiled.rkt`). Once the helper handles a
+   broader set of collections, the runtime can load `.zo` directly
+   instead of re-expanding `.rkt` source per session, which would
+   meaningfully cut warm-load time.
+
+7. **Upstream the patches against Chez/rktio.** The 5 files
+   modified in master (`ChezScheme/c/ffi.c`, `ChezScheme/s/prims.ss`,
+   `rktio/rktio_platform.h`, `rktio/rktio_poll_set.c`,
+   `rktio/rktio_process.c`) are clean conditional additions,
+   behavior-preserving on every other platform. Send them upstream
+   so this branch stops drifting from master.
+
+### Lower priority
+
+1. Profile and trim the **browser** shell's startup and asset
+   download (the ~26 MB wasm + ~87 MB data is fine for node but
+   heavy for the web): compression, streaming instantiation, lazy
+   `/collects`.
+2. (Stretch) Emscripten linear-memory prewarm snapshot — only if a
    sub-second cold start is needed; see the *Open* section.
