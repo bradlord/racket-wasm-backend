@@ -2,12 +2,14 @@
  *
  * Shared-memory console rings for the WASM browser shell.
  *
- * The browser build links with -sPROXY_TO_PTHREAD, so Racket's `main`
- * (and therefore all of its stdin/stdout traffic) runs on a Web Worker
- * "compute" thread while the page's main thread stays free to drive the
- * xterm.js terminal. The two threads exchange console bytes through
- * these ring buffers, which live in the module's *shared* linear memory
- * (the build uses `WebAssembly.Memory({shared:true})`), so a plain
+ * The browser build runs the runtime inside a dedicated Web Worker that
+ * the page (browser-shell.js) spawns explicitly -- shell-worker.js
+ * `importScripts`'s scheme-web.js and `main()` runs on that worker's
+ * own thread, leaving the page's main thread free to drive xterm.js.
+ * The two threads exchange console bytes through these ring buffers,
+ * which live in the module's *shared* linear memory (the build uses
+ * `-pthread`, which makes `WebAssembly.Memory({shared:true})` and
+ * therefore `Module.HEAPU8.buffer` a SharedArrayBuffer), so a plain
  * `Int32Array` view over the heap on either thread sees the same bytes
  * and `Atomics` can coordinate them.
  *
@@ -20,16 +22,18 @@
  *
  * head/tail are free-running counters; the data index wraps with `% cap`.
  *
- * stdin  ring: producer = main thread (keystrokes), consumer = compute
- *              thread. The consumer blocks with `Atomics.wait` on `tail`
- *              when empty; the producer bumps `tail` and `Atomics.notify`s.
- * stdout ring: producer = compute thread (put_char), consumer = main
- *              thread, which polls (the main thread may not Atomics.wait).
+ * stdin  ring: producer = page (keystrokes), consumer = runtime worker.
+ *              The consumer blocks with `Atomics.wait` on `tail` when
+ *              empty; the producer bumps `tail` and `Atomics.notify`s.
+ * stdout ring: producer = runtime worker (put_char), consumer = page,
+ *              which polls each animation frame (the page's main thread
+ *              may not Atomics.wait).
  *
  * The C side never touches the contents; it only reserves the storage in
- * the data segment and hands its address to JS. The fixed data-segment
- * address is identical on every thread, so both the page and the pthread
- * resolve the same buffer by calling these accessors.
+ * the data segment and hands its address to JS. The address is resolved
+ * once on the runtime worker (after onRuntimeInitialized) and posted to
+ * the page along with the shared HEAP buffer; both sides then index the
+ * same memory.
  */
 
 #include <emscripten.h>

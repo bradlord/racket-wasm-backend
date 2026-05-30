@@ -123,7 +123,7 @@ link_browser() {
   emcc "${CFLAGS[@]}" "${INCS[@]}" \
        -o "$boot/wasm_shell_io.o" -c "$src/cs/c/wasm_shell_io.c"
 
-  echo "[ld]  scheme-web.{js,wasm,data}  (browser, PROXY_TO_PTHREAD)"
+  echo "[ld]  scheme-web.{js,wasm,data}  (browser, dedicated worker)"
   emcc -o "$out/scheme-web.html" \
        "$boot/main_em.o" "$boot/boot.o" "$boot/init_rktio.o" \
        "$boot/wasm_shell_io.o" \
@@ -131,7 +131,6 @@ link_browser() {
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
        --post-js wasm-shell/shell-tty.js \
        "${LDFLAGS_COMMON[@]}" \
-       -s PROXY_TO_PTHREAD=1 -s PTHREAD_POOL_SIZE=8 -s PTHREAD_POOL_SIZE_STRICT=0 \
        -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap \
        -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32 \
        -lffi

@@ -20,6 +20,7 @@
 (define files
   '("browser-shell.html"
     "browser-shell.js"
+    "shell-worker.js"
     "serve.py"))
 
 (make-directory* target-dir)

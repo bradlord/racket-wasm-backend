@@ -317,7 +317,7 @@
         <div class="terminal-header">
           <div>
             <h2>Interactive Terminal</h2>
-            <p>The runtime runs on a worker thread (PROXY_TO_PTHREAD); input/output cross to this page through SharedArrayBuffer rings.</p>
+            <p>The runtime runs in a dedicated Web Worker we spawn; input/output cross to this page through SharedArrayBuffer rings.</p>
           </div>
         </div>
         <div class="terminal-window">
@@ -327,13 +327,12 @@
 
       <div class="notes">
         <p>This shell loads xterm.js from cdnjs. Serve this directory with <code>python3 serve.py</code> (it sets the COOP/COEP headers SharedArrayBuffer needs); a plain static server without those headers will not start the runtime.</p>
-        <p>stdin/stdout are bridged via shared-memory rings: the page polls the output ring each frame and writes typed lines into the input ring, which the worker thread blocks on with <code>Atomics.wait</code>.</p>
+        <p>stdin/stdout are bridged via shared-memory rings: the page polls the output ring each frame and writes typed lines into the input ring, which the runtime worker blocks on with <code>Atomics.wait</code> (idle uses no CPU).</p>
       </div>
     </section>
   </main>
 
   <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.5.0/xterm.js"></script>
   <script defer src="./browser-shell.js"></script>
-  <script defer src="./scheme-web.js"></script>
 </body>
 </html>

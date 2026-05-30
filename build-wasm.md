@@ -404,42 +404,44 @@ profiling is no longer needed.
 The browser shell in `racket/src/ChezScheme/wasm-shell/` loads Racket
 into an xterm.js terminal. It needs a **separate, browser-specific
 build** of the runtime, because the node `scheme.js` runs `main()` on
-the calling thread: in a browser that is the page's main thread, and
-Racket's blocking REPL stdin read would freeze the event loop (the page
-goes unresponsive). The browser build fixes this with
-`-sPROXY_TO_PTHREAD`, which runs `main()` on a worker thread and leaves
-the page responsive.
+the calling thread: in a browser that would be the page's main thread,
+and Racket's blocking REPL stdin read would freeze the event loop.
 
-Because `main()` is off the main thread, stdin/stdout must cross a
-thread boundary. The build uses shared linear memory
-(`WebAssembly.Memory({shared:true})`, already required by the pthread
-build), so two ring buffers carry console bytes:
+The page therefore hosts the runtime in a dedicated Web Worker it
+spawns itself (`shell-worker.js`); `main()` runs on that worker's own
+thread, free to block on stdin, while the page stays responsive. The
+two threads exchange console bytes through ring buffers in the
+module's *shared* linear memory (`-pthread` makes
+`WebAssembly.Memory({shared:true})`, even though Racket never spawns
+pthreads of its own):
 
 - `racket/src/cs/c/wasm_shell_io.c` reserves the rings in the shared
   heap and exports their addresses.
 - `racket/src/ChezScheme/wasm-shell/shell-tty.js` is linked in with
-  `emcc --post-js`. It runs inside every thread's module instance and
-  replaces the TTY `get_char`/`put_char` ops: `get_char` blocks on the
-  input ring with `Atomics.wait` (safe on the worker), `put_char`
-  pushes each byte into the output ring (no newline buffering, so the
-  REPL prompt appears immediately).
-- `browser-shell.js` runs on the page: it polls the output ring each
-  animation frame and writes to xterm, and writes typed lines into the
-  input ring followed by `Atomics.notify`.
+  `emcc --post-js`. It replaces the TTY `get_char`/`put_char` ops:
+  `get_char` blocks on the input ring with `Atomics.wait` (legal on
+  the runtime worker), `put_char` pushes each byte into the output
+  ring (no newline buffering, so the REPL prompt appears immediately).
+- `wasm-shell/shell-worker.js` is the worker bootstrap: it sets up
+  `self.Module`, `importScripts("./scheme-web.js")` synchronously,
+  and on `onRuntimeInitialized` posts the shared `HEAPU8.buffer`
+  (a `SharedArrayBuffer`) plus the ring offsets back to the page.
+- `browser-shell.js` runs on the page: it spawns the worker via
+  `new Worker("./shell-worker.js")`, receives the buffer/offsets,
+  polls the output ring each animation frame and writes typed lines
+  into the input ring followed by `Atomics.notify`.
 
-Build the browser runtime (after the object files from §5 exist) by
-adding `wasm_shell_io.o`, the `--post-js`, the ring exports, and
-`-sPROXY_TO_PTHREAD` to the link, with a distinct output name so the
-node `scheme.*` build is left intact:
+Build the browser runtime via the same script as the node one (it
+adds `wasm_shell_io.o`, the `--post-js shell-tty.js`, and the ring
+exports, and installs the page assets):
 
 ```sh
-cd racket/src/ChezScheme
-source $EMSDK/emsdk_env.sh
+racket/src/ChezScheme/wasm-shell/build.sh browser
+```
 
-emcc -DPORTABLE_BYTECODE \
-     -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ -O2 -pthread \
-     -o em-tpb32l/boot/tpb32l/wasm_shell_io.o -c ../cs/c/wasm_shell_io.c
+The underlying link is:
 
+```sh
 emcc -O2 -pthread -s USE_ZLIB=1 \
      -o em-tpb32l/bin/tpb32l/scheme-web.html \
      em-tpb32l/boot/tpb32l/main_em.o \
@@ -458,18 +460,20 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      --preload-file ../../collects@/collects \
      --preload-file ../../etc@/etc \
      -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
-     -s PROXY_TO_PTHREAD=1 -s PTHREAD_POOL_SIZE=8 -s PTHREAD_POOL_SIZE_STRICT=0 \
      -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap \
      -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32 \
      -sALLOW_TABLE_GROWTH=1 \
      -lffi
 ```
 
-Install the page assets next to the generated `scheme-web.*`:
-
-```sh
-./../../bin/racket -c ./install-wasm-browser-shell.rkt ./em-tpb32l/bin/tpb32l
-```
+Notably absent: `-sPROXY_TO_PTHREAD` and the pthread-pool flags. The
+earlier design used `PROXY_TO_PTHREAD` so Emscripten itself spawned the
+runtime thread, but that ran the *filesystem* on the page's main
+thread (MEMFS is per-thread JS state), forcing `get_char` to be
+non-blocking and the runtime to busy-poll between keystrokes. By
+owning the worker ourselves, the FS and `main()` share a thread,
+`get_char` truly blocks on `Atomics.wait`, and the runtime idles at 0%
+CPU.
 
 Serve with **COOP/COEP headers** — `SharedArrayBuffer` is unavailable
 without cross-origin isolation, so a plain `python3 -m http.server`
@@ -486,31 +490,8 @@ Notes / status:
 - Output (stdout and stderr) is currently merged into one ring and
   rendered without color; the input ring is line-buffered on the page.
 - The shell loads xterm.js from cdnjs.
-- This cannot be validated under node: node's main thread bootstraps the
-  PROXY_TO_PTHREAD worker with a synchronous `Atomics.wait`, which a
-  headless harness can't drive; the browser uses the async path. Test in
-  a browser.
-
-stdin and the EAGAIN/ESPIPE subtlety: under `-sPROXY_TO_PTHREAD` the
-filesystem syscalls are proxied to the **main thread** (MEMFS is
-per-thread JS state), so the TTY `get_char` actually runs on the main
-browser thread. It therefore must NOT block: `Atomics.wait` is illegal
-on the main thread and throws, which Emscripten reports as `ESPIPE`
-(errno 29) -- rktio then treats it as a fatal "error reading from stream
-port" and the REPL loops on the error. `shell-tty.js` instead reads the
-input ring non-blockingly and returns `undefined` when empty; Emscripten
-maps that to `EAGAIN` (Emscripten/WASI errno 6), which rktio handles as a
-clean would-block and retries. Returning `null` must be avoided -- it
-reads as EOF and ends the REPL.
-
-Known limitation (busy-poll): because the TTY reports readable to
-`poll`/`select` even when the ring is empty, Racket's scheduler retries
-the (proxied) read continuously while idling at the prompt, so a CPU core
-can spin between keystrokes. It is functional but not power-friendly. The
-clean fix is to drop PROXY_TO_PTHREAD and instead host the runtime in a
-plain Web Worker, where `get_char` *can* block on `Atomics.wait` (the FS
-is local to that worker, not proxied) -- a genuinely blocking read with
-no polling. That is the recommended next step if the spin matters.
+- This cannot be validated under node: a headless harness can't drive
+  the page+worker handshake. Test in a browser.
 
 ### WIP: pre-generate `compiled/tpb32l`
 

@@ -8,23 +8,21 @@
  * through the shared-memory rings defined in wasm_shell_io.c instead of
  * window.prompt / console.log:
  *
- *   - get_char (stdin): NON-blocking. Return the next byte from the input
- *     ring if one is buffered, otherwise return `undefined`. Returning
- *     `undefined` makes Emscripten's TTY raise EAGAIN, which rktio treats
- *     as a clean "would-block" and retries; returning `null` instead would
- *     be read as EOF and kill the REPL. Crucially we must NOT block here:
- *     under -sPROXY_TO_PTHREAD the filesystem is proxied to the main
- *     browser thread (MEMFS is per-thread JS state), so get_char actually
- *     runs on the main thread, where Atomics.wait is illegal and throws
- *     (Emscripten then reports ESPIPE/errno 29 -- the original bug).
+ *   - get_char (stdin): blocks on the input ring with Atomics.wait until
+ *     a byte arrives, then drains everything currently buffered. The
+ *     browser build now runs the runtime in a dedicated Web Worker (the
+ *     page itself spawns it -- see shell-worker.js), so blocking here is
+ *     safe: Atomics.wait is permitted on a worker. The page's main
+ *     thread, which is *not* allowed to Atomics.wait, only writes into
+ *     the input ring and polls the output ring. This replaces the old
+ *     -sPROXY_TO_PTHREAD design, where the FS was proxied back to the
+ *     page main thread and the read had to be non-blocking, busy-polling
+ *     the CPU between keystrokes.
  *   - put_char (stdout/stderr): push each byte into the output ring; the
  *     page polls and renders it (no newline buffering, so the REPL prompt
  *     shows immediately).
  *
- * The page side (browser-shell.js) is the peer producer/consumer. Because
- * the proxied FS and the page both run on the main thread, the input ring
- * is effectively single-threaded; the Atomics calls are kept only for
- * memory ordering and cost nothing here.
+ * The page side (browser-shell.js) is the peer producer/consumer.
  */
 (function () {
   if (typeof TTY === "undefined") {
@@ -66,8 +64,8 @@
     return true;
   }
 
-  // A read() pulls the currently-available bytes; when the ring is empty
-  // we return `undefined` (EAGAIN / would-block), never `null` (EOF).
+  // One read() pulls a burst of currently-available bytes from the ring,
+  // blocking with Atomics.wait when the ring is empty.
   var pending = [];
 
   function getChar() {
@@ -79,7 +77,12 @@
     var head = Atomics.load(H, inBase + HEAD);
     var tail = Atomics.load(H, inBase + TAIL);
 
-    if (head === tail) return undefined;   // no input yet -> would-block
+    // Block until the page bumps tail and notifies.
+    while (head === tail) {
+      Atomics.wait(H, inBase + TAIL, tail);
+      H = HEAP32;
+      tail = Atomics.load(H, inBase + TAIL);
+    }
 
     while (head !== tail) {
       pending.push(Atomics.load(H, inBase + DATA + (head % inCap)) & 0xff);

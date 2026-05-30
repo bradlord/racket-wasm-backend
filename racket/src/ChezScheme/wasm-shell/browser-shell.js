@@ -1,21 +1,24 @@
 /* browser-shell.js -- main-thread driver for the Racket WASM terminal.
  *
- * Architecture (see shell-tty.js and wasm_shell_io.c for the peers):
+ * Architecture (see shell-worker.js, shell-tty.js, wasm_shell_io.c):
  *
- *   scheme-web.js is linked with -sPROXY_TO_PTHREAD, so Racket's main()
- *   runs on a Web Worker "compute" thread and THIS page's main thread
- *   stays responsive to drive xterm.js. Console traffic crosses the
- *   thread boundary through two ring buffers in the module's shared
- *   linear memory:
+ *   We spawn a dedicated Web Worker (shell-worker.js) that loads
+ *   scheme-web.js and runs Racket's `main()` on its own thread. The
+ *   page's main thread (this file) stays free to drive xterm.js.
+ *   The two threads exchange console bytes through two ring buffers
+ *   placed in the module's *shared* linear memory:
  *
- *     - stdout ring: the compute thread writes bytes; we poll it here
- *       and render to the terminal.
  *     - stdin ring:  we write typed lines here and Atomics.notify the
- *       compute thread, which is blocked in Atomics.wait inside its
- *       TTY get_char.
+ *                    worker, which is blocked in Atomics.wait inside
+ *                    its TTY get_char (see shell-tty.js).
+ *     - stdout ring: the worker writes bytes; we poll it here each
+ *                    animation frame and render to the terminal.
  *
- *   This avoids the old design's fatal flaw: there, main() ran on the
- *   page's main thread and its blocking stdin read froze the event loop.
+ *   This replaces the previous -sPROXY_TO_PTHREAD design, where
+ *   Emscripten itself spawned the runtime thread but proxied FS
+ *   syscalls (including stdin reads) back to the page's main thread,
+ *   forcing a non-blocking, busy-polling stdin. By owning the worker
+ *   ourselves, get_char actually runs on the worker and can block.
  */
 (function () {
   "use strict";
@@ -85,18 +88,24 @@
   term.writeln("Loading runtime assets...");
   term.writeln("");
 
-  /* ---- terminal -> stdin ring (line edited) ---------------------- */
+  /* ---- shared-memory rings (filled in once the worker is ready) -- */
 
-  var pendingLine = "";
+  var HEAD = 0, TAIL = 1, DATA = 2;
+  var HEAP32 = null;
   var ioReady = false;
   var ringInBase = 0, ringInCap = 0;
   var ringOutBase = 0, ringOutCap = 0;
-  var HEAD = 0, TAIL = 1, DATA = 2;
+  var outHead = 0;
   var encoder = new TextEncoder();
+  var outDecoder = new TextDecoder("utf-8");
+
+  /* ---- terminal -> stdin ring ------------------------------------ */
+
+  var pendingLine = "";
 
   function sendBytes(bytes) {
     if (!ioReady) return;
-    var H = Module.HEAP32;
+    var H = HEAP32;
     var tail = Atomics.load(H, ringInBase + TAIL);
     for (var i = 0; i < bytes.length; i++) {
       H[ringInBase + DATA + (tail % ringInCap)] = bytes[i];
@@ -106,9 +115,7 @@
     Atomics.notify(H, ringInBase + TAIL);
   }
 
-  function sendText(text) {
-    sendBytes(encoder.encode(text));
-  }
+  function sendText(text) { sendBytes(encoder.encode(text)); }
 
   function handleTerminalInput(data) {
     for (var i = 0; i < data.length; i++) {
@@ -127,7 +134,7 @@
         term.write("^C\r\n");
         sendText("");
       } else if (chunk === "") {
-        sendText(""); // Ctrl-D / EOF passthrough
+        sendText("");
       } else if (chunk >= " ") {
         pendingLine += chunk;
         term.write(chunk);
@@ -143,12 +150,9 @@
 
   /* ---- stdout ring -> terminal (polled) -------------------------- */
 
-  var outHead = 0;
-  var outDecoder = new TextDecoder("utf-8");
-
   function drainOutput() {
     if (!ioReady) return;
-    var H = Module.HEAP32;
+    var H = HEAP32;
     var tail = Atomics.load(H, ringOutBase + TAIL);
     if (tail === outHead) return;
 
@@ -166,86 +170,83 @@
     requestAnimationFrame(pollLoop);
   }
 
-  function tryStartIO() {
-    if (ioReady) return true;
-    // The ring accessors only exist once the wasm module is instantiated;
-    // their presence is a sufficient readiness signal (we deliberately do
-    // not gate on Module.calledRun, which may not be set on the page's
-    // main thread under PROXY_TO_PTHREAD).
-    if (typeof Module === "undefined" ||
-        typeof Module["_shell_in_addr"] !== "function" ||
-        typeof Module["_shell_out_addr"] !== "function" ||
-        !Module["HEAP32"]) {
-      return false;
-    }
-    ringInBase = Module["_shell_in_addr"]() >> 2;
-    ringInCap = Module["_shell_in_cap"]();
-    ringOutBase = Module["_shell_out_addr"]() >> 2;
-    ringOutCap = Module["_shell_out_cap"]();
-    outHead = Atomics.load(Module.HEAP32, ringOutBase + HEAD);
-    ioReady = true;
-    setStatus("Runtime ready", "ready");
-    setProgress(1, "Ready");
-    requestAnimationFrame(pollLoop);
-    term.focus();
-    return true;
+  /* ---- worker wiring --------------------------------------------- */
+
+  setStatus("Spawning runtime worker", "running");
+  downloadElement.textContent = "Starting";
+
+  var worker;
+  try {
+    worker = new Worker("./shell-worker.js");
+  } catch (err) {
+    setStatus("Failed to spawn worker", "error");
+    term.writeln("\r\n[31mFailed to spawn runtime worker: " + String(err) + "[0m");
+    return;
   }
 
-  /* ---- Emscripten Module wiring ---------------------------------- */
-
-  window.Module = {
-    // Output is handled via the ring, not print/printErr, so we leave
-    // those undefined (defining them would route the compute thread's
-    // console through the postMessage proxy instead).
-    locateFile: function (path) { return path; },
-    setStatus: function (text) {
-      var match = /^(.*)\((\d+(?:\.\d+)?)\/(\d+)\)$/.exec(text || "");
-      if (match) {
-        var loaded = Number(match[2]);
-        var total = Number(match[3]);
-        setStatus(match[1].trim() || "Downloading assets", "running");
-        setProgress(total > 0 ? loaded / total : 0, loaded + "/" + total);
-        return;
-      }
-      if (!text) {
-        setStatus("Assets loaded", "running");
-        setProgress(1, "Loaded");
-        return;
-      }
-      setStatus(text, "running");
-      downloadElement.textContent = text;
-    },
-    monitorRunDependencies: function (remaining) {
-      if (remaining > 0) {
-        setStatus("Preparing runtime", "running");
-        downloadElement.textContent = remaining + " dependenc" + (remaining === 1 ? "y" : "ies") + " remaining";
-      } else {
-        setStatus("Starting runtime", "running");
-        downloadElement.textContent = "All downloads complete";
-      }
-    },
-    onRuntimeInitialized: function () {
-      // With PROXY_TO_PTHREAD this fires on the main thread once the
-      // module is ready; start IO if the exports are visible yet.
-      tryStartIO();
-    },
-    onAbort: function (reason) {
-      setStatus("Runtime aborted", "error");
-      term.writeln("\r\n[31mRuntime aborted: " + String(reason) + "[0m");
-    },
-    onExit: function (code) {
-      ioReady = false;
-      setStatus("Runtime exited (" + code + ")", code === 0 ? "ready" : "error");
-      term.writeln("\r\nProcess exited with code " + code + ".");
-    }
+  worker.onerror = function (event) {
+    setStatus("Runtime worker error", "error");
+    term.writeln("\r\n[31mWorker error: " + (event.message || event) + "[0m");
   };
 
-  // Fallback: onRuntimeInitialized may land before the ring exports are
-  // attached to Module, so also retry on a short timer until IO is live.
-  var startTimer = setInterval(function () {
-    if (tryStartIO()) clearInterval(startTimer);
-  }, 50);
-
-  setStatus("Waiting for scheme-web.js", "idle");
-  downloadElement.textContent = "Not started";
+  worker.onmessage = function (event) {
+    var msg = event.data;
+    if (!msg || !msg.type) return;
+    switch (msg.type) {
+      case "status": {
+        var text = msg.text || "";
+        var match = /^(.*)\((\d+(?:\.\d+)?)\/(\d+)\)$/.exec(text);
+        if (match) {
+          var loaded = Number(match[2]);
+          var total = Number(match[3]);
+          setStatus(match[1].trim() || "Downloading assets", "running");
+          setProgress(total > 0 ? loaded / total : 0, loaded + "/" + total);
+        } else if (text === "") {
+          setStatus("Assets loaded", "running");
+          setProgress(1, "Loaded");
+        } else {
+          setStatus(text, "running");
+          downloadElement.textContent = text;
+        }
+        return;
+      }
+      case "deps": {
+        var n = msg.remaining;
+        if (n > 0) {
+          setStatus("Preparing runtime", "running");
+          downloadElement.textContent = n + " dependenc" + (n === 1 ? "y" : "ies") + " remaining";
+        } else {
+          setStatus("Starting runtime", "running");
+          downloadElement.textContent = "All downloads complete";
+        }
+        return;
+      }
+      case "ready": {
+        HEAP32 = new Int32Array(msg.heap);
+        ringInBase = msg.inBase;
+        ringInCap = msg.inCap;
+        ringOutBase = msg.outBase;
+        ringOutCap = msg.outCap;
+        outHead = Atomics.load(HEAP32, ringOutBase + HEAD);
+        ioReady = true;
+        setStatus("Runtime ready", "ready");
+        setProgress(1, "Ready");
+        requestAnimationFrame(pollLoop);
+        term.focus();
+        return;
+      }
+      case "abort": {
+        ioReady = false;
+        setStatus("Runtime aborted", "error");
+        term.writeln("\r\n[31mRuntime aborted: " + msg.reason + "[0m");
+        return;
+      }
+      case "exit": {
+        ioReady = false;
+        setStatus("Runtime exited (" + msg.code + ")", msg.code === 0 ? "ready" : "error");
+        term.writeln("\r\nProcess exited with code " + msg.code + ".");
+        return;
+      }
+    }
+  };
 })();
