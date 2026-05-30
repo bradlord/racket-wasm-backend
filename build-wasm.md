@@ -330,6 +330,7 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      em-tpb32l/lz4/lib/liblz4.a \
      ../rktio/build-em/librktio.a \
      -L ../build-libffi-em/install/lib \
+     --post-js wasm-shell/node-tty.js \
      --preload-file ../build-cs-tpb32l/petite-pbchunk.boot@petite.boot \
      --preload-file ../build-cs-tpb32l/scheme-pbchunk.boot@scheme.boot \
      --preload-file ../build-cs-tpb32l/racket-pbchunk.boot@racket.boot \
@@ -341,6 +342,13 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      -sALLOW_TABLE_GROWTH=1 \
      -lffi
 ```
+
+`wasm-shell/node-tty.js` is the node analogue of `shell-tty.js`: it
+overrides Emscripten's default TTY `get_char` to do a real `fs.readSync`
+on node's stdin and return `undefined` (EAGAIN) on a would-block rather
+than letting the default path leak EAGAIN out as EIO (errno 29). Without
+it, `node scheme.js` with a non-blocking stdin (e.g. `child_process.spawn`,
+or any non-piped invocation) loops on `error reading from stream port`.
 
 ### 6. Run
 
@@ -464,6 +472,27 @@ Notes / status:
   PROXY_TO_PTHREAD worker with a synchronous `Atomics.wait`, which a
   headless harness can't drive; the browser uses the async path. Test in
   a browser.
+
+stdin and the EAGAIN/ESPIPE subtlety: under `-sPROXY_TO_PTHREAD` the
+filesystem syscalls are proxied to the **main thread** (MEMFS is
+per-thread JS state), so the TTY `get_char` actually runs on the main
+browser thread. It therefore must NOT block: `Atomics.wait` is illegal
+on the main thread and throws, which Emscripten reports as `ESPIPE`
+(errno 29) -- rktio then treats it as a fatal "error reading from stream
+port" and the REPL loops on the error. `shell-tty.js` instead reads the
+input ring non-blockingly and returns `undefined` when empty; Emscripten
+maps that to `EAGAIN` (Emscripten/WASI errno 6), which rktio handles as a
+clean would-block and retries. Returning `null` must be avoided -- it
+reads as EOF and ends the REPL.
+
+Known limitation (busy-poll): because the TTY reports readable to
+`poll`/`select` even when the ring is empty, Racket's scheduler retries
+the (proxied) read continuously while idling at the prompt, so a CPU core
+can spin between keystrokes. It is functional but not power-friendly. The
+clean fix is to drop PROXY_TO_PTHREAD and instead host the runtime in a
+plain Web Worker, where `get_char` *can* block on `Atomics.wait` (the FS
+is local to that worker, not proxied) -- a genuinely blocking read with
+no polling. That is the recommended next step if the spin matters.
 
 ### WIP: pre-generate `compiled/tpb32l`
 

@@ -8,14 +8,23 @@
  * through the shared-memory rings defined in wasm_shell_io.c instead of
  * window.prompt / console.log:
  *
- *   - get_char (stdin): block on the input ring with Atomics.wait until a
- *     line arrives, drain what's available, then return null so the read
- *     completes. Blocking is safe here because main() runs on a worker.
+ *   - get_char (stdin): NON-blocking. Return the next byte from the input
+ *     ring if one is buffered, otherwise return `undefined`. Returning
+ *     `undefined` makes Emscripten's TTY raise EAGAIN, which rktio treats
+ *     as a clean "would-block" and retries; returning `null` instead would
+ *     be read as EOF and kill the REPL. Crucially we must NOT block here:
+ *     under -sPROXY_TO_PTHREAD the filesystem is proxied to the main
+ *     browser thread (MEMFS is per-thread JS state), so get_char actually
+ *     runs on the main thread, where Atomics.wait is illegal and throws
+ *     (Emscripten then reports ESPIPE/errno 29 -- the original bug).
  *   - put_char (stdout/stderr): push each byte into the output ring; the
  *     page polls and renders it (no newline buffering, so the REPL prompt
  *     shows immediately).
  *
- * The page side (browser-shell.js) is the peer producer/consumer.
+ * The page side (browser-shell.js) is the peer producer/consumer. Because
+ * the proxied FS and the page both run on the main thread, the input ring
+ * is effectively single-threaded; the Atomics calls are kept only for
+ * memory ordering and cost nothing here.
  */
 (function () {
   if (typeof TTY === "undefined") {
@@ -57,24 +66,20 @@
     return true;
   }
 
-  // One read() pulls a burst of currently-available bytes, then null.
+  // A read() pulls the currently-available bytes; when the ring is empty
+  // we return `undefined` (EAGAIN / would-block), never `null` (EOF).
   var pending = [];
 
   function getChar() {
     if (pending.length) return pending.shift();
-    if (!inReady()) return null;
+    if (!inReady()) return undefined;
 
     // Re-read HEAP32 each time: ALLOW_MEMORY_GROWTH can swap the view.
     var H = HEAP32;
     var head = Atomics.load(H, inBase + HEAD);
     var tail = Atomics.load(H, inBase + TAIL);
 
-    // Nothing buffered at all: block until the page delivers input.
-    while (head === tail) {
-      Atomics.wait(H, inBase + TAIL, tail);
-      H = HEAP32;
-      tail = Atomics.load(H, inBase + TAIL);
-    }
+    if (head === tail) return undefined;   // no input yet -> would-block
 
     while (head !== tail) {
       pending.push(Atomics.load(H, inBase + DATA + (head % inCap)) & 0xff);
@@ -82,7 +87,7 @@
     }
     Atomics.store(H, inBase + HEAD, head);
 
-    return pending.length ? pending.shift() : null;
+    return pending.length ? pending.shift() : undefined;
   }
 
   function putByte(val) {
