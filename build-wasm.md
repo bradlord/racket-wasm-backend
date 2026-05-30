@@ -375,33 +375,95 @@ profiling is no longer needed.
 
 ### Browser shell
 
-There is now an experimental browser shell wrapper in
-`racket/src/ChezScheme/wasm-shell/` that loads the generated
-`scheme.js` runtime into an xterm.js terminal.
+The browser shell in `racket/src/ChezScheme/wasm-shell/` loads Racket
+into an xterm.js terminal. It needs a **separate, browser-specific
+build** of the runtime, because the node `scheme.js` runs `main()` on
+the calling thread: in a browser that is the page's main thread, and
+Racket's blocking REPL stdin read would freeze the event loop (the page
+goes unresponsive). The browser build fixes this with
+`-sPROXY_TO_PTHREAD`, which runs `main()` on a worker thread and leaves
+the page responsive.
 
-Install the wrapper into a generated output directory like this:
+Because `main()` is off the main thread, stdin/stdout must cross a
+thread boundary. The build uses shared linear memory
+(`WebAssembly.Memory({shared:true})`, already required by the pthread
+build), so two ring buffers carry console bytes:
+
+- `racket/src/cs/c/wasm_shell_io.c` reserves the rings in the shared
+  heap and exports their addresses.
+- `racket/src/ChezScheme/wasm-shell/shell-tty.js` is linked in with
+  `emcc --post-js`. It runs inside every thread's module instance and
+  replaces the TTY `get_char`/`put_char` ops: `get_char` blocks on the
+  input ring with `Atomics.wait` (safe on the worker), `put_char`
+  pushes each byte into the output ring (no newline buffering, so the
+  REPL prompt appears immediately).
+- `browser-shell.js` runs on the page: it polls the output ring each
+  animation frame and writes to xterm, and writes typed lines into the
+  input ring followed by `Atomics.notify`.
+
+Build the browser runtime (after the object files from §5 exist) by
+adding `wasm_shell_io.o`, the `--post-js`, the ring exports, and
+`-sPROXY_TO_PTHREAD` to the link, with a distinct output name so the
+node `scheme.*` build is left intact:
 
 ```sh
 cd racket/src/ChezScheme
+source $EMSDK/emsdk_env.sh
+
+emcc -DPORTABLE_BYTECODE \
+     -I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/ -O2 -pthread \
+     -o em-tpb32l/boot/tpb32l/wasm_shell_io.o -c ../cs/c/wasm_shell_io.c
+
+emcc -O2 -pthread -s USE_ZLIB=1 \
+     -o em-tpb32l/bin/tpb32l/scheme-web.html \
+     em-tpb32l/boot/tpb32l/main_em.o \
+     em-tpb32l/boot/tpb32l/boot.o \
+     em-tpb32l/boot/tpb32l/init_rktio.o \
+     em-tpb32l/boot/tpb32l/wasm_shell_io.o \
+     em-tpb32l/boot/tpb32l/{petite,scheme,racket}{0,1,2,3,4,5,6,7,8,9}.o \
+     em-tpb32l/boot/tpb32l/libkernel.a \
+     em-tpb32l/lz4/lib/liblz4.a \
+     ../rktio/build-em/librktio.a \
+     -L ../build-libffi-em/install/lib \
+     --post-js wasm-shell/shell-tty.js \
+     --preload-file ../build-cs-tpb32l/petite-pbchunk.boot@petite.boot \
+     --preload-file ../build-cs-tpb32l/scheme-pbchunk.boot@scheme.boot \
+     --preload-file ../build-cs-tpb32l/racket-pbchunk.boot@racket.boot \
+     --preload-file ../../collects@/collects \
+     --preload-file ../../etc@/etc \
+     -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
+     -s PROXY_TO_PTHREAD=1 -s PTHREAD_POOL_SIZE=8 -s PTHREAD_POOL_SIZE_STRICT=0 \
+     -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap \
+     -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32 \
+     -sALLOW_TABLE_GROWTH=1 \
+     -lffi
+```
+
+Install the page assets next to the generated `scheme-web.*`:
+
+```sh
 ./../../bin/racket -c ./install-wasm-browser-shell.rkt ./em-tpb32l/bin/tpb32l
 ```
 
-Then serve that directory over HTTP and open `browser-shell.html`:
+Serve with **COOP/COEP headers** — `SharedArrayBuffer` is unavailable
+without cross-origin isolation, so a plain `python3 -m http.server`
+will not start the runtime. `wasm-shell/serve.py` sets the headers:
 
 ```sh
 cd racket/src/ChezScheme/em-tpb32l/bin/tpb32l
-python3 -m http.server 8123
+python3 serve.py 8123
 # browse to http://127.0.0.1:8123/browser-shell.html
 ```
 
-The shell currently keeps the integration deliberately narrow: it sets
-up `window.Module` before `scheme.js` loads, forwards stdin/stdout/stderr
-through Emscripten's TTY hooks, shows download progress for
-`scheme.data`, and leaves the generated `scheme.js` untouched.
+Notes / status:
 
-This is still experimental. In particular, it depends on loading
-xterm.js from cdnjs, and it has only been smoke-tested through the
-runtime bootstrap and asset download path so far.
+- Output (stdout and stderr) is currently merged into one ring and
+  rendered without color; the input ring is line-buffered on the page.
+- The shell loads xterm.js from cdnjs.
+- This cannot be validated under node: node's main thread bootstraps the
+  PROXY_TO_PTHREAD worker with a synchronous `Atomics.wait`, which a
+  headless harness can't drive; the browser uses the async path. Test in
+  a browser.
 
 ### WIP: pre-generate `compiled/tpb32l`
 

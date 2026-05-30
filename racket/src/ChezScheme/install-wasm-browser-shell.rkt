@@ -14,9 +14,14 @@
    #:args [target-dir]
    (path->complete-path target-dir)))
 
+;; Runtime assets copied next to the generated scheme-web.* files.
+;; (shell-tty.js is NOT here: it is a build-time `emcc --post-js` input,
+;; already baked into scheme-web.js, not a separately served file.)
 (define files
   '("browser-shell.html"
-    "browser-shell.js"))
+    "browser-shell.js"
+    "serve.py"
+    "stream.js"))
 
 (make-directory* target-dir)
 
