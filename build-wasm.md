@@ -516,6 +516,52 @@ The helper also accepts explicit collections, `--all`, `--target`, and
 `--build-dir`, but it should still be treated as experimental until it
 has been exercised on a broader set of collections.
 
+## Running the Racket test suite
+
+`racket/src/ChezScheme/wasm-shell/run-tests.sh` runs a slice of the
+checked-in Racket core tests (the `.rktl` files in
+`pkgs/racket-test-core/tests/racket/`) under the WASM/node build. Each
+`.rktl` is a flat script that expects to be `load`ed inside a session
+that already evaluated `testing.rktl`, so the script concatenates the
+two and pipes them through `node scheme.js`, then greps for the per-test
+summary line.
+
+```sh
+racket/src/ChezScheme/wasm-shell/run-tests.sh             # default slice
+racket/src/ChezScheme/wasm-shell/run-tests.sh list hash   # by name
+```
+
+The default slice covers `control` (delimited continuations / prompts),
+`contmark`, `generator`, `list`, `hash`, `string`, `bytes`, `for`,
+`number`, `fixnum`, `flonum`, `math`, `chaperone`, `error`, and
+`stxparam`. Results on tpb32l as of this writing:
+
+| suite | tests | result |
+|-------|------:|--------|
+| control     | 30 | pass |
+| contmark    | 677 | pass |
+| generator   | 60 | pass |
+| list        | 6,930 | pass |
+| hash        | 984 | pass |
+| string      | 3,295 | pass |
+| bytes       | 16 | pass |
+| for         | 522 | pass |
+| number      | 76,267 | **1 fail** -- `(random 4294967087 prng)` returns a value off by exactly 2^31; a 32-bit signed/unsigned interpretation in the large-range path that is specific to `tpb32l`. The 76,000+ other arithmetic tests, including `random` in its normal range, all pass. |
+| fixnum      | 104,970 | pass |
+| flonum      | 93,831 | pass |
+| math        | 717 | pass |
+| chaperone   | 33,974 | pass |
+| error       | 116 | pass |
+| stxparam    | 38 | pass |
+
+Approximately 322,000 expression tests pass total; the one functional
+failure is the documented PRNG corner case above. (`param.rktl` and
+`port.rktl` are intentionally not in the default slice: the former has
+a cosmetic test that pattern-matches on the source-file name in an
+error trace, which fails because we drive the harness through stdin;
+the latter exercises subprocess/network features that rktio does not
+implement on Emscripten and hangs.)
+
 ## What still has to be written
 
 The boot harness (`racket/src/cs/c/main_em.c`) is in place, pbchunk is
