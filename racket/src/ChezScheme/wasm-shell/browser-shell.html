@@ -3,9 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Racket WASM Terminal</title>
-  <link rel="preconnect" href="https://cdnjs.cloudflare.com">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.5.0/xterm.css">
+  <title>Racket WASM REPL</title>
   <style>
     :root {
       --bg: #0d1117;
@@ -18,12 +16,9 @@
       --accent-2: #38bdf8;
       --danger: #f87171;
       --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
     }
-
-    * {
-      box-sizing: border-box;
-    }
-
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       min-height: 100vh;
@@ -34,263 +29,178 @@
         linear-gradient(180deg, #0b1220 0%, var(--bg) 48%, #081018 100%);
       font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
     }
-
     .page {
       width: min(1200px, calc(100vw - 32px));
       margin: 0 auto;
       padding: 24px 0 32px;
     }
-
-    .hero {
-      display: grid;
-      gap: 10px;
-      margin-bottom: 20px;
-    }
-
+    .hero { display: grid; gap: 10px; margin-bottom: 20px; }
     .eyebrow {
-      margin: 0;
-      color: var(--accent);
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
+      margin: 0; color: var(--accent); font-size: 12px; font-weight: 700;
+      letter-spacing: 0.18em; text-transform: uppercase;
       font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
     }
-
     .hero h1 {
       margin: 0;
       font-size: clamp(32px, 5vw, 56px);
-      line-height: 0.96;
-      letter-spacing: -0.04em;
-      max-width: 10ch;
+      line-height: 0.96; letter-spacing: -0.04em; max-width: 12ch;
     }
-
     .hero p {
-      margin: 0;
-      color: var(--muted);
-      font-size: 16px;
-      line-height: 1.5;
-      max-width: 62ch;
+      margin: 0; color: var(--muted); font-size: 16px; line-height: 1.5; max-width: 62ch;
       font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
     }
-
-    .workspace {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: minmax(0, 1fr);
-    }
-
-    .toolbar,
-    .status-strip,
-    .terminal-shell,
-    .notes {
+    .workspace { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+    .toolbar, .status-strip, .repl-shell, .notes {
       background: rgba(22, 27, 34, 0.88);
       border: 1px solid rgba(159, 176, 195, 0.16);
       border-radius: 20px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(16px);
     }
-
-    .toolbar,
-    .status-strip,
-    .notes {
+    .toolbar, .status-strip, .notes {
       padding: 14px 16px;
       font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
     }
-
     .toolbar {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 12px;
+      display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
       justify-content: space-between;
     }
-
-    .toolbar-group {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 10px;
-    }
-
+    .toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
     .button {
       appearance: none;
       border: 1px solid rgba(159, 176, 195, 0.18);
       border-radius: 999px;
       background: linear-gradient(180deg, rgba(56, 189, 248, 0.18), rgba(56, 189, 248, 0.08));
-      color: var(--text);
-      cursor: pointer;
-      font: inherit;
-      font-weight: 600;
+      color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
       padding: 10px 14px;
       transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
     }
-
-    .button:hover {
-      transform: translateY(-1px);
-      border-color: rgba(56, 189, 248, 0.45);
+    .button:hover { transform: translateY(-1px); border-color: rgba(56, 189, 248, 0.45); }
+    .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .button--primary {
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.45), rgba(245, 158, 11, 0.2));
+      border-color: rgba(245, 158, 11, 0.55);
     }
-
     .button--subtle {
       background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
     }
-
     .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 12px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.04);
-      color: var(--muted);
-      font-size: 13px;
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 12px; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04); color: var(--muted); font-size: 13px;
     }
-
     .chip::before {
-      content: "";
-      width: 8px;
-      height: 8px;
-      border-radius: 999px;
-      background: var(--accent-2);
-      box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.08);
+      content: ""; width: 8px; height: 8px; border-radius: 999px;
+      background: var(--accent-2); box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.08);
     }
-
-    .status-strip {
-      display: grid;
-      gap: 10px;
-    }
-
+    .status-strip { display: grid; gap: 10px; }
     .status-line {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: center;
-      flex-wrap: wrap;
+      display: flex; justify-content: space-between; gap: 16px;
+      align-items: center; flex-wrap: wrap;
     }
-
     .status-label {
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
+      margin: 0; color: var(--muted); font-size: 13px;
+      text-transform: uppercase; letter-spacing: 0.12em;
     }
-
-    .status-value {
-      margin: 0;
-      font-size: 16px;
-      font-weight: 600;
-    }
-
-    .status-value[data-state="error"] {
-      color: var(--danger);
-    }
-
+    .status-value { margin: 0; font-size: 16px; font-weight: 600; }
+    .status-value[data-state="error"] { color: var(--danger); }
     .progress-track {
-      width: 100%;
-      height: 8px;
+      width: 100%; height: 8px;
       background: rgba(255, 255, 255, 0.06);
-      border-radius: 999px;
-      overflow: hidden;
+      border-radius: 999px; overflow: hidden;
     }
-
     .progress-bar {
-      width: 0%;
-      height: 100%;
-      border-radius: inherit;
+      width: 0%; height: 100%; border-radius: inherit;
       background: linear-gradient(90deg, var(--accent), var(--accent-2));
       transition: width 180ms ease;
     }
 
-    .terminal-shell {
-      overflow: hidden;
+    /* REPL: output area on top, edit box at the bottom. */
+    .repl-shell {
+      display: grid; grid-template-rows: minmax(0, 1fr) auto;
+      min-height: 70vh; overflow: hidden;
     }
-
-    .terminal-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: center;
+    .repl-header {
+      display: flex; justify-content: space-between; gap: 16px; align-items: center;
       padding: 14px 16px;
       border-bottom: 1px solid rgba(159, 176, 195, 0.12);
       font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
     }
-
-    .terminal-header h2,
-    .terminal-header p {
+    .repl-header h2, .repl-header p { margin: 0; }
+    .repl-header h2 { font-size: 18px; }
+    .repl-header p { color: var(--muted); font-size: 14px; }
+    #output {
       margin: 0;
-    }
-
-    .terminal-header h2 {
-      font-size: 18px;
-    }
-
-    .terminal-header p {
-      color: var(--muted);
-      font-size: 14px;
-    }
-
-    .terminal-window {
-      min-height: 68vh;
-      padding: 14px;
+      padding: 14px 18px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      min-height: 40vh;
+      max-height: 60vh;
       background:
         linear-gradient(180deg, rgba(4, 10, 18, 0.9), rgba(7, 14, 23, 0.96)),
         radial-gradient(circle at top, rgba(56, 189, 248, 0.08), transparent 32%);
-    }
-
-    #terminal {
-      width: 100%;
-      height: 100%;
-    }
-
-    .notes {
-      display: grid;
-      gap: 8px;
-      color: var(--muted);
+      font-family: var(--mono);
       font-size: 14px;
-      line-height: 1.5;
-    }
-
-    .notes p {
-      margin: 0;
-    }
-
-    .notes code {
+      line-height: 1.45;
       color: var(--text);
-      font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
-
+    .input-row {
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 10px;
+      padding: 12px 14px 14px;
+      border-top: 1px solid rgba(159, 176, 195, 0.12);
+      background: rgba(13, 17, 23, 0.6);
+    }
+    #input {
+      width: 100%;
+      min-height: 90px;
+      resize: vertical;
+      border-radius: 12px;
+      border: 1px solid rgba(159, 176, 195, 0.18);
+      background: rgba(7, 14, 23, 0.85);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      padding: 10px 12px;
+      line-height: 1.45;
+      outline: none;
+      tab-size: 2;
+    }
+    #input:focus { border-color: rgba(56, 189, 248, 0.55); }
+    .input-actions {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+    .hint { color: var(--muted); font-size: 13px; }
+    .notes { display: grid; gap: 8px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    .notes p { margin: 0; }
+    .notes code { color: var(--text); font-family: var(--mono); }
     @media (max-width: 700px) {
-      .page {
-        width: min(100vw - 20px, 1200px);
-        padding-top: 18px;
-      }
-
-      .terminal-window {
-        min-height: 58vh;
-        padding: 10px;
-      }
+      .page { width: min(100vw - 20px, 1200px); padding-top: 18px; }
+      #output { min-height: 30vh; max-height: 50vh; }
     }
   </style>
 </head>
 <body>
   <main class="page">
     <section class="hero">
-      <p class="eyebrow">Experimental Browser Shell</p>
+      <p class="eyebrow">Experimental Browser REPL</p>
       <h1>Racket CS on WASM</h1>
       <p>
-        This page wraps the generated <code>scheme-web.js</code> runtime in an xterm.js terminal.
-        It expects <code>scheme-web.js</code>, <code>scheme-web.wasm</code>, and <code>scheme-web.data</code>
-        to be in the same directory, and must be served cross-origin isolated (COOP/COEP).
+        Write a whole expression in the box below and press <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd>
+        (or click <em>Evaluate</em>) to send it to the Racket runtime. Output streams into the panel above
+        as the worker produces it. Serve cross-origin isolated (COOP/COEP) for <code>SharedArrayBuffer</code>.
       </p>
     </section>
 
     <section class="workspace">
       <div class="toolbar">
         <div class="toolbar-group">
-          <button class="button" id="focus-terminal" type="button">Focus Terminal</button>
           <button class="button button--subtle" id="reload-runtime" type="button">Reload Runtime</button>
-          <button class="button button--subtle" id="clear-terminal" type="button">Clear Output</button>
+          <button class="button button--subtle" id="clear-output" type="button">Clear Output</button>
         </div>
         <div class="toolbar-group">
           <span class="chip" id="runtime-chip">Waiting for runtime</span>
@@ -313,31 +223,45 @@
         </div>
       </div>
 
-      <section class="terminal-shell" aria-label="Racket terminal">
-        <div class="terminal-header">
+      <section class="repl-shell" aria-label="Racket REPL">
+        <div class="repl-header">
           <div>
-            <h2>Interactive Terminal</h2>
+            <h2>Racket REPL</h2>
             <p>The runtime runs in a dedicated Web Worker we spawn; input/output cross to this page through SharedArrayBuffer rings.</p>
           </div>
         </div>
-        <div class="terminal-window">
-          <div id="terminal"></div>
+        <pre id="output" tabindex="0" aria-label="Racket output"></pre>
+        <div class="input-row">
+          <textarea
+            id="input"
+            spellcheck="false"
+            autocapitalize="off"
+            autocorrect="off"
+            autocomplete="off"
+            placeholder="(+ 1 2)   ;; Cmd/Ctrl+Enter to evaluate"
+          ></textarea>
+          <div class="input-actions">
+            <button class="button button--primary" id="evaluate" type="button" disabled>Evaluate</button>
+            <span class="hint">
+              <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> to evaluate &middot;
+              <kbd>Shift</kbd>+<kbd>Enter</kbd> for a newline &middot;
+              standard text-area editing
+            </span>
+          </div>
         </div>
       </section>
 
       <div class="notes">
-        <p>This shell loads xterm.js from cdnjs. Serve this directory with <code>python3 serve.py</code> (it sets the COOP/COEP headers SharedArrayBuffer needs); a plain static server without those headers will not start the runtime.</p>
-        <p>stdin/stdout are bridged via shared-memory rings: the page polls the output ring each frame and writes typed lines into the input ring, which the runtime worker blocks on with <code>Atomics.wait</code> (idle uses no CPU).</p>
-        <p>Line editing on the page: arrow keys (incl. history with <kbd>↑</kbd>/<kbd>↓</kbd>), <kbd>Home</kbd>/<kbd>End</kbd>, <kbd>Delete</kbd>/<kbd>Backspace</kbd>, and the readline-style <kbd>Ctrl-A</kbd>/<kbd>E</kbd>/<kbd>B</kbd>/<kbd>F</kbd>/<kbd>K</kbd>/<kbd>U</kbd>/<kbd>W</kbd>/<kbd>Y</kbd>/<kbd>L</kbd>/<kbd>P</kbd>/<kbd>N</kbd>. The line goes to Racket only on <kbd>Enter</kbd>.</p>
+        <p>This is not a terminal: it's a plain text-area editor on the page, paired with an output pane. The browser handles all editing (arrows, paste, undo, find). Racket only sees the expression once you submit it.</p>
+        <p>stdin/stdout are bridged via shared-memory rings: the page polls the output ring each frame and writes submitted text into the input ring, which the runtime worker blocks on with <code>Atomics.wait</code> (idle uses no CPU).</p>
         <details>
           <summary>Diagnostics (page side)</summary>
-          <pre id="debug-log" style="margin-top:8px;max-height:240px;overflow:auto;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text);background:rgba(0,0,0,0.35);padding:10px;border-radius:8px;white-space:pre-wrap;"></pre>
+          <pre id="debug-log" style="margin-top:8px;max-height:240px;overflow:auto;font-family:var(--mono);font-size:12px;color:var(--text);background:rgba(0,0,0,0.35);padding:10px;border-radius:8px;white-space:pre-wrap;"></pre>
         </details>
       </div>
     </section>
   </main>
 
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.5.0/xterm.js"></script>
   <script defer src="./browser-shell.js"></script>
 </body>
 </html>
