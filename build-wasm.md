@@ -584,14 +584,38 @@ below).
    `racket/src/cs/rumble/random.ss` or wherever the random
    wide-range branch lives).
 
-2. **rktio gaps surfaced by `port.rktl`.** `port.rktl` is excluded
-   from `run-tests.sh`'s default slice because it hangs. Triage:
-   which rktio entry points does it exercise that aren't implemented
-   for Emscripten? Likely culprits are file-change notifications,
-   subprocess, and anything that calls into platform features rktio
-   marks as unsupported. Each gap is an `RKTIO_ERROR_UNSUPPORTED`
-   stub or a real implementation; finishing them broadens what real
-   Racket code runs.
+2. **`#:pool 'own` thread pool slowdown surfaced by `port.rktl`.**
+   The hypothesis that `port.rktl` was tripping an unimplemented
+   rktio call turned out to be wrong on bisection. Output is
+   *heavily* buffered in the WASM/node pipeline (no flush until a
+   buffer fills, an explicit `(flush-output)`, or process exit), so
+   the test pane looked stuck while the runtime was actually still
+   making progress. The slowdown is real, though: the test at
+   lines 152-164 (10 threads racing `(write-bytes #"a" o)` /
+   `(read-bytes 1 i)` 1000× on a shared `make-pipe`) runs in
+   milliseconds with plain `(thread ...)`, but takes effectively
+   forever with `(thread #:pool 'own ...)` -- it scales fine up to
+   ~100 iterations per thread and falls off a cliff between 100 and
+   1000. Other patterns that use `#:pool 'own` for a single small
+   workload (e.g. `port.rktl`'s 137-150 silent for-loop) finish
+   fine. The smoking gun is "own-pool pthread workers + many
+   write/read round-trips per iteration"; the conjecture is that
+   `#:pool 'own` is spinning up an OS-thread-pool worker per thread
+   and we are paying a per-iteration wake/yield round-trip that on
+   a real OS costs microseconds but on WASM, where we link
+   `-pthread` without `PROXY_TO_PTHREAD` / `PTHREAD_POOL_SIZE`,
+   either falls back to something synchronous-ish or spins on a
+   broken signal.
+
+   Action items: (a) audit `racket/src/cs/rumble`'s
+   `make-pthread-parameter` / pthread-pool layer to see whether
+   `#:pool 'own` actually fans out to OS threads under WASM or
+   transparently degrades to cooperative; (b) if it does fan out,
+   either bump `PTHREAD_POOL_SIZE` in the link or short-circuit
+   `#:pool 'own` to plain `thread` on `__EMSCRIPTEN__`; (c) if it
+   doesn't, find the per-iteration cost. Either way port.rktl
+   itself is *correct* on WASM, just unusably slow; once this is
+   addressed it should re-join the default test slice.
 
 3. **Persistent home via IDBFS.** Mount Emscripten's IDBFS at
    `/home/web_user` (or wherever) in `main_em.c`, with a sync hook
