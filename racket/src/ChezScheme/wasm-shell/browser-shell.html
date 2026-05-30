@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Racket WASM Terminal</title>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.5.0/xterm.css">
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --panel-strong: #1f2937;
+      --border: #2f3b4f;
+      --text: #e6edf3;
+      --muted: #9fb0c3;
+      --accent: #f59e0b;
+      --accent-2: #38bdf8;
+      --danger: #f87171;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), transparent 34%),
+        radial-gradient(circle at top right, rgba(245, 158, 11, 0.18), transparent 28%),
+        linear-gradient(180deg, #0b1220 0%, var(--bg) 48%, #081018 100%);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    }
+
+    .page {
+      width: min(1200px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 32px;
+    }
+
+    .hero {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .eyebrow {
+      margin: 0;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(32px, 5vw, 56px);
+      line-height: 0.96;
+      letter-spacing: -0.04em;
+      max-width: 10ch;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.5;
+      max-width: 62ch;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .workspace {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .toolbar,
+    .status-strip,
+    .terminal-shell,
+    .notes {
+      background: rgba(22, 27, 34, 0.88);
+      border: 1px solid rgba(159, 176, 195, 0.16);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .toolbar,
+    .status-strip,
+    .notes {
+      padding: 14px 16px;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      justify-content: space-between;
+    }
+
+    .toolbar-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .button {
+      appearance: none;
+      border: 1px solid rgba(159, 176, 195, 0.18);
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(56, 189, 248, 0.18), rgba(56, 189, 248, 0.08));
+      color: var(--text);
+      cursor: pointer;
+      font: inherit;
+      font-weight: 600;
+      padding: 10px 14px;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+      border-color: rgba(56, 189, 248, 0.45);
+    }
+
+    .button--subtle {
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .chip::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: var(--accent-2);
+      box-shadow: 0 0 0 6px rgba(56, 189, 248, 0.08);
+    }
+
+    .status-strip {
+      display: grid;
+      gap: 10px;
+    }
+
+    .status-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .status-label {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .status-value {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .status-value[data-state="error"] {
+      color: var(--danger);
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      transition: width 180ms ease;
+    }
+
+    .terminal-shell {
+      overflow: hidden;
+    }
+
+    .terminal-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(159, 176, 195, 0.12);
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .terminal-header h2,
+    .terminal-header p {
+      margin: 0;
+    }
+
+    .terminal-header h2 {
+      font-size: 18px;
+    }
+
+    .terminal-header p {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .terminal-window {
+      min-height: 68vh;
+      padding: 14px;
+      background:
+        linear-gradient(180deg, rgba(4, 10, 18, 0.9), rgba(7, 14, 23, 0.96)),
+        radial-gradient(circle at top, rgba(56, 189, 248, 0.08), transparent 32%);
+    }
+
+    #terminal {
+      width: 100%;
+      height: 100%;
+    }
+
+    .notes {
+      display: grid;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .notes p {
+      margin: 0;
+    }
+
+    .notes code {
+      color: var(--text);
+      font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    @media (max-width: 700px) {
+      .page {
+        width: min(100vw - 20px, 1200px);
+        padding-top: 18px;
+      }
+
+      .terminal-window {
+        min-height: 58vh;
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Experimental Browser Shell</p>
+      <h1>Racket CS on WASM</h1>
+      <p>
+        This page wraps the generated <code>scheme.js</code> runtime in an xterm.js terminal.
+        It expects <code>scheme.js</code>, <code>scheme.wasm</code>, and <code>scheme.data</code>
+        to be in the same directory.
+      </p>
+    </section>
+
+    <section class="workspace">
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <button class="button" id="focus-terminal" type="button">Focus Terminal</button>
+          <button class="button button--subtle" id="reload-runtime" type="button">Reload Runtime</button>
+          <button class="button button--subtle" id="clear-terminal" type="button">Clear Output</button>
+        </div>
+        <div class="toolbar-group">
+          <span class="chip" id="runtime-chip">Waiting for runtime</span>
+        </div>
+      </div>
+
+      <div class="status-strip">
+        <div class="status-line">
+          <div>
+            <p class="status-label">Runtime Status</p>
+            <p class="status-value" id="runtime-status" data-state="idle">Bootstrapping browser shell</p>
+          </div>
+          <div>
+            <p class="status-label">Downloads</p>
+            <p class="status-value" id="download-status">Waiting</p>
+          </div>
+        </div>
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+      </div>
+
+      <section class="terminal-shell" aria-label="Racket terminal">
+        <div class="terminal-header">
+          <div>
+            <h2>Interactive Terminal</h2>
+            <p>Input is line-buffered and passed to the WASM process through Emscripten's TTY hooks.</p>
+          </div>
+        </div>
+        <div class="terminal-window">
+          <div id="terminal"></div>
+        </div>
+      </section>
+
+      <div class="notes">
+        <p>This shell loads xterm.js from cdnjs. Serve this directory over HTTP; loading from <code>file:</code> is unreliable for the generated WASM assets.</p>
+        <p>The current runtime hook is intentionally minimal: it forwards stdin, stdout, stderr, download progress, and fatal errors without changing the generated <code>scheme.js</code>.</p>
+      </div>
+    </section>
+  </main>
+
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xterm/5.5.0/xterm.js"></script>
+  <script defer src="./browser-shell.js"></script>
+  <script defer src="./scheme.js"></script>
+</body>
+</html>

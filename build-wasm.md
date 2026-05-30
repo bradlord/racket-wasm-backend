@@ -289,6 +289,36 @@ then `racket.boot` begin loading, then a long sequence of libffi calls
 into rktio succeed, and the boot-arguments struct is now populated so
 startup proceeds past the old `expected ... to start` error.
 
+### Browser shell
+
+There is now an experimental browser shell wrapper in
+`racket/src/ChezScheme/wasm-shell/` that loads the generated
+`scheme.js` runtime into an xterm.js terminal.
+
+Install the wrapper into a generated output directory like this:
+
+```sh
+cd racket/src/ChezScheme
+./../../bin/racket -c ./install-wasm-browser-shell.rkt ./em-tpb32l/bin/tpb32l
+```
+
+Then serve that directory over HTTP and open `browser-shell.html`:
+
+```sh
+cd racket/src/ChezScheme/em-tpb32l/bin/tpb32l
+python3 -m http.server 8123
+# browse to http://127.0.0.1:8123/browser-shell.html
+```
+
+The shell currently keeps the integration deliberately narrow: it sets
+up `window.Module` before `scheme.js` loads, forwards stdin/stdout/stderr
+through Emscripten's TTY hooks, shows download progress for
+`scheme.data`, and leaves the generated `scheme.js` untouched.
+
+This is still experimental. In particular, it depends on loading
+xterm.js from cdnjs, and it has only been smoke-tested through the
+runtime bootstrap and asset download path so far.
+
 ### WIP: pre-generate `compiled/tpb32l`
 
 This part is still in progress, but there is now a helper script for
@@ -319,5 +349,3 @@ work:
 
 1. Verify first-class continuations work end-to-end *through Racket*
    (not just at the Chez pb level) once the REPL is reachable.
-2. Build a browser shell with an xterm.js terminal around the WASM
-   module.
