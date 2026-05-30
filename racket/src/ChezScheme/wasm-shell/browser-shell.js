@@ -19,6 +19,15 @@
  *   syscalls (including stdin reads) back to the page's main thread,
  *   forcing a non-blocking, busy-polling stdin. By owning the worker
  *   ourselves, get_char actually runs on the worker and can block.
+ *
+ * Line editing: we don't send keystrokes raw -- we maintain a local
+ * edit buffer with cursor, history, and a small kill ring, redraw the
+ * editable region in place via ANSI escapes, and only push the line
+ * across the ring to Racket on Enter. Recognized keys: arrows, Home,
+ * End, Delete, Backspace, Ctrl-A/E/B/F/K/U/W/Y/L/P/N, Ctrl-C, Ctrl-D.
+ * Multi-line wrap inside an edit isn't redrawn correctly; treat that as
+ * a known limitation (a long line is fine, just edits past the wrap may
+ * smudge).
  */
 (function () {
   "use strict";
@@ -74,13 +83,15 @@
     }
   }
 
+  var ESC_CSI = "[";
+
   if (typeof SharedArrayBuffer === "undefined" || typeof Atomics === "undefined") {
     setStatus("SharedArrayBuffer unavailable", "error");
-    term.writeln("[31mThis page is not cross-origin isolated, so");
-    term.writeln("SharedArrayBuffer is unavailable and the runtime cannot start.[0m");
+    term.writeln(ESC_CSI + "31mThis page is not cross-origin isolated, so");
+    term.writeln("SharedArrayBuffer is unavailable and the runtime cannot start." + ESC_CSI + "0m");
     term.writeln("");
     term.writeln("Serve this directory with COOP/COEP headers, e.g.:");
-    term.writeln("  [36mpython3 serve.py[0m   (see wasm-shell/serve.py)");
+    term.writeln("  " + ESC_CSI + "36mpython3 serve.py" + ESC_CSI + "0m   (see wasm-shell/serve.py)");
     return;
   }
 
@@ -101,7 +112,17 @@
 
   /* ---- terminal -> stdin ring ------------------------------------ */
 
-  var pendingLine = "";
+  // Line editor state. `lineBuf` is the in-progress line; `cursor` is
+  // the 0-based column within `lineBuf` where the caret sits. The
+  // editable region starts at whatever column the cursor was at when
+  // editing began (typically right after Racket printed "> "); we never
+  // need to know that column because every move/redraw is relative.
+  var lineBuf = "";
+  var cursor = 0;
+  var history = [];
+  var histIdx = 0;        // 0 = live line, 1..history.length = back N
+  var histSaved = "";     // live line stashed while navigating history
+  var killRing = "";
 
   function sendBytes(bytes) {
     if (!ioReady) {
@@ -120,6 +141,8 @@
           ", in.head(observed)=" + Atomics.load(H, ringInBase + HEAD));
     schedulePeek();
   }
+
+  function sendText(text) { sendBytes(encoder.encode(text)); }
 
   /* ---- on-page diagnostics --------------------------------------- */
 
@@ -153,30 +176,202 @@
     }, 250);
   }
 
-  function sendText(text) { sendBytes(encoder.encode(text)); }
+  /* ---- line editor primitives ----------------------------------- */
 
+  // Repaint the editable region after a content change. `prevCursor`
+  // is the column the cursor was on before the edit (the caller has
+  // already updated `lineBuf` and `cursor`).
+  function redraw(prevCursor) {
+    var out = "";
+    if (prevCursor > 0) out += ESC_CSI + prevCursor + "D";
+    out += ESC_CSI + "K" + lineBuf;
+    var trailing = lineBuf.length - cursor;
+    if (trailing > 0) out += ESC_CSI + trailing + "D";
+    term.write(out);
+  }
+
+  function moveCursor(delta) {
+    var nc = cursor + delta;
+    if (nc < 0) nc = 0;
+    if (nc > lineBuf.length) nc = lineBuf.length;
+    var diff = nc - cursor;
+    if (diff > 0)      term.write(ESC_CSI + diff + "C");
+    else if (diff < 0) term.write(ESC_CSI + (-diff) + "D");
+    cursor = nc;
+  }
+
+  function insertText(str) {
+    if (!str) return;
+    var prev = cursor;
+    lineBuf = lineBuf.slice(0, cursor) + str + lineBuf.slice(cursor);
+    cursor += str.length;
+    redraw(prev);
+  }
+
+  function deleteBack(n) {
+    if (cursor === 0 || n <= 0) return;
+    n = Math.min(n, cursor);
+    var prev = cursor;
+    lineBuf = lineBuf.slice(0, cursor - n) + lineBuf.slice(cursor);
+    cursor -= n;
+    redraw(prev);
+  }
+
+  function deleteForward(n) {
+    if (cursor >= lineBuf.length || n <= 0) return;
+    n = Math.min(n, lineBuf.length - cursor);
+    var prev = cursor;
+    lineBuf = lineBuf.slice(0, cursor) + lineBuf.slice(cursor + n);
+    redraw(prev);
+  }
+
+  function killToEol() {
+    if (cursor >= lineBuf.length) return;
+    var prev = cursor;
+    killRing = lineBuf.slice(cursor);
+    lineBuf = lineBuf.slice(0, cursor);
+    redraw(prev);
+  }
+
+  function killToBol() {
+    if (cursor === 0) return;
+    var prev = cursor;
+    killRing = lineBuf.slice(0, cursor);
+    lineBuf = lineBuf.slice(cursor);
+    cursor = 0;
+    redraw(prev);
+  }
+
+  function killWordBack() {
+    if (cursor === 0) return;
+    var i = cursor;
+    while (i > 0 && !/\w/.test(lineBuf[i - 1])) i--;
+    while (i > 0 &&  /\w/.test(lineBuf[i - 1])) i--;
+    var prev = cursor;
+    killRing = lineBuf.slice(i, cursor);
+    lineBuf = lineBuf.slice(0, i) + lineBuf.slice(cursor);
+    cursor = i;
+    redraw(prev);
+  }
+
+  function setLine(s) {
+    var prev = cursor;
+    lineBuf = s;
+    cursor = s.length;
+    redraw(prev);
+  }
+
+  // History nav is only allowed when the current line is empty: in the
+  // middle of a multi-line expression (which Racket sees one line at a
+  // time, since we send on Enter), an in-place ↑ would clobber the
+  // user's in-progress text with the previous *line* of history -- not
+  // the previous expression -- and there's no way to put the half-typed
+  // text back. Until we do real multi-line buffering on the page side,
+  // make ↑/↓ no-ops when there's anything to clobber.
+  function historyBack() {
+    if (lineBuf.length !== 0) return;
+    if (histIdx >= history.length) return;
+    if (histIdx === 0) histSaved = "";
+    histIdx++;
+    setLine(history[history.length - histIdx]);
+  }
+  function historyForward() {
+    if (histIdx === 0) return;
+    histIdx--;
+    setLine(histIdx === 0 ? histSaved : history[history.length - histIdx]);
+  }
+
+  function acceptLine() {
+    var line = lineBuf;
+    term.write("\r\n");
+    sendText(line + "\n");
+    if (line.length > 0 &&
+        (history.length === 0 || history[history.length - 1] !== line)) {
+      history.push(line);
+      if (history.length > 200) history.shift();
+    }
+    lineBuf = "";
+    cursor = 0;
+    histIdx = 0;
+    histSaved = "";
+  }
+
+  // Parse xterm input into edit commands. xterm sends a string per
+  // input event that may contain plain characters, single control
+  // bytes, or CSI sequences (ESC [ params final-byte).
   function handleTerminalInput(data) {
-    for (var i = 0; i < data.length; i++) {
-      var chunk = data[i];
-      if (chunk === "\r") {
-        term.write("\r\n");
-        sendText(pendingLine + "\n");
-        pendingLine = "";
-      } else if (chunk === "") {
-        if (pendingLine.length > 0) {
-          pendingLine = pendingLine.slice(0, -1);
-          term.write("\b \b");
+    var i = 0;
+    while (i < data.length) {
+      var c = data.charCodeAt(i);
+
+      // CSI escape sequence: ESC '[' params final
+      if (c === 0x1b && data.charAt(i + 1) === "[") {
+        var j = i + 2;
+        var params = "";
+        while (j < data.length) {
+          var d = data.charCodeAt(j);
+          if (d >= 0x30 && d <= 0x39) { params += data.charAt(j); j++; }
+          else break;
         }
-      } else if (chunk === "") {
-        pendingLine = "";
-        term.write("^C\r\n");
-        sendText("");
-      } else if (chunk === "") {
-        sendText("");
-      } else if (chunk >= " ") {
-        pendingLine += chunk;
-        term.write(chunk);
+        if (j >= data.length) { i = data.length; break; }
+        var fin = data.charAt(j);
+        switch (fin) {
+          case "A": historyBack();    break;
+          case "B": historyForward(); break;
+          case "C": moveCursor(+1);   break;
+          case "D": moveCursor(-1);   break;
+          case "H": moveCursor(-cursor); break;
+          case "F": moveCursor(lineBuf.length - cursor); break;
+          case "~":
+            if (params === "1" || params === "7") moveCursor(-cursor);
+            else if (params === "4" || params === "8") moveCursor(lineBuf.length - cursor);
+            else if (params === "3") deleteForward(1);
+            break;
+        }
+        i = j + 1;
+        continue;
       }
+
+      // Single-byte control characters.
+      if (c === 0x0d || c === 0x0a) { acceptLine();  i++; continue; }    // Enter
+      if (c === 0x7f || c === 0x08) { deleteBack(1); i++; continue; }    // Backspace
+      if (c === 0x01) { moveCursor(-cursor); i++; continue; }            // Ctrl-A
+      if (c === 0x05) { moveCursor(lineBuf.length - cursor); i++; continue; } // Ctrl-E
+      if (c === 0x02) { moveCursor(-1); i++; continue; }                 // Ctrl-B
+      if (c === 0x06) { moveCursor(+1); i++; continue; }                 // Ctrl-F
+      if (c === 0x0b) { killToEol();    i++; continue; }                 // Ctrl-K
+      if (c === 0x15) { killToBol();    i++; continue; }                 // Ctrl-U
+      if (c === 0x17) { killWordBack(); i++; continue; }                 // Ctrl-W
+      if (c === 0x19) { insertText(killRing); i++; continue; }           // Ctrl-Y
+      if (c === 0x0c) { term.write(ESC_CSI + "2J" + ESC_CSI + "H"); redraw(0); i++; continue; } // Ctrl-L
+      if (c === 0x10) { historyBack();    i++; continue; }               // Ctrl-P
+      if (c === 0x0e) { historyForward(); i++; continue; }               // Ctrl-N
+      if (c === 0x03) {                                                   // Ctrl-C
+        term.write("^C\r\n");
+        lineBuf = ""; cursor = 0; histIdx = 0; histSaved = "";
+        i++; continue;
+      }
+      if (c === 0x04) {                                                   // Ctrl-D
+        if (lineBuf.length === 0) sendText("");
+        else deleteForward(1);
+        i++; continue;
+      }
+      if (c === 0x1b) { i++; continue; }   // bare ESC
+
+      // Run of plain printables, inserted as one block.
+      if (c >= 0x20 && c !== 0x7f) {
+        var k = i + 1;
+        while (k < data.length) {
+          var dc = data.charCodeAt(k);
+          if (dc < 0x20 || dc === 0x7f || dc === 0x1b) break;
+          k++;
+        }
+        insertText(data.slice(i, k));
+        i = k;
+        continue;
+      }
+
+      i++;   // unknown control: skip
     }
   }
 
@@ -221,13 +416,13 @@
     worker = new Worker("./shell-worker.js");
   } catch (err) {
     setStatus("Failed to spawn worker", "error");
-    term.writeln("\r\n[31mFailed to spawn runtime worker: " + String(err) + "[0m");
+    term.writeln("\r\n" + ESC_CSI + "31mFailed to spawn runtime worker: " + String(err) + ESC_CSI + "0m");
     return;
   }
 
   worker.onerror = function (event) {
     setStatus("Runtime worker error", "error");
-    term.writeln("\r\n[31mWorker error: " + (event.message || event) + "[0m");
+    term.writeln("\r\n" + ESC_CSI + "31mWorker error: " + (event.message || event) + ESC_CSI + "0m");
   };
 
   worker.onmessage = function (event) {
@@ -284,7 +479,7 @@
       case "abort": {
         ioReady = false;
         setStatus("Runtime aborted", "error");
-        term.writeln("\r\n[31mRuntime aborted: " + msg.reason + "[0m");
+        term.writeln("\r\n" + ESC_CSI + "31mRuntime aborted: " + msg.reason + ESC_CSI + "0m");
         return;
       }
       case "exit": {
