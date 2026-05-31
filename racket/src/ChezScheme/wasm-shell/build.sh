@@ -70,11 +70,7 @@ source "$here/deps.sh"
 export WASM_SRC_DIR="$src"
 export WASM_SHELL_DIR="$here"
 
-# libjpeg-turbo intentionally absent: 2.x dropped autoconf from its
-# release tarballs (CMake-only), so it lands after the recipe schema
-# learns cmake. Cairo doesn't require libjpeg; racket/draw's JPEG
-# loader does, and it can wait.
-DEPS=(libffi libpng pixman freetype cairo)
+DEPS=(libffi libpng pixman freetype cairo libjpeg-turbo)
 # -L flags collected in any order (they apply globally), -l flags in
 # reverse DEPS order: leaves of the dep tree (libffi, libpng, ...) are
 # built first but must appear LAST on the wasm-ld line so that more-

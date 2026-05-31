@@ -710,14 +710,31 @@ is rarely true for non-trivial APIs.
 
 ### Status
 
-`draw-lib` is preloaded today; `(require racket/draw)` reaches the
-module-load path successfully (Cairo, libpng, FreeType symbols all
-resolve), then stops at `jpeg_std_error` because libjpeg-turbo
-isn't linked yet (deferred until the recipe schema learns cmake,
-see §2). Once libjpeg lands -- and expat, fontconfig, pango,
-harfbuzz, glib for the rest of the stack -- `racket/draw` should
-load straight through and `(send dc draw-line ...)` work for
-in-memory bitmaps.
+`draw-lib` is preloaded; (Cairo + libpng + FreeType + libjpeg-turbo)
+all link and their public symbols are registered. `(require
+racket/draw/unsafe/cairo)`, `(require racket/draw/unsafe/png)`, and
+direct `jpeg_std_error`/`jpeg_CreateDecompress` calls work. The
+next blocker is a Chez Scheme + Emscripten foreign-callable issue:
+when `(require racket/draw/unsafe/jpeg)` casts a Racket procedure
+to `_fpointer` (the JPEG error_exit callback the module-load
+version probe installs), the resulting function pointer triggers a
+`table index is out of bounds` wasm trap when libjpeg invokes it
+via the setjmp/longjmp path. Direct C-to-C `jpeg_CreateDecompress`
+calls succeed normally (the version-mismatch error message prints
+correctly when no Racket callback is installed). So libjpeg itself
+is fine; what's broken is Chez's `Sforeign_callable` codegen
+producing a wasm function whose `call_indirect` signature or
+trampoline interaction doesn't match what Emscripten's
+`invoke_vii`-style longjmp machinery expects. The fix lives in
+Chez's `c/callback.c` / `s/pb.ss` callable path under
+`__EMSCRIPTEN__`; pairs with the pb foreign-call ABI fix in commit
+76ef6162ea.
+
+Once that's resolved, the remaining libraries -- expat, fontconfig,
+pango, harfbuzz, glib -- are recipe additions (each ~one new file
+under `wasm-shell/deps/` plus a relink). After that, `(require
+racket/draw)` should load straight through and `(send dc draw-line
+...)` work for in-memory bitmaps.
 
 ## Calling WASM-specific primitives from Racket
 

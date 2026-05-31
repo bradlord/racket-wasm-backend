@@ -7,7 +7,7 @@
 #   DEP_VERSION         human-readable version (for logging/state)
 #   DEP_SOURCE_URL      https://... tarball; downloaded once per sha256
 #   DEP_SOURCE_SHA256   pinned sha256 of the tarball
-#   DEP_BUILD_SYSTEM    "autotools" (default) | "meson"
+#   DEP_BUILD_SYSTEM    "autotools" (default) | "meson" | "cmake"
 #   DEP_BUILD_ARGS      bash array; passed to ../configure (autotools)
 #                       or to `meson setup` (meson). Conventions differ
 #                       (`--foo=bar` vs `-Dfoo=bar`); the recipe writes
@@ -40,7 +40,6 @@
 # Not handled here:
 #   - rktio (in-tree, has its own quirks; built directly by build-wasm.md §1)
 #   - libffi 3.4.x compat: we pin a known-good 3.5.x recipe.
-#   - cmake-based deps (libjpeg-turbo 2.x+): not needed yet.
 
 # ----------------------------------------------------------------------
 
@@ -126,6 +125,7 @@ wasm_dep_build() {
   case "${DEP_BUILD_SYSTEM:-autotools}" in
     autotools) _wasm_dep_build_autotools ;;
     meson)     _wasm_dep_build_meson ;;
+    cmake)     _wasm_dep_build_cmake ;;
     *) echo "[$DEP_NAME] unknown DEP_BUILD_SYSTEM: $DEP_BUILD_SYSTEM" >&2
        return 1 ;;
   esac
@@ -159,6 +159,27 @@ _wasm_dep_build_autotools() {
          "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}" )
   echo "[$DEP_NAME] build"
   ( cd "$DEP_BUILD" && emmake make -j"$(_wasm_jobs)" && make install )
+}
+
+_wasm_dep_build_cmake() {
+  echo "[$DEP_NAME] configure (cmake)"
+  # emcmake injects CMAKE_TOOLCHAIN_FILE that points cmake at emcc/em++,
+  # the emscripten sysroot, and the wasm32 system identity. Static
+  # archives + Release by default; everything else comes from the
+  # recipe's DEP_BUILD_ARGS (e.g. -DENABLE_SHARED=OFF). pkg-config
+  # vars match what the meson dispatcher uses, for the same reason.
+  local em_pc
+  em_pc="$( "${EMSDK}/upstream/emscripten/em-config" CACHE 2>/dev/null )"
+  PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH:-}${em_pc:+:$em_pc/sysroot/lib/pkgconfig}" \
+  emcmake cmake \
+    -B "$DEP_BUILD" -S "$DEP_SRC" \
+    -DCMAKE_INSTALL_PREFIX="$DEP_PREFIX" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF \
+    "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}"
+  echo "[$DEP_NAME] build"
+  cmake --build "$DEP_BUILD" -j "$(_wasm_jobs)"
+  cmake --install "$DEP_BUILD"
 }
 
 _wasm_dep_build_meson() {
