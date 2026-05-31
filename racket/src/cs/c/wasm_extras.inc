@@ -16,6 +16,28 @@
 
 #include "wasm_deps.inc"
 
+/* Framework for stubbing symbols from libraries we haven't yet
+   linked. Bind a name to wasm_unimplemented_stub (returns NULL) or
+   wasm_passthrough_stub (returns its first arg) below as new module-
+   load-time misses come up. NOTE: WASM's call_indirect is strictly
+   typed, so each stub here only works for callers whose FFI
+   signature matches the stub's C signature. For libraries used at
+   module load via mismatched signatures (libjpeg, expat at the time
+   of writing) the right answer is to actually link the library --
+   see the dep recipes pattern in wasm-shell/deps/. */
+/*
+{
+  extern void *wasm_unimplemented_stub(void);
+  extern void *wasm_passthrough_stub(void *);
+# define STUB(name) Sforeign_symbol(name, (void *)wasm_unimplemented_stub)
+# define PASS(name) Sforeign_symbol(name, (void *)wasm_passthrough_stub)
+  ;PASS("name_with_matching_signature");
+  ;STUB("name_callable_with_no_args");
+# undef STUB
+# undef PASS
+}
+*/
+
 {
   extern int wasm_http_get(const char *, void *, int);
   Sforeign_symbol("wasm_http_get",  (void *)wasm_http_get);

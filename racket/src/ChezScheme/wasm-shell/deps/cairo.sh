@@ -43,55 +43,17 @@ DEP_BUILD_ARGS=(
 )
 DEP_INSTALL_LIB=libcairo.a
 DEP_LINK_FLAGS=(-lcairo)
-DEP_SYMBOLS_MODE=explicit
-# Starter set of Cairo entry points -- enough to create an image
-# surface, draw geometry, render text, and pull pixel data out for
-# blitting to a <canvas>. Easy to grow as racket/draw's surface
-# widens; each name just adds another Sforeign_symbol registration
-# and a -Wl,-u flag.
-DEP_SYMBOLS=(
-  # Surface lifecycle + pixel access
-  cairo_image_surface_create
-  cairo_image_surface_create_for_data
-  cairo_image_surface_get_data
-  cairo_image_surface_get_stride
-  cairo_image_surface_get_width
-  cairo_image_surface_get_height
-  cairo_format_stride_for_width
-  cairo_surface_destroy
-  cairo_surface_flush
-  cairo_surface_status
-
-  # Context lifecycle
-  cairo_create
-  cairo_destroy
-  cairo_status
-
-  # Source + paint
-  cairo_set_source_rgb
-  cairo_set_source_rgba
-  cairo_paint
-
-  # Geometry
-  cairo_move_to
-  cairo_line_to
-  cairo_rectangle
-  cairo_arc
-  cairo_close_path
-  cairo_new_path
-  cairo_translate
-  cairo_scale
-  cairo_rotate
-
-  # Stroke + fill
-  cairo_set_line_width
-  cairo_fill
-  cairo_fill_preserve
-  cairo_stroke
-  cairo_stroke_preserve
-
-  # Text
-  cairo_select_font_face
-  cairo_set_font_size
-  cairo_show_text
-)
+# Scrape every public `cairo_*` entry point from libcairo.a. racket/draw
+# pulls ~hundreds of these (it ffi-libs many platform-specific surfaces
+# whose ffi-defines fire regardless of (system-type)); hand-listing
+# them is brittle. llvm-nm comes from emsdk's PATH (sourced before
+# build.sh runs); the `[TBR]` filter keeps text/bss/rodata external
+# definitions (i.e., the public API and constant tables Racket may
+# reach by name).
+DEP_SYMBOLS_MODE=scrape
+# Cairo's internal helpers are named `_cairo_*` (a Cairo convention,
+# not a macOS BSD nm prefix). Filter for public API (`^cairo_`,
+# strictly no leading underscore) and skip internals.
+DEP_SYMBOLS_SCRAPE='llvm-nm --defined-only --extern-only lib/libcairo.a 2>/dev/null \
+  | awk "\$2 ~ /^[TBR]\$/ && \$3 ~ /^cairo_/ {print \$3}" \
+  | sort -u'

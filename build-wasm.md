@@ -637,6 +637,88 @@ error trace, which fails because we drive the harness through stdin;
 the latter exercises subprocess/network features that rktio does not
 implement on Emscripten and hangs.)
 
+## Preloading additional Racket packages
+
+`/collects` (the core distribution) is preloaded automatically; everything
+else (anything under `racket/share/pkgs/`) has to be opted in.
+
+### The mechanism
+
+Racket finds packages through `links.rktd` files. The installation-scope
+one is discovered at `<config-dir>/../share/links.rktd`; our
+`main_em.c` sets `<config-dir>` to `/etc`, so that resolves to
+`/share/links.rktd`. Each entry of the form
+`(root (#"pkgs" #"<name>"))` says "treat everything under
+`/share/pkgs/<name>/` as if it were on the collection root path."
+
+We ship one such file at `wasm-shell/share-links.rktd` and preload it
+plus each declared package via emcc `--preload-file` directives in
+`build.sh`:
+
+```sh
+--preload-file ../../share/pkgs/draw-lib@/share/pkgs/draw-lib
+--preload-file wasm-shell/share-links.rktd@/share/links.rktd
+```
+
+`main_em.c` already sets `cs_compiled_subdir = 1`, so the host's
+existing `compiled/*.zo` files (built for tarm64osx / similar) are
+ignored and the runtime falls back to compiling sources on first
+load. Slower than a cached `.zo`, correct on every architecture. A
+follow-up `precompile-target-compiled.rkt` (see *WIP* below) can
+populate `compiled/tpb32l/` to speed warm load.
+
+### Adding a new package
+
+1. Pick the package's repo path under `racket/share/pkgs/`. Check its
+   `info.rkt` for `(define deps ...)` -- any non-`#:platform`-gated
+   entry is a transitive package you also need.
+2. Add a `--preload-file ../../share/pkgs/<name>@/share/pkgs/<name>`
+   entry to `LDFLAGS_COMMON` in `build.sh`.
+3. Add `(root (#"pkgs" #"<name>"))` to `wasm-shell/share-links.rktd`.
+4. Relink (`build.sh browser` or `node`). The new package is now
+   on the collection path.
+
+### FFI dependencies
+
+Most non-trivial packages bind to native libraries via `ffi-lib` +
+`get-ffi-obj`. With the Phase C shim (rktio dll hooks + Chez's
+`Sforeign_lookup`, see boot.c) any `(ffi-lib "<name>")` succeeds with
+a sentinel handle; the actual gate is whether each `get-ffi-obj`
+name was registered with `Sforeign_symbol`.
+
+For libraries we *do* link (Cairo, libpng, FreeType), the
+`DEP_SYMBOLS_MODE=scrape` line in the recipe pulls every public
+symbol out of the static archive via `llvm-nm`; the recipe pattern
+in §2 has examples.
+
+For libraries we *don't* link yet (libjpeg, expat, fontconfig,
+pango, glib, harfbuzz at the time of writing), `(require <pkg>)`
+fails at module load with `ffi-obj: could not find export from
+foreign library, name: <C-symbol>`. That error names exactly the
+missing entry point; the fix is to add a recipe for the underlying
+library and relink. `wasm-shell/deps/cairo.sh` is the template for
+a meson recipe with symbol scraping.
+
+A stub mechanism exists for the few cases where binding to a no-op
+unblocks load (`racket/src/cs/c/wasm_stubs.c` provides
+`wasm_unimplemented_stub` and `wasm_passthrough_stub`; the
+commented-out block in `wasm_extras.inc` shows the pattern). It is
+not a substitute for actually linking the library: WASM
+`call_indirect` is signature-typed, so a stub only works for
+callers whose FFI signature matches the stub's C signature -- which
+is rarely true for non-trivial APIs.
+
+### Status
+
+`draw-lib` is preloaded today; `(require racket/draw)` reaches the
+module-load path successfully (Cairo, libpng, FreeType symbols all
+resolve), then stops at `jpeg_std_error` because libjpeg-turbo
+isn't linked yet (deferred until the recipe schema learns cmake,
+see §2). Once libjpeg lands -- and expat, fontconfig, pango,
+harfbuzz, glib for the rest of the stack -- `racket/draw` should
+load straight through and `(send dc draw-line ...)` work for
+in-memory bitmaps.
+
 ## Calling WASM-specific primitives from Racket
 
 WASM-specific C functions (sync-XHR HTTP, pixel-buffer-to-canvas blit,

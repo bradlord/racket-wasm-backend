@@ -19,4 +19,7 @@ DEP_BUILD_ARGS=(
 )
 DEP_INSTALL_LIB=libpng16.a
 DEP_LINK_FLAGS=(-lpng16)
-DEP_SYMBOLS_MODE=none
+DEP_SYMBOLS_MODE=scrape
+DEP_SYMBOLS_SCRAPE='llvm-nm --defined-only --extern-only lib/libpng16.a 2>/dev/null \
+  | awk "\$2 ~ /^[TBR]\$/ && \$3 ~ /^png_/ {print \$3}" \
+  | sort -u'

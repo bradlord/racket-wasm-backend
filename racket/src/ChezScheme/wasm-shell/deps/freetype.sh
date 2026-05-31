@@ -31,4 +31,10 @@ DEP_BUILD_ARGS=(
 # the cross-build cleanly.
 DEP_INSTALL_LIB=libfreetype.a
 DEP_LINK_FLAGS=(-lfreetype)
-DEP_SYMBOLS_MODE=none
+DEP_SYMBOLS_MODE=scrape
+# FreeType's public API uses two prefixes: FT_ for the main API and
+# TT_ for the TrueType-specific subset. Pulled together so racket/draw
+# can reach either.
+DEP_SYMBOLS_SCRAPE='llvm-nm --defined-only --extern-only lib/libfreetype.a 2>/dev/null \
+  | awk "\$2 ~ /^[TBR]\$/ && (\$3 ~ /^FT_/ || \$3 ~ /^TT_/) {print \$3}" \
+  | sort -u'
