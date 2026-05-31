@@ -157,12 +157,21 @@ DEP_NAME=libffi
 DEP_VERSION=3.5.2
 DEP_SOURCE_URL=https://...libffi-3.5.2.tar.gz   # omit for libs Emscripten
 DEP_SOURCE_SHA256=...                            #   already bundles (USE_FOO=1)
-DEP_CONFIGURE_ARGS=(--enable-static --disable-shared ...)
+DEP_BUILD_SYSTEM=autotools             # or "meson" (cmake: not yet)
+DEP_BUILD_ARGS=(--enable-static --disable-shared ...)   # autotools style
+                                                        # OR -Dfoo=bar (meson)
 DEP_INSTALL_LIB=libffi.a
 DEP_LINK_FLAGS=(-lffi)
 DEP_SYMBOLS_MODE=explicit              # or "scrape" or "none"
 DEP_SYMBOLS=(cairo_create cairo_destroy ...)
 ```
+
+Meson recipes use `wasm-shell/wasm-emscripten.cross` as their
+cross-compilation file (emcc/em++/emar wrappers; `system='emscripten'`;
+`-pthread` + `USE_ZLIB=1` propagated to all c/cpp args + link args).
+`PKG_CONFIG_PATH` is accumulated as each dep installs, so later
+configure/meson steps can find earlier deps via `.pc` files (Cairo finds
+pixman this way).
 
 If the dep's headers are *not* among boot.c's includes, the generated
 `extern void name();` blocks in `wasm_deps.inc` are sufficient — the

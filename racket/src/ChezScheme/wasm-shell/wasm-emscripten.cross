@@ -1,0 +1,34 @@
+# Meson cross-compilation file for the Emscripten/wasm32 WASM build.
+#
+# Used by deps.sh's meson dispatcher when a recipe sets
+# DEP_BUILD_SYSTEM=meson. Tells Meson to invoke Emscripten's wrappers
+# instead of the host toolchain and to treat the target as wasm32.
+#
+# Notes:
+#  - `system = 'emscripten'` is Meson's recognized identifier for
+#    Emscripten-target builds; projects can branch on it via
+#    host_machine.system().
+#  - We match the -pthread + USE_ZLIB flags the rest of the WASM build
+#    uses so dep object files are ABI-compatible with the final link.
+#  - The Emscripten ports system bundles zlib (USE_ZLIB=1); recipes
+#    that need it inherit it through these c_args / c_link_args.
+
+[binaries]
+c       = 'emcc'
+cpp     = 'em++'
+ar      = 'emar'
+ranlib  = 'emranlib'
+strip   = 'emstrip'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system     = 'emscripten'
+cpu_family = 'wasm32'
+cpu        = 'wasm32'
+endian     = 'little'
+
+[built-in options]
+c_args        = ['-pthread', '-s', 'USE_ZLIB=1']
+cpp_args      = ['-pthread', '-s', 'USE_ZLIB=1']
+c_link_args   = ['-pthread', '-s', 'USE_ZLIB=1']
+cpp_link_args = ['-pthread', '-s', 'USE_ZLIB=1']

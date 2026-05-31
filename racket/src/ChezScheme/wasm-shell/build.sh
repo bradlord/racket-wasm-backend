@@ -59,6 +59,7 @@ mkdir -p "$out"
 source "$here/deps.sh"
 
 export WASM_SRC_DIR="$src"
+export WASM_SHELL_DIR="$here"
 
 # libjpeg-turbo intentionally absent: 2.x dropped autoconf from its
 # release tarballs (CMake-only), so it lands after the recipe schema

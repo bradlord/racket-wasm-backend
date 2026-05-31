@@ -7,7 +7,11 @@
 #   DEP_VERSION         human-readable version (for logging/state)
 #   DEP_SOURCE_URL      https://... tarball; downloaded once per sha256
 #   DEP_SOURCE_SHA256   pinned sha256 of the tarball
-#   DEP_CONFIGURE_ARGS  bash array; passed verbatim to ../configure
+#   DEP_BUILD_SYSTEM    "autotools" (default) | "meson"
+#   DEP_BUILD_ARGS      bash array; passed to ../configure (autotools)
+#                       or to `meson setup` (meson). Conventions differ
+#                       (`--foo=bar` vs `-Dfoo=bar`); the recipe writes
+#                       the form its build system expects.
 #   DEP_INSTALL_LIB     archive filename in install/lib (e.g. libffi.a)
 #   DEP_LINK_FLAGS      bash array; spliced into the final emcc link
 #                       (e.g. -lffi)
@@ -26,18 +30,25 @@
 #
 # Paths the driver sets before sourcing:
 #   WASM_SRC_DIR        absolute path to racket/src
+#   WASM_SHELL_DIR      absolute path to wasm-shell/ (cross file lives here)
 #   WASM_CACHE_DIR      tarball cache (default $WASM_SRC_DIR/.wasm-cache)
+#
+# wasm_dep_build also accumulates PKG_CONFIG_PATH after each successful
+# install, so later deps' configure/meson can see earlier deps' .pc
+# files (Cairo needs to find pixman, etc.).
 #
 # Not handled here:
 #   - rktio (in-tree, has its own quirks; built directly by build-wasm.md §1)
 #   - libffi 3.4.x compat: we pin a known-good 3.5.x recipe.
+#   - cmake-based deps (libjpeg-turbo 2.x+): not needed yet.
 
 # ----------------------------------------------------------------------
 
 wasm_dep_reset() {
   unset DEP_NAME DEP_VERSION DEP_SOURCE_URL DEP_SOURCE_SHA256
   unset DEP_INSTALL_LIB DEP_SYMBOLS_MODE DEP_SYMBOLS_SCRAPE
-  DEP_CONFIGURE_ARGS=()
+  DEP_BUILD_SYSTEM=autotools
+  DEP_BUILD_ARGS=()
   DEP_LINK_FLAGS=()
   DEP_SYMBOLS=()
   DEP_SYMBOLS_MODE=none
@@ -62,7 +73,8 @@ wasm_dep_paths() {
 # Hash everything that should invalidate the build.
 wasm_dep_manifest_hash() {
   { printf '%s\n' "$DEP_VERSION" "$DEP_SOURCE_SHA256" "$DEP_INSTALL_LIB"
-    printf '%s\n' "${DEP_CONFIGURE_ARGS[@]+"${DEP_CONFIGURE_ARGS[@]}"}"
+    printf '%s\n' "$DEP_BUILD_SYSTEM"
+    printf '%s\n' "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}"
   } | shasum -a 256 | awk '{print $1}'
 }
 
@@ -97,28 +109,70 @@ wasm_dep_fetch() {
 }
 
 wasm_dep_build() {
-  [ -z "${DEP_SOURCE_URL:-}" ] && return 0
+  [ -z "${DEP_SOURCE_URL:-}" ] && { _wasm_dep_register_pkgconfig; return 0; }
   local manifest
   manifest=$(wasm_dep_manifest_hash)
   if [ -f "$DEP_STATE" ] && [ -f "$DEP_PREFIX/lib/$DEP_INSTALL_LIB" ] \
      && [ "$(cat "$DEP_STATE")" = "$manifest" ]; then
     echo "[$DEP_NAME] up to date"
+    _wasm_dep_register_pkgconfig
     return 0
   fi
-  echo "[$DEP_NAME] configure"
   rm -rf "$DEP_BUILD" "$DEP_PREFIX"
+  case "${DEP_BUILD_SYSTEM:-autotools}" in
+    autotools) _wasm_dep_build_autotools ;;
+    meson)     _wasm_dep_build_meson ;;
+    *) echo "[$DEP_NAME] unknown DEP_BUILD_SYSTEM: $DEP_BUILD_SYSTEM" >&2
+       return 1 ;;
+  esac
+  printf '%s' "$manifest" > "$DEP_STATE"
+  _wasm_dep_register_pkgconfig
+}
+
+_wasm_jobs() {
+  (command -v nproc >/dev/null && nproc) \
+    || (command -v sysctl >/dev/null && sysctl -n hw.ncpu) \
+    || echo 4
+}
+
+_wasm_dep_build_autotools() {
+  echo "[$DEP_NAME] configure (autotools)"
   mkdir -p "$DEP_BUILD"
   ( cd "$DEP_BUILD" && emconfigure ../configure \
       --host=wasm32-unknown-emscripten \
       --prefix="$DEP_PREFIX" \
-      "${DEP_CONFIGURE_ARGS[@]+"${DEP_CONFIGURE_ARGS[@]}"}" )
+      "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}" )
   echo "[$DEP_NAME] build"
-  local jobs
-  jobs=$( (command -v nproc >/dev/null && nproc) \
-          || (command -v sysctl >/dev/null && sysctl -n hw.ncpu) \
-          || echo 4 )
-  ( cd "$DEP_BUILD" && emmake make -j"$jobs" && make install )
-  printf '%s' "$manifest" > "$DEP_STATE"
+  ( cd "$DEP_BUILD" && emmake make -j"$(_wasm_jobs)" && make install )
+}
+
+_wasm_dep_build_meson() {
+  : "${WASM_SHELL_DIR:?WASM_SHELL_DIR must be set by the driver}"
+  local cross="$WASM_SHELL_DIR/wasm-emscripten.cross"
+  [ -f "$cross" ] || { echo "[$DEP_NAME] missing cross file: $cross" >&2; return 1; }
+  echo "[$DEP_NAME] configure (meson)"
+  meson setup "$DEP_BUILD" "$DEP_SRC" \
+    --cross-file "$cross" \
+    --prefix "$DEP_PREFIX" \
+    --default-library=static \
+    --buildtype=release \
+    -Dpkgconfig.relocatable=true \
+    "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}"
+  echo "[$DEP_NAME] build"
+  meson compile -C "$DEP_BUILD" -j "$(_wasm_jobs)"
+  meson install -C "$DEP_BUILD"
+}
+
+# Make this dep's pkg-config files visible to later deps' configure /
+# meson setup. Cairo finds pixman this way, etc.
+_wasm_dep_register_pkgconfig() {
+  local pcdir="$DEP_PREFIX/lib/pkgconfig"
+  if [ -d "$pcdir" ]; then
+    case ":${PKG_CONFIG_PATH:-}:" in
+      *":$pcdir:"*) ;;
+      *) export PKG_CONFIG_PATH="$pcdir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" ;;
+    esac
+  fi
 }
 
 # Emit one C symbol per line on stdout. Recipes pick their mode.

@@ -13,7 +13,7 @@ DEP_NAME=libpng
 DEP_VERSION=1.6.46
 DEP_SOURCE_URL=https://download.sourceforge.net/libpng/libpng-1.6.46.tar.gz
 DEP_SOURCE_SHA256=c2b8ffb46f48331416e01f9e5c7169c7a2e08ad766b742742644e5fdf192e4a1
-DEP_CONFIGURE_ARGS=(
+DEP_BUILD_ARGS=(
   --enable-static
   --disable-shared
 )
