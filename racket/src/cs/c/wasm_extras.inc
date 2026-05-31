@@ -25,3 +25,8 @@
   extern int wasm_canvas_blit(int, int, const void *);
   Sforeign_symbol("wasm_canvas_blit", (void *)wasm_canvas_blit);
 }
+
+{
+  extern int wasm_canvas_blit_bgra(int, int, const void *);
+  Sforeign_symbol("wasm_canvas_blit_bgra", (void *)wasm_canvas_blit_bgra);
+}

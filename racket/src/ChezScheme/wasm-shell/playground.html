@@ -188,45 +188,80 @@
         <textarea id="editor" spellcheck="false" autocapitalize="off"
           autocorrect="off" autocomplete="off">#lang racket
 
-;; Mandelbrot to the page canvas via the wasm_canvas_blit FFI primitive.
-;; The runtime worker postMessages the pixel buffer to the page, which
-;; putImageData's it onto the <canvas>. RGBA8888, row-major, top-down.
+;; Draw with Cairo, blit the result to the page canvas.
+;;
+;; Cairo is statically linked into the WASM runtime; symbols are reached
+;; via Chez foreign-procedure (no ffi-lib / dlopen needed on this target).
+;; The pixel buffer is owned by Racket (cairo_image_surface_create_for_data)
+;; so we can hand it straight to wasm_canvas_blit_bgra, which copies it
+;; to the page and putImageData's onto the <canvas>. wasm_canvas_blit_bgra
+;; un-premultiplies + swizzles B/R during the copy so Cairo's ARGB32
+;; (BGRA on little-endian, premultiplied) becomes Canvas RGBA.
 
 (require ffi/unsafe/vm)
 
-(define wasm-canvas-blit
-  (vm-eval '(foreign-procedure "wasm_canvas_blit" (int int u8*) int)))
+(define (cfn name sig)  (vm-eval `(foreign-procedure ,name ,@sig)))
 
-(define W 256)
-(define H 256)
-(define MAX-ITER 64)
+(define cairo-format-stride-for-width
+  (cfn "cairo_format_stride_for_width" '((int int) int)))
+(define cairo-image-surface-create-for-data
+  (cfn "cairo_image_surface_create_for_data" '((u8* int int int int) uptr)))
+(define cairo-create           (cfn "cairo_create"           '((uptr) uptr)))
+(define cairo-destroy          (cfn "cairo_destroy"          '((uptr) void)))
+(define cairo-surface-destroy  (cfn "cairo_surface_destroy"  '((uptr) void)))
+(define cairo-surface-flush    (cfn "cairo_surface_flush"    '((uptr) void)))
+(define cairo-set-source-rgb   (cfn "cairo_set_source_rgb"   '((uptr double double double) void)))
+(define cairo-set-source-rgba  (cfn "cairo_set_source_rgba"  '((uptr double double double double) void)))
+(define cairo-rectangle        (cfn "cairo_rectangle"        '((uptr double double double double) void)))
+(define cairo-arc              (cfn "cairo_arc"              '((uptr double double double double double) void)))
+(define cairo-fill             (cfn "cairo_fill"             '((uptr) void)))
+(define cairo-stroke           (cfn "cairo_stroke"           '((uptr) void)))
+(define cairo-paint            (cfn "cairo_paint"            '((uptr) void)))
+(define cairo-set-line-width   (cfn "cairo_set_line_width"   '((uptr double) void)))
+(define cairo-select-font-face (cfn "cairo_select_font_face" '((uptr string int int) void)))
+(define cairo-set-font-size    (cfn "cairo_set_font_size"    '((uptr double) void)))
+(define cairo-move-to          (cfn "cairo_move_to"          '((uptr double double) void)))
+(define cairo-show-text        (cfn "cairo_show_text"        '((uptr string) void)))
 
-(define pixels (make-bytes (* W H 4)))
+(define wasm-canvas-blit-bgra
+  (cfn "wasm_canvas_blit_bgra" '((int int u8*) int)))
 
-(define (mandel cx cy)
-  (let loop ([x 0.0] [y 0.0] [i 0])
-    (cond
-      [(= i MAX-ITER) MAX-ITER]
-      [(> (+ (* x x) (* y y)) 4.0) i]
-      [else (loop (+ (- (* x x) (* y y)) cx)
-                  (+ (* 2.0 x y) cy)
-                  (+ i 1))])))
+(define W 320)
+(define H 240)
+(define CAIRO-FORMAT-ARGB32 0)
+(define stride (cairo-format-stride-for-width CAIRO-FORMAT-ARGB32 W))
+(define pixels (make-bytes (* stride H) 0))
+(define surf (cairo-image-surface-create-for-data pixels CAIRO-FORMAT-ARGB32 W H stride))
+(define ctx  (cairo-create surf))
 
-(for* ([py (in-range H)]
-       [px (in-range W)])
-  (define cx (+ -2.0 (* 3.0 (/ px W))))
-  (define cy (+ -1.5 (* 3.0 (/ py H))))
-  (define n  (mandel cx cy))
-  (define t  (/ n MAX-ITER))
-  (define off (* 4 (+ px (* py W))))
-  (bytes-set! pixels (+ off 0) (inexact->exact (round (* 255 t))))
-  (bytes-set! pixels (+ off 1) (inexact->exact (round (* 255 (* t t)))))
-  (bytes-set! pixels (+ off 2) (inexact->exact (round (* 255 (- 1.0 t)))))
-  (bytes-set! pixels (+ off 3) 255))
+;; Background gradient (faked via two filled rects).
+(cairo-set-source-rgb ctx 0.08 0.10 0.16) (cairo-paint ctx)
 
-(displayln (format "blitting ~ax~a..." W H))
-(define rc (wasm-canvas-blit W H pixels))
-(displayln (format "blit returned ~a" rc))
+;; Three circles.
+(cairo-set-source-rgba ctx 0.95 0.36 0.22 0.92)
+(cairo-arc ctx 110.0 110.0 60.0 0.0 6.2832) (cairo-fill ctx)
+(cairo-set-source-rgba ctx 0.20 0.74 0.93 0.85)
+(cairo-arc ctx 200.0 140.0 70.0 0.0 6.2832) (cairo-fill ctx)
+(cairo-set-source-rgba ctx 0.99 0.78 0.18 0.85)
+(cairo-arc ctx 160.0 60.0  40.0 0.0 6.2832) (cairo-fill ctx)
+
+;; Outlined rect.
+(cairo-set-source-rgb ctx 1.0 1.0 1.0)
+(cairo-set-line-width ctx 3.0)
+(cairo-rectangle ctx 20.0 180.0 280.0 40.0) (cairo-stroke ctx)
+
+;; Text.
+(cairo-select-font-face ctx "sans-serif" 0 0)
+(cairo-set-font-size ctx 18.0)
+(cairo-move-to ctx 36.0 207.0)
+(cairo-set-source-rgb ctx 1.0 1.0 1.0)
+(cairo-show-text ctx "Cairo on WebAssembly")
+
+(cairo-surface-flush surf)
+(define rc (wasm-canvas-blit-bgra W H pixels))
+(cairo-destroy ctx)
+(cairo-surface-destroy surf)
+(displayln (format "blit returned ~a (stride=~a, pixel bytes=~a)" rc stride (bytes-length pixels)))
 </textarea>
         <footer class="panel-footer">
           <span class="hint"><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>

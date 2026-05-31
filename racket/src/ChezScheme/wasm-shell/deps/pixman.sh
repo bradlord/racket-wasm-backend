@@ -19,4 +19,5 @@ DEP_BUILD_ARGS=(
   -Dgtk=disabled
 )
 DEP_INSTALL_LIB=libpixman-1.a
+DEP_LINK_FLAGS=(-lpixman-1)
 DEP_SYMBOLS_MODE=none

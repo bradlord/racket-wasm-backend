@@ -30,4 +30,5 @@ DEP_BUILD_ARGS=(
 # uses native_dep_tools / build_machine for such helpers and handles
 # the cross-build cleanly.
 DEP_INSTALL_LIB=libfreetype.a
+DEP_LINK_FLAGS=(-lfreetype)
 DEP_SYMBOLS_MODE=none

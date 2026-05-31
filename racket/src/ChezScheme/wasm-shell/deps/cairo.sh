@@ -42,4 +42,56 @@ DEP_BUILD_ARGS=(
   -Dgtk_doc=false
 )
 DEP_INSTALL_LIB=libcairo.a
-DEP_SYMBOLS_MODE=none
+DEP_LINK_FLAGS=(-lcairo)
+DEP_SYMBOLS_MODE=explicit
+# Starter set of Cairo entry points -- enough to create an image
+# surface, draw geometry, render text, and pull pixel data out for
+# blitting to a <canvas>. Easy to grow as racket/draw's surface
+# widens; each name just adds another Sforeign_symbol registration
+# and a -Wl,-u flag.
+DEP_SYMBOLS=(
+  # Surface lifecycle + pixel access
+  cairo_image_surface_create
+  cairo_image_surface_create_for_data
+  cairo_image_surface_get_data
+  cairo_image_surface_get_stride
+  cairo_image_surface_get_width
+  cairo_image_surface_get_height
+  cairo_format_stride_for_width
+  cairo_surface_destroy
+  cairo_surface_flush
+  cairo_surface_status
+
+  # Context lifecycle
+  cairo_create
+  cairo_destroy
+  cairo_status
+
+  # Source + paint
+  cairo_set_source_rgb
+  cairo_set_source_rgba
+  cairo_paint
+
+  # Geometry
+  cairo_move_to
+  cairo_line_to
+  cairo_rectangle
+  cairo_arc
+  cairo_close_path
+  cairo_new_path
+  cairo_translate
+  cairo_scale
+  cairo_rotate
+
+  # Stroke + fill
+  cairo_set_line_width
+  cairo_fill
+  cairo_fill_preserve
+  cairo_stroke
+  cairo_stroke_preserve
+
+  # Text
+  cairo_select_font_face
+  cairo_set_font_size
+  cairo_show_text
+)

@@ -18,4 +18,5 @@ DEP_BUILD_ARGS=(
   --disable-shared
 )
 DEP_INSTALL_LIB=libpng16.a
+DEP_LINK_FLAGS=(-lpng16)
 DEP_SYMBOLS_MODE=none

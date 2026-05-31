@@ -48,6 +48,43 @@ EM_JS(int, wasm_canvas_blit, (int w, int h, const void *rgba),
   return 0;
 });
 
+/* Variant for callers whose pixel buffer is in Cairo's CAIRO_FORMAT_ARGB32
+ * memory layout, which on little-endian is byte order B G R A. Canvas
+ * putImageData expects R G B A, so we swap the red/blue channels during
+ * the copy out of the WASM heap. Output is also unpremultiplied: Cairo
+ * stores ARGB32 premultiplied (per its convention), and ImageData wants
+ * non-premultiplied components. */
+EM_JS(int, wasm_canvas_blit_bgra, (int w, int h, const void *bgra),
+{
+  if (typeof self === "undefined" || typeof self.postMessage !== "function") {
+    return -1;
+  }
+  if (w <= 0 || h <= 0) return -1;
+  var bytes = (w * h) << 2;
+  var buf = new ArrayBuffer(bytes);
+  var dst = new Uint8ClampedArray(buf);
+  var src = HEAPU8;
+  for (var i = 0, p = bgra; i < bytes; i += 4, p += 4) {
+    var b = src[p],
+        g = src[p + 1],
+        r = src[p + 2],
+        a = src[p + 3];
+    if (a !== 0 && a !== 255) {
+      // Un-premultiply: ImageData wants straight RGBA.
+      var inv = 255 / a;
+      r = (r * inv) | 0; if (r > 255) r = 255;
+      g = (g * inv) | 0; if (g > 255) g = 255;
+      b = (b * inv) | 0; if (b > 255) b = 255;
+    }
+    dst[i]     = r;
+    dst[i + 1] = g;
+    dst[i + 2] = b;
+    dst[i + 3] = a;
+  }
+  self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
+  return 0;
+});
+
 #else
 
 /* Stub for non-Emscripten builds: the table still has the entry so
@@ -55,6 +92,10 @@ EM_JS(int, wasm_canvas_blit, (int w, int h, const void *rgba),
    just reports "no canvas." */
 int wasm_canvas_blit(int w, int h, const void *rgba) {
   (void)w; (void)h; (void)rgba;
+  return -1;
+}
+int wasm_canvas_blit_bgra(int w, int h, const void *bgra) {
+  (void)w; (void)h; (void)bgra;
   return -1;
 }
 
