@@ -20,3 +20,8 @@
   extern int wasm_http_get(const char *, void *, int);
   Sforeign_symbol("wasm_http_get",  (void *)wasm_http_get);
 }
+
+{
+  extern int wasm_canvas_blit(int, int, const void *);
+  Sforeign_symbol("wasm_canvas_blit", (void *)wasm_canvas_blit);
+}

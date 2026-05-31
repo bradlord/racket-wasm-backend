@@ -103,6 +103,10 @@ echo "[cc]  wasm_http.o"
 emcc "${CFLAGS[@]}" "${INCS[@]}" "${CS_INCS[@]}" \
      -o "$boot/wasm_http.o" -c "$src/cs/c/wasm_http.c"
 
+echo "[cc]  wasm_canvas.o"
+emcc "${CFLAGS[@]}" "${INCS[@]}" "${CS_INCS[@]}" \
+     -o "$boot/wasm_canvas.o" -c "$src/cs/c/wasm_canvas.c"
+
 echo "[cc]  init_rktio.o"
 emcc "${CFLAGS[@]}" "${INCS[@]}" "${RKTIO_INCS[@]}" \
      -o "$boot/init_rktio.o" -c c/init_rktio.c
@@ -155,7 +159,7 @@ link_node() {
   echo "[ld]  scheme.{js,wasm,data}  (node)"
   emcc -o "$out/scheme.html" \
        "$boot/main_em.o" "$boot/boot.o" "$boot/init_rktio.o" \
-       "$boot/wasm_http.o" \
+       "$boot/wasm_http.o" "$boot/wasm_canvas.o" \
        "${chunks[@]}" \
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
        --post-js wasm-shell/node-tty.js \
@@ -174,7 +178,7 @@ link_browser() {
   emcc -o "$out/scheme-web.html" \
        "$boot/main_em.o" "$boot/boot.o" "$boot/init_rktio.o" \
        "$boot/wasm_shell_io.o" \
-       "$boot/wasm_http.o" \
+       "$boot/wasm_http.o" "$boot/wasm_canvas.o" \
        "${chunks[@]}" \
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
        --pre-js  wasm-shell/idbfs-init.js \

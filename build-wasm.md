@@ -630,13 +630,28 @@ implement on Emscripten and hangs.)
 
 ## Calling WASM-specific primitives from Racket
 
-WASM-specific C functions (sync-XHR HTTP, future WebSocket TCP, etc.)
-live in `racket/src/cs/c/wasm_*.c` and are registered into Chez's
-foreign-symbol table via `racket/src/cs/c/wasm_extras.inc` -- the same
-mechanism rktio uses. The build wires this in by compiling `boot.c`
-with `-DRACKET_EXTRA_FOREIGN_INC='"wasm_extras.inc"'`; `boot.c`'s
+WASM-specific C functions (sync-XHR HTTP, pixel-buffer-to-canvas blit,
+future WebSocket TCP, etc.) live in `racket/src/cs/c/wasm_*.c` and are
+registered into Chez's foreign-symbol table via
+`racket/src/cs/c/wasm_extras.inc` -- the same mechanism rktio uses.
+The build wires this in by compiling `boot.c` with
+`-DRACKET_EXTRA_FOREIGN_INC='"wasm_extras.inc"'`; `boot.c`'s
 `init_foreign` then `#include`s the file after `rktio.inc` and runs
 its `Sforeign_symbol(...)` calls during heap build.
+
+Available primitives today (both reachable from Racket via the
+`vm-eval` + `foreign-procedure` pattern shown below):
+
+- `int wasm_http_get(const char *url, void *out_buf, int out_buf_len)`
+  -- synchronous HTTP GET from the runtime worker; status as int32
+  followed by body bytes.
+- `int wasm_canvas_blit(int w, int h, const void *rgba)` -- copy a
+  `w*h*4` RGBA8888 buffer out of the WASM heap and `postMessage` it
+  to the page; the canvas surface (playground.js today) renders it
+  via `putImageData`. Returns 0 in a Worker, -1 in node / wherever
+  `self.postMessage` is unavailable. This is the Tier 1 pixel-output
+  path for everything from manual byte-pushing to a future
+  `racket/draw` Cairo backend.
 
 **The FFI access path is not `get-ffi-obj`.** Under WASM there is no
 dynamic linker -- `dlopen` doesn't exist, all symbols are statically

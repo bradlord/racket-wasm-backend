@@ -23,12 +23,15 @@
 (function () {
   "use strict";
 
-  var editor    = document.getElementById("editor");
-  var runBtn    = document.getElementById("run");
-  var stopBtn   = document.getElementById("stop");
-  var outputPre = document.getElementById("output");
-  var stdinBox  = document.getElementById("stdin");
-  var statusEl  = document.getElementById("status");
+  var editor      = document.getElementById("editor");
+  var runBtn      = document.getElementById("run");
+  var stopBtn     = document.getElementById("stop");
+  var outputPre   = document.getElementById("output");
+  var stdinBox    = document.getElementById("stdin");
+  var statusEl    = document.getElementById("status");
+  var canvasWrap  = document.getElementById("canvas-wrap");
+  var canvasEl    = document.getElementById("canvas");
+  var canvasCtx   = canvasEl.getContext("2d");
 
   function setStatus(text, state) {
     statusEl.textContent = text;
@@ -46,7 +49,24 @@
     }
     if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
   }
-  function clearOutput() { outputPre.textContent = ""; }
+  function clearOutput() {
+    outputPre.textContent = "";
+    canvasWrap.dataset.active = "0";
+    canvasEl.width = 1;
+    canvasEl.height = 1;
+  }
+
+  function drawCanvas(w, h, pixels) {
+    if (canvasEl.width !== w || canvasEl.height !== h) {
+      canvasEl.width = w;
+      canvasEl.height = h;
+    }
+    // pixels arrived as a transferred ArrayBuffer; wrap, no copy.
+    var clamped = new Uint8ClampedArray(pixels);
+    var image = new ImageData(clamped, w, h);
+    canvasCtx.putImageData(image, 0, 0);
+    canvasWrap.dataset.active = "1";
+  }
 
   if (typeof SharedArrayBuffer === "undefined" || typeof Atomics === "undefined") {
     setStatus("SAB unavailable", "error");
@@ -192,6 +212,10 @@
       }
       case "fs-error": {
         appendOutput("[fs error: " + msg.path + ": " + msg.error + "]\n");
+        return;
+      }
+      case "canvas": {
+        drawCanvas(msg.w, msg.h, msg.pixels);
         return;
       }
       case "abort": {
