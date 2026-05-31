@@ -35,6 +35,7 @@
   var runtimeChip     = document.getElementById("runtime-chip");
   var reloadButton    = document.getElementById("reload-runtime");
   var clearButton     = document.getElementById("clear-output");
+  var saveButton      = document.getElementById("save-restart");
   var outputPre       = document.getElementById("output");
   var inputTextarea   = document.getElementById("input");
   var evaluateButton  = document.getElementById("evaluate");
@@ -145,6 +146,20 @@
   });
   reloadButton.addEventListener("click", function () { window.location.reload(); });
 
+  // Save & Restart: send Racket a clean exit. The runtime worker's
+  // Module.onExit runs FS.syncfs(false) once its event loop is free,
+  // then posts { type: "exit" }; the page tears down the worker and
+  // spawns a fresh one (which IDBFS-loads on its preRun).
+  var saveInProgress = false;
+  saveButton.addEventListener("click", function () {
+    if (!ioReady || saveInProgress) return;
+    saveInProgress = true;
+    saveButton.disabled = true;
+    evaluateButton.disabled = true;
+    appendOutput("\n[saving /home/web_user and restarting runtime...]\n");
+    sendText("(exit 0)\n");
+  });
+
   // Cmd+Enter (macOS) or Ctrl+Enter (others) submits; plain Enter
   // inserts a newline. Shift+Enter is also a plain newline.
   inputTextarea.addEventListener("keydown", function (ev) {
@@ -177,24 +192,32 @@
 
   /* ---- worker wiring --------------------------------------------- */
 
-  setStatus("Spawning runtime worker", "running");
-  downloadElement.textContent = "Starting";
+  var worker = null;
 
-  var worker;
-  try {
-    worker = new Worker("./shell-worker.js");
-  } catch (err) {
-    setStatus("Failed to spawn worker", "error");
-    appendOutput("\nFailed to spawn runtime worker: " + String(err) + "\n");
-    return;
+  function spawnWorker() {
+    setStatus("Spawning runtime worker", "running");
+    downloadElement.textContent = "Starting";
+    evaluateButton.disabled = true;
+    saveButton.disabled = true;
+    ioReady = false;
+    try {
+      worker = new Worker("./shell-worker.js");
+    } catch (err) {
+      setStatus("Failed to spawn worker", "error");
+      appendOutput("\nFailed to spawn runtime worker: " + String(err) + "\n");
+      worker = null;
+      return;
+    }
+    worker.onerror = onWorkerError;
+    worker.onmessage = onWorkerMessage;
   }
 
-  worker.onerror = function (event) {
+  function onWorkerError(event) {
     setStatus("Runtime worker error", "error");
     appendOutput("\nWorker error: " + (event.message || event) + "\n");
-  };
+  }
 
-  worker.onmessage = function (event) {
+  function onWorkerMessage(event) {
     var msg = event.data;
     if (!msg || !msg.type) return;
     switch (msg.type) {
@@ -226,6 +249,10 @@
         }
         return;
       }
+      case "idbfs": {
+        debug("idbfs: " + msg.text);
+        return;
+      }
       case "ready": {
         var sab = msg.heap;
         HEAP32       = new Int32Array(sab);
@@ -236,6 +263,7 @@
         outHead      = Atomics.load(HEAP32, ringOutBase + HEAD);
         ioReady      = true;
         evaluateButton.disabled = false;
+        saveButton.disabled = false;
         debug("ready: SAB=" + (sab && sab.constructor && sab.constructor.name) +
               " bytes=" + (sab && sab.byteLength) +
               " inBase=" + ringInBase + " inCap=" + ringInCap +
@@ -249,6 +277,7 @@
       case "abort": {
         ioReady = false;
         evaluateButton.disabled = true;
+        saveButton.disabled = true;
         setStatus("Runtime aborted", "error");
         appendOutput("\nRuntime aborted: " + msg.reason + "\n");
         return;
@@ -256,10 +285,30 @@
       case "exit": {
         ioReady = false;
         evaluateButton.disabled = true;
-        setStatus("Runtime exited (" + msg.code + ")", msg.code === 0 ? "ready" : "error");
-        appendOutput("\nProcess exited with code " + msg.code + ".\n");
+        saveButton.disabled = true;
+        if (msg.syncErr) {
+          appendOutput("\n[save warning: " + msg.syncErr + "]\n");
+          debug("syncfs(false) error: " + msg.syncErr);
+        }
+        // Tear down the worker now that its onExit (and the
+        // syncfs(false) inside it) has resolved. If this exit came
+        // from the Save & Restart path, spawn a fresh runtime
+        // immediately. Otherwise leave the user with a stopped
+        // runtime and a "reload page" button.
+        try { if (worker) worker.terminate(); } catch (_) {}
+        worker = null;
+        if (saveInProgress) {
+          appendOutput("[saved. respawning runtime...]\n\n");
+          saveInProgress = false;
+          spawnWorker();
+        } else {
+          setStatus("Runtime exited (" + msg.code + ")", msg.code === 0 ? "ready" : "error");
+          appendOutput("\nProcess exited with code " + msg.code + ".\n");
+        }
         return;
       }
     }
-  };
+  }
+
+  spawnWorker();
 })();

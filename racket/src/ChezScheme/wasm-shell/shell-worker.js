@@ -16,6 +16,17 @@
  * Atomics.wait/notify in shell-tty.js coordinate this worker (consumer
  * of stdin) with the page (producer of stdin).
  *
+ * IDBFS persistence (legacy-FS / save-and-restart flavor):
+ *   - Boot:  /home/web_user is mounted on IDBFS and FS.syncfs(true)
+ *            runs during preRun, before the event loop is monopolized
+ *            by Racket. See wasm-shell/idbfs-init.js (--pre-js).
+ *   - Save:  the page sends `(exit 0)\n` over the input ring on a
+ *            user-initiated "Save & Restart"; Racket exits cleanly,
+ *            Module.onExit runs (event loop now free), we flush
+ *            MEMFS -> IDB via FS.syncfs(false), then post `exit` to
+ *            the page so it can terminate this worker and spawn a
+ *            fresh one.
+ *
  * This replaces the older -sPROXY_TO_PTHREAD design, where Emscripten
  * itself spawned a "compute" pthread but proxied filesystem syscalls --
  * including the TTY's get_char -- back to the page's main thread,
@@ -64,7 +75,16 @@ self.Module = {
   },
 
   onExit: function (code) {
-    post({ type: "exit", code: code | 0 });
+    // Final IDB flush. The runtime has just exited so the worker's
+    // JS thread is no longer monopolized; IDB async callbacks can
+    // now actually fire. The page waits for our { type: "exit" }
+    // message before terminating us.
+    var done = function (err) {
+      post({ type: "exit", code: code | 0, syncErr: err && (err.message || String(err)) });
+    };
+    try {
+      self.Module.FS.syncfs(false, done);
+    } catch (e) { done(e); }
   },
 };
 

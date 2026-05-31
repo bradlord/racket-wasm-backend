@@ -199,7 +199,8 @@
     <section class="workspace">
       <div class="toolbar">
         <div class="toolbar-group">
-          <button class="button button--subtle" id="reload-runtime" type="button">Reload Runtime</button>
+          <button class="button" id="save-restart" type="button" disabled title="Persist /home/web_user to IndexedDB by cleanly exiting the runtime and spawning a fresh one. REPL state is lost.">Save &amp; Restart</button>
+          <button class="button button--subtle" id="reload-runtime" type="button">Reload Page</button>
           <button class="button button--subtle" id="clear-output" type="button">Clear Output</button>
         </div>
         <div class="toolbar-group">
@@ -254,6 +255,7 @@
       <div class="notes">
         <p>This is not a terminal: it's a plain text-area editor on the page, paired with an output pane. The browser handles all editing (arrows, paste, undo, find). Racket only sees the expression once you submit it.</p>
         <p>stdin/stdout are bridged via shared-memory rings: the page polls the output ring each frame and writes submitted text into the input ring, which the runtime worker blocks on with <code>Atomics.wait</code> (idle uses no CPU).</p>
+        <p><code>/home/web_user</code> is mounted on IndexedDB. Persistence is explicit: click <em>Save &amp; Restart</em> to flush any files you've written there. (We send <code>(exit 0)</code> on the input ring so the runtime exits cleanly; <code>Module.onExit</code> then runs <code>FS.syncfs(false)</code> while the worker's event loop is finally free. The REPL session is replaced by a fresh one on respawn — variables and definitions are lost, files survive.)</p>
         <details>
           <summary>Diagnostics (page side)</summary>
           <pre id="debug-log" style="margin-top:8px;max-height:240px;overflow:auto;font-family:var(--mono);font-size:12px;color:var(--text);background:rgba(0,0,0,0.35);padding:10px;border-radius:8px;white-space:pre-wrap;"></pre>

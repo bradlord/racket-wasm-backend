@@ -129,10 +129,13 @@ link_browser() {
        "$boot/wasm_shell_io.o" \
        "${chunks[@]}" \
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
+       --pre-js  wasm-shell/idbfs-init.js \
        --post-js wasm-shell/shell-tty.js \
        "${LDFLAGS_COMMON[@]}" \
        -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap \
-       -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32 \
+       -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32,FS,addRunDependency,removeRunDependency \
+       -sFORCE_FILESYSTEM=1 \
+       -lidbfs.js \
        -lffi
 
   if [ -f "$src/ChezScheme/install-wasm-browser-shell.rkt" ] && command -v racket >/dev/null; then
