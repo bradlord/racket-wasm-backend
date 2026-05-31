@@ -133,26 +133,43 @@ This uses the `__EMSCRIPTEN__` branch added to `rktio_platform.h`
 (commit `1a2130c981`); no further patches are needed. The archive is
 ~388 KB.
 
-### 2. Cross-compile libffi 3.5.2 for WebAssembly
+### 2. Optional libraries (libffi, future Cairo/Pango/etc.)
+
+Optional cross-compiled libraries are built by `build.sh` itself
+through a recipe system rooted at
+`racket/src/ChezScheme/wasm-shell/deps/`. Each `deps/<name>.sh` is a
+shell file that sets a handful of `DEP_*` variables (source URL +
+sha256, configure args, archive name, link flags, optional list of C
+symbols to register with `Sforeign_symbol`); `deps.sh` provides the
+shared fetch / configure / `emmake` / cache logic, and `symgen.sh`
+emits `wasm_deps.inc` + `wasm_deps_uflags.txt` (`-Wl,-u` flags so
+wasm-ld retains symbols nothing else references). The first recipe is
+`deps/libffi.sh`; tarballs land in `racket/src/.wasm-cache/` and
+builds in `racket/src/build-<name>-em/` (the same layout the old
+manual step used, so existing instructions in §5 still point at the
+right paths).
+
+The driver picks up new deps from a `DEPS=(...)` list near the top of
+`build.sh`. Recipe schema in brief:
 
 ```sh
-cd racket/src/
-mkdir -p build-libffi-em && cd build-libffi-em
-curl -sL https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz | tar xz
-mv libffi-3.5.2 src
-cd src && mkdir -p build && cd build
-source $EMSDK/emsdk_env.sh
-emconfigure ../configure \
-  --host=wasm32-unknown-emscripten \
-  --enable-static --disable-shared --disable-docs \
-  --disable-multi-os-directory \
-  --prefix=$PWD/../../install
-emmake make -j4
-make install
+DEP_NAME=libffi
+DEP_VERSION=3.5.2
+DEP_SOURCE_URL=https://...libffi-3.5.2.tar.gz   # omit for libs Emscripten
+DEP_SOURCE_SHA256=...                            #   already bundles (USE_FOO=1)
+DEP_CONFIGURE_ARGS=(--enable-static --disable-shared ...)
+DEP_INSTALL_LIB=libffi.a
+DEP_LINK_FLAGS=(-lffi)
+DEP_SYMBOLS_MODE=explicit              # or "scrape" or "none"
+DEP_SYMBOLS=(cairo_create cairo_destroy ...)
 ```
 
-The library appears at `racket/src/build-libffi-em/install/lib/libffi.a`
-with headers in `.../include/`.
+If the dep's headers are *not* among boot.c's includes, the generated
+`extern void name();` blocks in `wasm_deps.inc` are sufficient — the
+cast to `(void *)` discards the unspecified function type. If a recipe
+is for a library whose headers boot.c does include, register those
+symbols by hand in `wasm_extras.inc` instead and leave the recipe's
+symbol list empty.
 
 ### 3. Generate tpb32l boot files and cross-compiler `xpatch`
 

@@ -39,22 +39,53 @@ command -v emcc >/dev/null || { echo "emcc not on PATH; source emsdk_env.sh firs
 
 boot=em-tpb32l/boot/tpb32l
 out=em-tpb32l/bin/tpb32l
-ffi_inc="$src/build-libffi-em/install/include"
-ffi_lib="$src/build-libffi-em/install/lib"
 rktio_a="$src/rktio/build-em/librktio.a"
 cs_boot="$src/build-cs-tpb32l"
 
-for f in "$rktio_a" "$ffi_lib/libffi.a" "$cs_boot/racket-pbchunk.boot" "$boot/libkernel.a"; do
+for f in "$rktio_a" "$cs_boot/racket-pbchunk.boot" "$boot/libkernel.a"; do
   [ -e "$f" ] || { echo "missing prerequisite: $f" >&2; exit 1; }
 done
 
 mkdir -p "$out"
 
+# ---- optional deps (driven by recipes under deps/) -----------------
+#
+# rktio stays special-cased: it lives in-tree, and build-wasm.md §1
+# builds it with the configure quirks the recipe schema would have to
+# encode by hand (e.g. the @HIDE_NOT_STANDALONE@ archive rename).
+# Everything else flows through deps/<name>.sh -- see deps.sh.
+
+# shellcheck disable=SC1091
+source "$here/deps.sh"
+
+export WASM_SRC_DIR="$src"
+
+DEPS=(libffi)
+DEPS_LDFLAGS=()
+symbols_manifest="$boot/.wasm-deps-symbols.txt"
+mkdir -p "$boot"
+: > "$symbols_manifest"
+
+for dep_file in "${DEPS[@]}"; do
+  wasm_dep_reset
+  # shellcheck disable=SC1090
+  source "$here/deps/$dep_file.sh"
+  wasm_dep_paths
+  wasm_dep_fetch
+  wasm_dep_build
+  wasm_dep_symbols >> "$symbols_manifest"
+  [ -d "$DEP_PREFIX/lib" ] && DEPS_LDFLAGS+=(-L "$DEP_PREFIX/lib")
+  DEPS_LDFLAGS+=("${DEP_LINK_FLAGS[@]+"${DEP_LINK_FLAGS[@]}"}")
+done
+
+echo "[gen] wasm_deps.inc + uflags"
+"$here/symgen.sh" "$symbols_manifest" "$boot"
+uflags_file="$boot/wasm_deps_uflags.txt"
+
 CFLAGS=(-DPORTABLE_BYTECODE -O2 -pthread -s USE_ZLIB=1)
 INCS=(-I em-tpb32l/boot/tpb32l -I em-tpb32l/c -I c/)
 RKTIO_INCS=(-I "$src/rktio" -I "$src/rktio/build-em")
 CS_INCS=(-I "$src/cs/c")
-FFI_INCS=(-I "$ffi_inc")
 
 # ---- small object compiles (cheap; always run) ---------------------
 
@@ -100,7 +131,7 @@ chunks=( "$boot"/{petite,scheme,racket}{0,1,2,3,4,5,6,7,8,9}.o )
 
 LDFLAGS_COMMON=(
   -O2 -pthread -s USE_ZLIB=1
-  -L "$ffi_lib"
+  "${DEPS_LDFLAGS[@]+"${DEPS_LDFLAGS[@]}"}"
   --preload-file "$cs_boot/petite-pbchunk.boot@petite.boot"
   --preload-file "$cs_boot/scheme-pbchunk.boot@scheme.boot"
   --preload-file "$cs_boot/racket-pbchunk.boot@racket.boot"
@@ -109,6 +140,16 @@ LDFLAGS_COMMON=(
   -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1
   -sALLOW_TABLE_GROWTH=1
 )
+
+# Force-link symbols the recipe manifest registers via Sforeign_symbol.
+# wasm-ld would otherwise strip them before init_foreign can take
+# their address. Empty when no recipe declares symbols (libffi today).
+uflags_read=()
+if [ -s "$uflags_file" ]; then
+  while IFS= read -r line; do
+    [ -n "$line" ] && uflags_read+=("$line")
+  done < "$uflags_file"
+fi
 
 link_node() {
   echo "[ld]  scheme.{js,wasm,data}  (node)"
@@ -119,9 +160,9 @@ link_node() {
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
        --post-js wasm-shell/node-tty.js \
        "${LDFLAGS_COMMON[@]}" \
+       "${uflags_read[@]+"${uflags_read[@]}"}" \
        -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset \
-       -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction \
-       -lffi
+       -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction
 }
 
 link_browser() {
@@ -139,11 +180,11 @@ link_browser() {
        --pre-js  wasm-shell/idbfs-init.js \
        --post-js wasm-shell/shell-tty.js \
        "${LDFLAGS_COMMON[@]}" \
+       "${uflags_read[@]+"${uflags_read[@]}"}" \
        -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap \
        -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32,FS,addRunDependency,removeRunDependency \
        -sFORCE_FILESYSTEM=1 \
-       -lidbfs.js \
-       -lffi
+       -lidbfs.js
 
   if [ -f "$src/ChezScheme/install-wasm-browser-shell.rkt" ] && command -v racket >/dev/null; then
     echo "[gen] page assets"
