@@ -66,7 +66,11 @@ wasm_dep_paths() {
   DEP_STATE="$DEP_PREFIX/.wasm-dep-state"
   if [ -n "${DEP_SOURCE_URL:-}" ]; then
     : "${DEP_SOURCE_SHA256:?recipe missing DEP_SOURCE_SHA256}"
-    DEP_CACHE="$WASM_CACHE_DIR/${DEP_NAME}-${DEP_SOURCE_SHA256:0:12}.tar.gz"
+    # Preserve URL's archive extension so the cached file keeps the
+    # same compression (tar auto-detects on extract).
+    local ext="${DEP_SOURCE_URL##*.}"
+    case "$ext" in xz|gz|bz2|zst) ;; *) ext=gz ;; esac
+    DEP_CACHE="$WASM_CACHE_DIR/${DEP_NAME}-${DEP_SOURCE_SHA256:0:12}.tar.$ext"
   fi
 }
 
@@ -103,7 +107,7 @@ wasm_dep_fetch() {
     echo "[$DEP_NAME] extract"
     rm -rf "$DEP_SRC.partial"
     mkdir -p "$DEP_SRC.partial"
-    tar -xzf "$DEP_CACHE" -C "$DEP_SRC.partial" --strip-components=1
+    tar -xf "$DEP_CACHE" -C "$DEP_SRC.partial" --strip-components=1
     mv "$DEP_SRC.partial" "$DEP_SRC"
   fi
 }
@@ -151,6 +155,15 @@ _wasm_dep_build_meson() {
   local cross="$WASM_SHELL_DIR/wasm-emscripten.cross"
   [ -f "$cross" ] || { echo "[$DEP_NAME] missing cross file: $cross" >&2; return 1; }
   echo "[$DEP_NAME] configure (meson)"
+  # PKG_CONFIG_LIBDIR overrides pkg-config's default search path
+  # entirely; without it, even a `dependency('foo', required: false)`
+  # call inside a meson.build will happily resolve to a host library
+  # (e.g. brew's libbz2) and start compiling code that won't link
+  # under emcc. Scoping it to our accumulated deps + the Emscripten
+  # sysroot keeps cross-build hygiene.
+  local em_pc
+  em_pc="$( "${EMSDK}/upstream/emscripten/em-config" CACHE 2>/dev/null )"
+  PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH:-}${em_pc:+:$em_pc/sysroot/lib/pkgconfig}" \
   meson setup "$DEP_BUILD" "$DEP_SRC" \
     --cross-file "$cross" \
     --prefix "$DEP_PREFIX" \
@@ -165,14 +178,22 @@ _wasm_dep_build_meson() {
 
 # Make this dep's pkg-config files visible to later deps' configure /
 # meson setup. Cairo finds pixman this way, etc.
+#
+# Two env vars are set because emconfigure overwrites PKG_CONFIG_PATH
+# with whatever EM_PKG_CONFIG_PATH contains (see emsdk's
+# tools/building.py get_building_env). Meson reads PKG_CONFIG_PATH
+# directly. Setting both covers both build systems.
 _wasm_dep_register_pkgconfig() {
   local pcdir="$DEP_PREFIX/lib/pkgconfig"
-  if [ -d "$pcdir" ]; then
-    case ":${PKG_CONFIG_PATH:-}:" in
-      *":$pcdir:"*) ;;
-      *) export PKG_CONFIG_PATH="$pcdir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" ;;
-    esac
-  fi
+  [ -d "$pcdir" ] || return 0
+  case ":${PKG_CONFIG_PATH:-}:" in
+    *":$pcdir:"*) ;;
+    *) export PKG_CONFIG_PATH="$pcdir${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" ;;
+  esac
+  case ":${EM_PKG_CONFIG_PATH:-}:" in
+    *":$pcdir:"*) ;;
+    *) export EM_PKG_CONFIG_PATH="$pcdir${EM_PKG_CONFIG_PATH:+:$EM_PKG_CONFIG_PATH}" ;;
+  esac
 }
 
 # Emit one C symbol per line on stdout. Recipes pick their mode.

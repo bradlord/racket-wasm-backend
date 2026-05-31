@@ -65,7 +65,7 @@ export WASM_SHELL_DIR="$here"
 # release tarballs (CMake-only), so it lands after the recipe schema
 # learns cmake. Cairo doesn't require libjpeg; racket/draw's JPEG
 # loader does, and it can wait.
-DEPS=(libffi libpng pixman)
+DEPS=(libffi libpng pixman freetype)
 DEPS_LDFLAGS=()
 symbols_manifest="$boot/.wasm-deps-symbols.txt"
 mkdir -p "$boot"
