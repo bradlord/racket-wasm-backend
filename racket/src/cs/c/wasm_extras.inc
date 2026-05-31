@@ -31,40 +31,4 @@
   Sforeign_symbol("wasm_canvas_blit_bgra", (void *)wasm_canvas_blit_bgra);
 }
 
-/* Pointer-last Cairo wrappers (see racket/src/cs/c/wasm_cairo.c).
-   Each wraps a (cairo_t *, double, ...) entry point in
-   (double, ..., cairo_t *) form so Chez's pb foreign-call ABI
-   bug for (int/ptr, double, ...) does not zero the doubles. */
-{
-  extern void wasm_cairo_set_source_rgb(double, double, double, void *);
-  extern void wasm_cairo_set_source_rgba(double, double, double, double, void *);
-  extern void wasm_cairo_move_to(double, double, void *);
-  extern void wasm_cairo_line_to(double, double, void *);
-  extern void wasm_cairo_rel_move_to(double, double, void *);
-  extern void wasm_cairo_rel_line_to(double, double, void *);
-  extern void wasm_cairo_rectangle(double, double, double, double, void *);
-  extern void wasm_cairo_arc(double, double, double, double, double, void *);
-  extern void wasm_cairo_arc_negative(double, double, double, double, double, void *);
-  extern void wasm_cairo_curve_to(double, double, double, double, double, double, void *);
-  extern void wasm_cairo_translate(double, double, void *);
-  extern void wasm_cairo_scale(double, double, void *);
-  extern void wasm_cairo_rotate(double, void *);
-  extern void wasm_cairo_set_line_width(double, void *);
-  extern void wasm_cairo_set_font_size(double, void *);
-  Sforeign_symbol("wasm_cairo_set_source_rgb",  (void *)wasm_cairo_set_source_rgb);
-  Sforeign_symbol("wasm_cairo_set_source_rgba", (void *)wasm_cairo_set_source_rgba);
-  Sforeign_symbol("wasm_cairo_move_to",         (void *)wasm_cairo_move_to);
-  Sforeign_symbol("wasm_cairo_line_to",         (void *)wasm_cairo_line_to);
-  Sforeign_symbol("wasm_cairo_rel_move_to",     (void *)wasm_cairo_rel_move_to);
-  Sforeign_symbol("wasm_cairo_rel_line_to",     (void *)wasm_cairo_rel_line_to);
-  Sforeign_symbol("wasm_cairo_rectangle",       (void *)wasm_cairo_rectangle);
-  Sforeign_symbol("wasm_cairo_arc",             (void *)wasm_cairo_arc);
-  Sforeign_symbol("wasm_cairo_arc_negative",    (void *)wasm_cairo_arc_negative);
-  Sforeign_symbol("wasm_cairo_curve_to",        (void *)wasm_cairo_curve_to);
-  Sforeign_symbol("wasm_cairo_translate",       (void *)wasm_cairo_translate);
-  Sforeign_symbol("wasm_cairo_scale",           (void *)wasm_cairo_scale);
-  Sforeign_symbol("wasm_cairo_rotate",          (void *)wasm_cairo_rotate);
-  Sforeign_symbol("wasm_cairo_set_line_width", (void *)wasm_cairo_set_line_width);
-  Sforeign_symbol("wasm_cairo_set_font_size",  (void *)wasm_cairo_set_font_size);
-}
 

@@ -408,6 +408,21 @@ void S_ffi_call(ptr types, ptr proc, ptr *arena) {
   for (i = 0; i < n_args; i++) {
     ptr type = Svector_ref(types, i + ARG_TYPE_START_INDEX);
     if (Sfixnump(type)) {
+      /* Pad arena to 8 bytes for 8-byte argument types, mirroring the
+         compile-time layout in do-types/arena (s/pb.ss). On 32-bit pb
+         the per-slot ptr advance leaves arena 4-byte-aligned after an
+         int/ptr arg; libffi's wasm port reads doubles via HEAPF64 and
+         silently corrupts them when not 8-aligned. No-op on 64-bit pb. */
+      if ((uptr)TO_PTR(arena) & 7) {
+        switch (UNFIX(type)) {
+        case ffi_typerep_double:
+        case ffi_typerep_float:
+        case ffi_typerep_uint64:
+        case ffi_typerep_sint64:
+          arena++;
+          break;
+        }
+      }
       args[i] = arena;
       /* adjust arguments that are not ptr-sized or not encoded as doubles/iptrs */
       switch(UNFIX(type)) {
@@ -648,6 +663,19 @@ static void closure_callback(UNUSED ffi_cif *cif, void *ret, void **args, void *
   for (i = 0; i < n_args; i++) {
     type = Svector_ref(types, i + ARG_TYPE_START_INDEX);
     if (Sfixnump(type)) {
+      /* Match the compile-time alignment from do-types/arena: 8-byte
+         args (double, float, int64) start at 8-aligned offsets. See
+         the S_ffi_call note above. */
+      if ((uptr)TO_PTR(arena) & 7) {
+        switch (UNFIX(type)) {
+        case ffi_typerep_double:
+        case ffi_typerep_float:
+        case ffi_typerep_uint64:
+        case ffi_typerep_sint64:
+          arena++;
+          break;
+        }
+      }
       switch(UNFIX(type)) {
       case ffi_typerep_uint8:
         *arena = (ptr)*(U8 *)args[i];
