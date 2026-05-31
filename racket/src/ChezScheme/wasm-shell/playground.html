@@ -190,43 +190,50 @@
 
 ;; Draw with Cairo, blit the result to the page canvas.
 ;;
-;; Cairo is statically linked into the WASM runtime; symbols are reached
-;; via Chez foreign-procedure (no ffi-lib / dlopen needed on this target).
-;; We allocate the pixel buffer with raw malloc rather than a Racket
-;; bytes -- otherwise Chez's GC could relocate the bytevector between
-;; cairo_image_surface_create_for_data (which stashes the pointer) and
-;; the later paint/fill calls (which write through that stashed
-;; pointer), causing Cairo to write into stale memory.
+;; Cairo is statically linked into the WASM runtime; ffi-lib +
+;; get-ffi-obj resolve names through Chez's foreign-symbol table
+;; (no real dlopen/dlsym -- see racket/src/ChezScheme/c/foreign.c's
+;; Sforeign_lookup and racket/src/cs/c/boot.c's em_dll_* hooks).
+;; Any ffi-lib name is accepted; what matters is the symbol name.
 ;;
-;; wasm_canvas_blit_bgra reads from the same pointer, un-premultiplies,
-;; and swizzles B/R so Cairo's ARGB32 (BGRA premultiplied) becomes
-;; Canvas RGBA.
+;; The pixel buffer is raw malloc rather than a Racket bytes: Chez's
+;; GC could otherwise relocate the bytevector between the surface
+;; create call (which stashes the pointer) and the paint/fill calls
+;; (which write through it), causing Cairo to scribble on stale
+;; memory. wasm_canvas_blit_bgra reads from the same pointer,
+;; un-premultiplies, and swizzles B/R so ARGB32 (BGRA premultiplied)
+;; renders as Canvas RGBA.
 
-(require ffi/unsafe
-         ffi/unsafe/vm)
+(require ffi/unsafe)
 
-(define (cfn name sig)  (vm-eval `(foreign-procedure ,name ,@sig)))
+(define cairo  (ffi-lib "libcairo"))
+(define wasm   (ffi-lib "libwasm-extras"))   ; sentinel; any name works
 
-(define cairo-format-stride-for-width
-  (cfn "cairo_format_stride_for_width" '((int int) int)))
-(define cairo-image-surface-create-for-data
-  (cfn "cairo_image_surface_create_for_data" '((uptr int int int int) uptr)))
-(define cairo-create           (cfn "cairo_create"           '((uptr) uptr)))
-(define cairo-destroy          (cfn "cairo_destroy"          '((uptr) void)))
-(define cairo-surface-destroy  (cfn "cairo_surface_destroy"  '((uptr) void)))
-(define cairo-surface-flush    (cfn "cairo_surface_flush"    '((uptr) void)))
-(define cairo-set-source-rgb   (cfn "cairo_set_source_rgb"   '((uptr double double double) void)))
-(define cairo-set-source-rgba  (cfn "cairo_set_source_rgba"  '((uptr double double double double) void)))
-(define cairo-rectangle        (cfn "cairo_rectangle"        '((uptr double double double double) void)))
-(define cairo-arc              (cfn "cairo_arc"              '((uptr double double double double double) void)))
-(define cairo-fill             (cfn "cairo_fill"             '((uptr) void)))
-(define cairo-stroke           (cfn "cairo_stroke"           '((uptr) void)))
-(define cairo-paint            (cfn "cairo_paint"            '((uptr) void)))
-(define cairo-set-line-width   (cfn "cairo_set_line_width"   '((uptr double) void)))
-(define cairo-select-font-face (cfn "cairo_select_font_face" '((uptr string int int) void)))
-(define cairo-set-font-size    (cfn "cairo_set_font_size"    '((uptr double) void)))
-(define cairo-move-to          (cfn "cairo_move_to"          '((uptr double double) void)))
-(define cairo-show-text        (cfn "cairo_show_text"        '((uptr string) void)))
+(define-syntax-rule (defcairo name (args ...) ret)
+  (define name (get-ffi-obj 'name cairo (_fun args ... -> ret))))
+
+(defcairo cairo_format_stride_for_width (_int _int) _int)
+(defcairo cairo_image_surface_create_for_data (_pointer _int _int _int _int) _pointer)
+(defcairo cairo_create          (_pointer) _pointer)
+(defcairo cairo_destroy         (_pointer) _void)
+(defcairo cairo_surface_destroy (_pointer) _void)
+(defcairo cairo_surface_flush   (_pointer) _void)
+(defcairo cairo_set_source_rgb  (_pointer _double _double _double) _void)
+(defcairo cairo_set_source_rgba (_pointer _double _double _double _double) _void)
+(defcairo cairo_rectangle       (_pointer _double _double _double _double) _void)
+(defcairo cairo_arc             (_pointer _double _double _double _double _double) _void)
+(defcairo cairo_fill            (_pointer) _void)
+(defcairo cairo_stroke          (_pointer) _void)
+(defcairo cairo_paint           (_pointer) _void)
+(defcairo cairo_set_line_width  (_pointer _double) _void)
+(defcairo cairo_select_font_face (_pointer _string _int _int) _void)
+(defcairo cairo_set_font_size   (_pointer _double) _void)
+(defcairo cairo_move_to         (_pointer _double _double) _void)
+(defcairo cairo_show_text       (_pointer _string) _void)
+
+(define wasm_canvas_blit_bgra
+  (get-ffi-obj 'wasm_canvas_blit_bgra wasm
+               (_fun _int _int _pointer -> _int)))
 
 (define wasm-canvas-blit-bgra
   (cfn "wasm_canvas_blit_bgra" '((int int uptr) int)))
@@ -234,41 +241,40 @@
 (define W 320)
 (define H 240)
 (define CAIRO-FORMAT-ARGB32 0)
-(define stride (cairo-format-stride-for-width CAIRO-FORMAT-ARGB32 W))
+(define stride (cairo_format_stride_for_width CAIRO-FORMAT-ARGB32 W))
 (define total-bytes (* stride H))
 (define pixels (malloc total-bytes 'raw))   ; outside Racket's GC heap
 (memset pixels 0 total-bytes)
-(define pixels-addr (cast pixels _pointer _uintptr))
-(define surf (cairo-image-surface-create-for-data pixels-addr CAIRO-FORMAT-ARGB32 W H stride))
-(define ctx  (cairo-create surf))
+(define surf (cairo_image_surface_create_for_data pixels CAIRO-FORMAT-ARGB32 W H stride))
+(define ctx  (cairo_create surf))
 
 ;; Background.
-(cairo-set-source-rgb ctx 0.08 0.10 0.16) (cairo-paint ctx)
+(cairo_set_source_rgb ctx 0.08 0.10 0.16) (cairo_paint ctx)
 
 ;; Three filled circles.
-(cairo-set-source-rgba ctx 0.95 0.36 0.22 0.92)
-(cairo-arc ctx 110.0 110.0 60.0 0.0 6.2832) (cairo-fill ctx)
-(cairo-set-source-rgba ctx 0.20 0.74 0.93 0.85)
-(cairo-arc ctx 200.0 140.0 70.0 0.0 6.2832) (cairo-fill ctx)
-(cairo-set-source-rgba ctx 0.99 0.78 0.18 0.85)
-(cairo-arc ctx 160.0 60.0  40.0 0.0 6.2832) (cairo-fill ctx)
+(cairo_set_source_rgba ctx 0.95 0.36 0.22 0.92)
+(cairo_arc ctx 110.0 110.0 60.0 0.0 6.2832) (cairo_fill ctx)
+(cairo_set_source_rgba ctx 0.20 0.74 0.93 0.85)
+(cairo_arc ctx 200.0 140.0 70.0 0.0 6.2832) (cairo_fill ctx)
+(cairo_set_source_rgba ctx 0.99 0.78 0.18 0.85)
+(cairo_arc ctx 160.0 60.0  40.0 0.0 6.2832) (cairo_fill ctx)
 
 ;; Outlined rect.
-(cairo-set-source-rgb ctx 1.0 1.0 1.0)
-(cairo-set-line-width ctx 3.0)
-(cairo-rectangle ctx 20.0 180.0 280.0 40.0) (cairo-stroke ctx)
+(cairo_set_source_rgb ctx 1.0 1.0 1.0)
+(cairo_set_line_width ctx 3.0)
+(cairo_rectangle ctx 20.0 180.0 280.0 40.0) (cairo_stroke ctx)
 
 ;; Text.
-(cairo-select-font-face ctx "sans-serif" 0 0)
-(cairo-set-font-size ctx 18.0)
-(cairo-move-to ctx 36.0 207.0)
-(cairo-set-source-rgb ctx 1.0 1.0 1.0)
-(cairo-show-text ctx "Cairo on WebAssembly")
+(cairo_select_font_face ctx "sans-serif" 0 0)
+(cairo_set_font_size ctx 18.0)
+(cairo_move_to ctx 36.0 207.0)
+(cairo_set_source_rgb ctx 1.0 1.0 1.0)
+(cairo_show_text ctx "Cairo on WebAssembly")
 
-(cairo-surface-flush surf)
-(define rc (wasm-canvas-blit-bgra W H pixels-addr))
-(cairo-destroy ctx)
-(cairo-surface-destroy surf)
+(cairo_surface_flush surf)
+(define rc (wasm_canvas_blit_bgra W H pixels))
+(cairo_destroy ctx)
+(cairo_surface_destroy surf)
 (free pixels)
 (displayln (format "blit returned ~a (stride=~a, total bytes=~a)" rc stride total-bytes))
 </textarea>

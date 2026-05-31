@@ -158,6 +158,28 @@ static void init_foreign(void)
 # endif
 }
 
+#ifdef __EMSCRIPTEN__
+/* See racket_boot for context. The "handle" we hand back is a
+   non-NULL sentinel; the find_object hook ignores it and looks up
+   `name` in Chez's static foreign-symbol table via Sforeign_lookup
+   (ChezScheme/c/foreign.c). All ffi-lib invocations succeed with
+   this sentinel; the actual gate is whether the symbol was
+   registered, which keeps the static-link world coherent. */
+extern void *Sforeign_lookup(const char *);
+
+static void *em_dll_open(rktio_const_string_t name, rktio_bool_t as_global) {
+  (void)name; (void)as_global;
+  return (void *)(uintptr_t)1;
+}
+static void *em_dll_find_object(void *h, rktio_const_string_t name) {
+  (void)h;
+  return Sforeign_lookup((const char *)name);
+}
+static void em_dll_close(void *h) {
+  (void)h;
+}
+#endif
+
 void racket_boot(racket_boot_arguments_t *ba)
 {
   int cross_server = 0;
@@ -167,6 +189,18 @@ void racket_boot(racket_boot_arguments_t *ba)
     rktio_set_dll_path((wchar_t *)ba->dll_dir);
   if (ba->dll_open)
     rktio_set_dll_procs(ba->dll_open, ba->dll_find_object, ba->dll_close);
+#endif
+
+#ifdef __EMSCRIPTEN__
+  /* Emscripten has no dlopen/dlsym in the static-linked WASM build.
+     Install hooks so (ffi-lib ...) succeeds with a sentinel handle
+     and get-ffi-obj resolves names through Chez's static foreign-
+     symbol table (Sforeign_symbol-registered names: rktio, wasm_*
+     primitives, and every dep symbol the wasm_deps.inc manifest
+     declared). With this, racket/draw and similar packages that
+     reach native libraries via ffi-lib Just Work without source
+     changes. */
+  rktio_set_dll_procs(em_dll_open, em_dll_find_object, em_dll_close);
 #endif
 
   Sscheme_register_signal_registerer(rktio_will_modify_os_signal_handler);
