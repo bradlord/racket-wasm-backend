@@ -20,6 +20,8 @@
 (define files
   '("browser-shell.html"
     "browser-shell.js"
+    "playground.html"
+    "playground.js"
     "shell-worker.js"
     "serve.py"))
 

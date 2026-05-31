@@ -210,6 +210,9 @@
     }
     worker.onerror = onWorkerError;
     worker.onmessage = onWorkerMessage;
+    // No argv -> Racket runs the interactive REPL. IDBFS on for the
+    // persistent /home/web_user the REPL relies on.
+    worker.postMessage({ type: "init", argv: [], idbfs: true });
   }
 
   function onWorkerError(event) {

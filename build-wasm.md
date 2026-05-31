@@ -401,11 +401,40 @@ profiling is no longer needed.
 
 ### Browser shell
 
-The browser shell in `racket/src/ChezScheme/wasm-shell/` loads Racket
-into an xterm.js terminal. It needs a **separate, browser-specific
-build** of the runtime, because the node `scheme.js` runs `main()` on
-the calling thread: in a browser that would be the page's main thread,
-and Racket's blocking REPL stdin read would freeze the event loop.
+The browser shell in `racket/src/ChezScheme/wasm-shell/` is a
+**shared runtime + per-surface host** design: one
+`scheme-web.{js,wasm,data}` binary backs every browser surface (the
+REPL today; a playground POC; future doc widgets / embeds / canvas
+GUIs). Per-surface code is just an HTML+JS pair that drives the same
+worker with a different init payload.
+
+It needs a **separate, browser-specific build** of the runtime,
+because the node `scheme.js` runs `main()` on the calling thread: in a
+browser that would be the page's main thread, and Racket's blocking
+REPL stdin read would freeze the event loop.
+
+#### Per-surface init protocol
+
+`shell-worker.js` no longer loads the runtime at top level. It waits
+for an `init` message from the page, then sets `self.Module` and
+`importScripts("./scheme-web.js")`. The init payload lets the page
+choose:
+
+- `argv` -- becomes `Module.arguments`, which Racket sees as its
+  command line. `[]` runs the interactive REPL (the browser-shell
+  case); `["-u","/tmp/main.rkt"]` runs a module and exits (the
+  playground case); `["-e","(form)"]` evaluates an expression; etc.
+- `files` -- `{ "/abs/path": "<text>" }` written into MEMFS during
+  `preRun` (before `main()`). The playground uses this to drop the
+  user's source at `/tmp/main.rkt` before the runtime starts.
+- `idbfs` -- whether to mount `/home/web_user` on IDBFS. The REPL
+  wants persistence (`true`); transient playground runs do not
+  (`false`). `idbfs-init.js` checks `Module._idbfsEnabled` and skips
+  the mount when off; `shell-worker`'s `onExit` likewise skips
+  `FS.syncfs(false)` when off.
+
+The rings (`wasm_shell_io.c`), `shell-tty.js`, and `idbfs-init.js`
+stay surface-agnostic.
 
 The page therefore hosts the runtime in a dedicated Web Worker it
 spawns itself (`shell-worker.js`); `main()` runs on that worker's own
@@ -492,6 +521,26 @@ Notes / status:
 - The shell loads xterm.js from cdnjs.
 - This cannot be validated under node: a headless harness can't drive
   the page+worker handshake. Test in a browser.
+
+### Playground
+
+`playground.html` + `playground.js` reuse the same `scheme-web.*`
+artifact as the REPL. Lifecycle is **process-per-run**: each click of
+*Run* spawns a fresh worker, posts
+`{argv:["-u","/tmp/main.rkt"], files:{"/tmp/main.rkt": <editor text>},
+idbfs:false}`, lets `main()` execute the user's module, and tears the
+worker down on `exit`. A second Run spawns another worker. Cold start
+is ~2 s (same as the REPL boot); program output streams through the
+existing stdout ring while it runs, and a stdin textarea pipes lines
+into the existing input ring for programs that `read-line`.
+
+The lifecycle alternative -- one persistent worker that does a
+custodian shutdown + fresh namespace per Run -- would get sub-second
+re-runs but is harder to keep clean; deferred. Process-per-run matches
+the latency users expect from comparable playgrounds (Rust, Go).
+
+Serve and visit `http://127.0.0.1:8123/playground.html` alongside the
+REPL.
 
 ### WIP: pre-generate `compiled/tpb32l`
 

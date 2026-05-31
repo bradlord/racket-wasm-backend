@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Racket WASM Playground</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #2f3b4f;
+      --text: #e6edf3;
+      --muted: #9fb0c3;
+      --accent: #f59e0b;
+      --accent-2: #38bdf8;
+      --danger: #f87171;
+      --ok: #34d399;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), transparent 34%),
+        radial-gradient(circle at top right, rgba(245, 158, 11, 0.18), transparent 28%),
+        linear-gradient(180deg, #0b1220 0%, var(--bg) 48%, #081018 100%);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    }
+    .page {
+      width: min(1200px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 32px;
+    }
+    .hero { display: grid; gap: 10px; margin-bottom: 20px; }
+    .eyebrow {
+      margin: 0; color: var(--accent); font-size: 12px; font-weight: 700;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+    .hero h1 {
+      margin: 0; font-size: clamp(32px, 5vw, 56px);
+      line-height: 0.96; letter-spacing: -0.04em; max-width: 14ch;
+    }
+    .hero p {
+      margin: 0; color: var(--muted); font-size: 16px; line-height: 1.5; max-width: 62ch;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+    .grid {
+      display: grid; gap: 16px;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .panel {
+      background: rgba(22, 27, 34, 0.88);
+      border: 1px solid rgba(159, 176, 195, 0.16);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+    }
+    .panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(159, 176, 195, 0.12);
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+    .panel-header h2 { margin: 0; font-size: 16px; }
+    .panel-header .sub { color: var(--muted); font-size: 13px; }
+    .button {
+      appearance: none;
+      border: 1px solid rgba(159, 176, 195, 0.18);
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(56, 189, 248, 0.18), rgba(56, 189, 248, 0.08));
+      color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
+      padding: 8px 14px;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+    .button:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(56, 189, 248, 0.45); }
+    .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .button--primary {
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.45), rgba(245, 158, 11, 0.2));
+      border-color: rgba(245, 158, 11, 0.55);
+    }
+    .button--danger {
+      background: linear-gradient(180deg, rgba(248, 113, 113, 0.32), rgba(248, 113, 113, 0.12));
+      border-color: rgba(248, 113, 113, 0.55);
+    }
+    .chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04); color: var(--muted); font-size: 12px;
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+    .chip[data-state="ok"]    { color: var(--ok); }
+    .chip[data-state="error"] { color: var(--danger); }
+    .chip[data-state="run"]   { color: var(--accent); }
+    #editor, #output, #stdin {
+      width: 100%;
+      border: none;
+      background: rgba(7, 14, 23, 0.85);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      padding: 14px 16px;
+      line-height: 1.5;
+      outline: none;
+      resize: none;
+      tab-size: 2;
+    }
+    #editor { min-height: 360px; }
+    #output {
+      margin: 0;
+      min-height: 240px;
+      max-height: 60vh;
+      overflow-y: auto;
+      overflow-x: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background:
+        linear-gradient(180deg, rgba(4, 10, 18, 0.9), rgba(7, 14, 23, 0.96));
+    }
+    #stdin {
+      min-height: 56px;
+      border-top: 1px solid rgba(159, 176, 195, 0.12);
+    }
+    .panel-footer {
+      padding: 10px 14px;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border-top: 1px solid rgba(159, 176, 195, 0.12);
+      background: rgba(13, 17, 23, 0.6);
+      font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+      font-size: 13px; color: var(--muted);
+    }
+    .hint kbd {
+      font-family: var(--mono); font-size: 12px;
+      padding: 2px 6px; border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Racket WASM Playground</p>
+      <h1>Edit. Run. Repeat.</h1>
+      <p>
+        Type a Racket program on the left, click <em>Run</em> (or
+        <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd>). The program runs in a
+        fresh runtime worker; stdout, stderr, and the exit code stream into the
+        pane on the right. If the program reads stdin, type a line into the
+        stdin box and press <kbd>Enter</kbd>.
+      </p>
+    </section>
+
+    <div class="grid">
+      <section class="panel" aria-label="Program source">
+        <header class="panel-header">
+          <div>
+            <h2>Program</h2>
+            <div class="sub">Saved to <code>/tmp/main.rkt</code>; runner is <code>racket -u /tmp/main.rkt</code>.</div>
+          </div>
+          <div>
+            <button class="button button--primary" id="run" type="button" disabled>Run</button>
+            <button class="button button--danger" id="stop" type="button" disabled>Stop</button>
+          </div>
+        </header>
+        <textarea id="editor" spellcheck="false" autocapitalize="off"
+          autocorrect="off" autocomplete="off">#lang racket
+
+(for ([i (in-range 5)])
+  (displayln i))
+
+(displayln "hello from the wasm playground")
+</textarea>
+        <footer class="panel-footer">
+          <span class="hint"><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>
+        </footer>
+      </section>
+
+      <section class="panel" aria-label="Run output">
+        <header class="panel-header">
+          <div>
+            <h2>Output</h2>
+            <div class="sub">stdout + stderr merged · exit code on completion</div>
+          </div>
+          <span class="chip" id="status" data-state="idle">Idle</span>
+        </header>
+        <pre id="output" tabindex="0" aria-label="Program output"></pre>
+        <div>
+          <textarea id="stdin" spellcheck="false" autocapitalize="off"
+            autocorrect="off" autocomplete="off"
+            placeholder="stdin: type a line and press Enter while a program is running"
+            disabled></textarea>
+          <footer class="panel-footer">
+            <span class="hint">Output truncated to a rolling window. <kbd>Enter</kbd> sends a line of stdin.</span>
+          </footer>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script defer src="./playground.js"></script>
+</body>
+</html>
