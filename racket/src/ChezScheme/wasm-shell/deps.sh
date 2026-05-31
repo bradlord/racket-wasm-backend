@@ -142,10 +142,21 @@ _wasm_jobs() {
 _wasm_dep_build_autotools() {
   echo "[$DEP_NAME] configure (autotools)"
   mkdir -p "$DEP_BUILD"
-  ( cd "$DEP_BUILD" && emconfigure ../configure \
-      --host=wasm32-unknown-emscripten \
-      --prefix="$DEP_PREFIX" \
-      "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}" )
+  # Match the meson cross file's c_args / c_link_args so autotools-
+  # built archives are ABI-compatible with meson-built ones at the
+  # final wasm link. Without -pthread here, libraries like libpng's
+  # png.o aren't compiled with atomics/bulk-memory, and any later
+  # link with -pthread fails with
+  # "--shared-memory is disallowed by png.o".
+  local emflags="-pthread -sUSE_ZLIB=1"
+  ( cd "$DEP_BUILD" \
+    && CFLAGS="$emflags${CFLAGS:+ $CFLAGS}" \
+       CPPFLAGS="$emflags${CPPFLAGS:+ $CPPFLAGS}" \
+       LDFLAGS="$emflags${LDFLAGS:+ $LDFLAGS}" \
+       emconfigure ../configure \
+         --host=wasm32-unknown-emscripten \
+         --prefix="$DEP_PREFIX" \
+         "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}" )
   echo "[$DEP_NAME] build"
   ( cd "$DEP_BUILD" && emmake make -j"$(_wasm_jobs)" && make install )
 }
