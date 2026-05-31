@@ -16,6 +16,45 @@
 
 #include "wasm_deps.inc"
 
+/* libm / libc essentials that racket/draw (and friends) reach via
+   (ffi-lib #f). Statically linked into the WASM image; we just need
+   to make their addresses reachable through the Sforeign_symbol
+   table. Explicit externs (rather than #include <math.h>) because
+   this file is included inside init_foreign's body, where inline
+   function definitions aren't permitted. */
+{
+  extern double fmod(double, double);
+  extern double pow(double, double);
+  extern double sqrt(double);
+  extern double sin(double);  extern double cos(double); extern double tan(double);
+  extern double asin(double); extern double acos(double); extern double atan(double);
+  extern double atan2(double, double);
+  extern double exp(double);  extern double log(double);
+  extern double log2(double); extern double log10(double);
+  extern double floor(double); extern double ceil(double);
+  extern double round(double); extern double trunc(double);
+  extern double fabs(double);
+  Sforeign_symbol("fmod",  (void *)fmod);
+  Sforeign_symbol("pow",   (void *)pow);
+  Sforeign_symbol("sqrt",  (void *)sqrt);
+  Sforeign_symbol("sin",   (void *)sin);
+  Sforeign_symbol("cos",   (void *)cos);
+  Sforeign_symbol("tan",   (void *)tan);
+  Sforeign_symbol("asin",  (void *)asin);
+  Sforeign_symbol("acos",  (void *)acos);
+  Sforeign_symbol("atan",  (void *)atan);
+  Sforeign_symbol("atan2", (void *)atan2);
+  Sforeign_symbol("exp",   (void *)exp);
+  Sforeign_symbol("log",   (void *)log);
+  Sforeign_symbol("log2",  (void *)log2);
+  Sforeign_symbol("log10", (void *)log10);
+  Sforeign_symbol("floor", (void *)floor);
+  Sforeign_symbol("ceil",  (void *)ceil);
+  Sforeign_symbol("round", (void *)round);
+  Sforeign_symbol("trunc", (void *)trunc);
+  Sforeign_symbol("fabs",  (void *)fabs);
+}
+
 /* Framework for stubbing symbols from libraries we haven't yet
    linked. Bind a name to wasm_unimplemented_stub (returns NULL) or
    wasm_passthrough_stub (returns its first arg) below as new module-

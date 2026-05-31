@@ -711,30 +711,20 @@ is rarely true for non-trivial APIs.
 ### Status
 
 `draw-lib` is preloaded; (Cairo + libpng + FreeType + libjpeg-turbo)
-all link and their public symbols are registered. `(require
-racket/draw/unsafe/cairo)`, `(require racket/draw/unsafe/png)`, and
-direct `jpeg_std_error`/`jpeg_CreateDecompress` calls work. The
-next blocker is a Chez Scheme + Emscripten foreign-callable issue:
-when `(require racket/draw/unsafe/jpeg)` casts a Racket procedure
-to `_fpointer` (the JPEG error_exit callback the module-load
-version probe installs), the resulting function pointer triggers a
-`table index is out of bounds` wasm trap when libjpeg invokes it
-via the setjmp/longjmp path. Direct C-to-C `jpeg_CreateDecompress`
-calls succeed normally (the version-mismatch error message prints
-correctly when no Racket callback is installed). So libjpeg itself
-is fine; what's broken is Chez's `Sforeign_callable` codegen
-producing a wasm function whose `call_indirect` signature or
-trampoline interaction doesn't match what Emscripten's
-`invoke_vii`-style longjmp machinery expects. The fix lives in
-Chez's `c/callback.c` / `s/pb.ss` callable path under
-`__EMSCRIPTEN__`; pairs with the pb foreign-call ABI fix in commit
-76ef6162ea.
+all link, their public symbols are registered, and `(require
+racket/draw)` now load-progresses past JPEG initialization (the
+version probe's `_fpointer` callback works correctly). The
+remaining blockers are pure recipe-additions: the next missing
+symbol is `g_log_set_default_handler` from GLib. After GLib lands,
+expat, fontconfig, pango, and harfbuzz are the rest of the bridge
+to a fully usable `racket/draw`.
 
-Once that's resolved, the remaining libraries -- expat, fontconfig,
-pango, harfbuzz, glib -- are recipe additions (each ~one new file
-under `wasm-shell/deps/` plus a relink). After that, `(require
-racket/draw)` should load straight through and `(send dc draw-line
-...)` work for in-memory bitmaps.
+A handful of libm / libc essentials (fmod, pow, sqrt, sin/cos/tan,
+atan2, exp/log, floor/ceil/round/trunc, fabs) are registered in
+`wasm_extras.inc` because draw-lib's color math reaches them via
+`(ffi-lib #f)` (look in any opened library). The Emscripten sysroot
+links the math library statically; the Sforeign_symbol entries
+just expose the addresses to `Sforeign_lookup`.
 
 ## Calling WASM-specific primitives from Racket
 

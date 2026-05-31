@@ -686,16 +686,25 @@
        (unless (vector? x)
          ($oops 'foreign-callable-entry-point "~s is not a vector" x))
        (let ([v (vector-ref x 2)])
-         ;; On WebAssembly the code-pointer slot holds a bignum/integer
-         ;; (Sunsigned-encoded function-table index), because WASM
-         ;; function "addresses" can't be packed as raw aligned ptrs.
+         ;; On WebAssembly the code-pointer slot holds a raw integer
+         ;; (Sunsigned-encoded function-table index); it may be a fixnum
+         ;; when the index is small, but we must NOT shift it -- the
+         ;; index is the literal value the call_indirect site uses.
          ;; On other pb hosts the slot holds an aligned pointer encoded
          ;; as a fixnum, which we recover by shifting left by
          ;; `fixnum-offset`.
-         (if (fixnum? v)
-             (bitwise-and (bitwise-arithmetic-shift-left v (constant fixnum-offset))
-                          (- (bitwise-arithmetic-shift-left 1 (constant ptr-bits)) 1))
-             v))]
+         (constant-case machine-type-name
+           [(tpb32l)
+            ;; tpb32l is our Emscripten target (S_ffi_closure stores
+            ;; the table index via Sunsigned); never apply the
+            ;; aligned-pointer shift, even when the index happens to
+            ;; fit a fixnum.
+            v]
+           [else
+            (if (fixnum? v)
+                (bitwise-and (bitwise-arithmetic-shift-left v (constant fixnum-offset))
+                             (- (bitwise-arithmetic-shift-left 1 (constant ptr-bits)) 1))
+                v)]))]
       [else
        (unless ($code? x)
          ($oops 'foreign-callable-entry-point "~s is not a code object" x))
