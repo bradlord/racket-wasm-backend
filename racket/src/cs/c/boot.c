@@ -147,6 +147,15 @@ static void run_cross_server(char **argv)
 static void init_foreign(void)
 {
 # include "rktio.inc"
+# ifdef RACKET_EXTRA_FOREIGN_INC
+   /* Build-time hook for registering extra foreign symbols alongside
+      rktio's. Defined to a filename via -DRACKET_EXTRA_FOREIGN_INC=...
+      Used by the Emscripten/WASM build (see racket/src/cs/c/wasm_http.c
+      and build-wasm.md) so symbols like `wasm_http_get` are visible to
+      Racket FFI in the same way rktio symbols are. Behavior is
+      unchanged on every other build. */
+#  include RACKET_EXTRA_FOREIGN_INC
+# endif
 }
 
 void racket_boot(racket_boot_arguments_t *ba)

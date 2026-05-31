@@ -562,6 +562,56 @@ error trace, which fails because we drive the harness through stdin;
 the latter exercises subprocess/network features that rktio does not
 implement on Emscripten and hangs.)
 
+## Calling WASM-specific primitives from Racket
+
+WASM-specific C functions (sync-XHR HTTP, future WebSocket TCP, etc.)
+live in `racket/src/cs/c/wasm_*.c` and are registered into Chez's
+foreign-symbol table via `racket/src/cs/c/wasm_extras.inc` -- the same
+mechanism rktio uses. The build wires this in by compiling `boot.c`
+with `-DRACKET_EXTRA_FOREIGN_INC='"wasm_extras.inc"'`; `boot.c`'s
+`init_foreign` then `#include`s the file after `rktio.inc` and runs
+its `Sforeign_symbol(...)` calls during heap build.
+
+**The FFI access path is not `get-ffi-obj`.** Under WASM there is no
+dynamic linker -- `dlopen` doesn't exist, all symbols are statically
+linked into the one wasm module, and Chez's `(cs)load_shared_object`
+foreign-entry is not built. `(get-ffi-obj 'name #f ...)` therefore
+fails with `ffi-lib: could not load foreign library / path: [all
+opened] / system error: dynamic linking not enabled` because
+`ffi-lib` routes through rktio's `rktio_dll_open`, which is a stub on
+Emscripten.
+
+Reach Sforeign_symbol-registered names directly via Chez's
+`foreign-procedure`, available from Racket through the
+`ffi/unsafe/vm` shim that Racket itself uses for the rktio surface.
+The pattern:
+
+```racket
+(require ffi/unsafe/vm)
+
+(define wasm-http-get-raw
+  (vm-eval '(foreign-procedure "wasm_http_get" (string u8* int) int)))
+
+(define (http-get url)
+  (define buf (make-bytes (* 1024 1024)))
+  (define n (wasm-http-get-raw url buf (bytes-length buf)))
+  (cond
+    [(= n -1) (error 'http-get "transport error")]
+    [(negative? n) (error 'http-get "response too large (~a bytes)" (- n))]
+    [else
+     (values (integer-bytes->integer buf #f #f 0 4)   ; HTTP status
+             (subbytes buf 4 n))]))                    ; body
+
+(define-values (status body) (http-get "https://api.github.com/zen"))
+```
+
+`vm-eval` runs the Chez form inside Racket's Chez runtime and returns
+the resulting procedure. Bytevector-shaped args go straight through
+(`bytes` IS a bytevector on CS), so allocation is `make-bytes` from
+Racket. This pattern works for every Sforeign_symbol-registered
+primitive without going through `ffi-lib` at all -- it's the right
+recipe to give users of the WASM REPL.
+
 ## What still has to be written
 
 The boot harness (`racket/src/cs/c/main_em.c`) is in place, pbchunk is
@@ -622,20 +672,55 @@ below).
    exception-field tests pass. The same suite on a native build
    takes a few seconds.
 
-3. **Persistent home via IDBFS.** Mount Emscripten's IDBFS at
-   `/home/web_user` (or wherever) in `main_em.c`, with a sync hook
-   on exit / idle so writes survive a reload. ~20 lines plus a
-   `preRun` in the page. Lets the in-browser REPL keep a
-   `~/.racketrc`, saved files, and (eventually) a `.zo` cache. This
-   is the gateway feature for `raco` to make sense in the browser.
+3. **Persistent home via IDBFS, properly (transparent flush).**
+   v0 is *shipped*: `/home/web_user` is mounted on IDBFS in
+   `wasm-shell/idbfs-init.js` (`--pre-js`); the boot path runs
+   `FS.syncfs(true)` so any previous session's files are present
+   when Racket starts; a "Save & Restart" button on the page sends
+   `(exit 0)` to the runtime over the input ring, the worker's
+   event loop is finally free during `Module.onExit` and runs
+   `FS.syncfs(false)`, the page tears down the worker and respawns
+   a fresh one. Works, but REPL state is lost on every save.
 
-4. **Networking via a WebSocket-bridged `rktio_network`.** Real TCP
-   isn't possible from a browser; a WebSocket tunnel back to a
-   small server can pretend to be one. The work is in
-   `racket/src/rktio/rktio_network.c` plus a JS shim. With this
-   `racket/tcp` would work, which is a prerequisite for the
-   package manager and for any web-shaped demo. Significant
-   effort, on the order of a week.
+   The structural cause is that the runtime worker's JS event loop
+   is monopolized by `main()` -- our blocking `Atomics.wait` inside
+   `shell-tty.js`'s `stream_ops.read` never returns to the event
+   loop, so async IDB callbacks queued by `FS.syncfs(false)` cannot
+   fire while Racket is alive. Transparent persistence (no
+   restart) needs one of:
+     - **`-sASYNCIFY=1`** plus a small `emscripten_sleep(0)` yield
+       inside `shell-tty.js`'s read; ~1.5-3× runtime slowdown,
+       ~25% larger wasm; *the right small-cost fix*.
+     - **WASMFS + OPFS** via `wasmfs_create_opfs_backend()`; would
+       give synchronous `FileSystemSyncAccessHandle` I/O from the
+       worker, no Asyncify needed. Requires rewriting stdin/stdout
+       because WASMFS replaces the legacy JS FS layer that our
+       `shell-tty.js` overrides (see the trial in commit history
+       for details).
+
+4. **Networking, real TCP via a WebSocket-bridged `rktio_network`.**
+   *Partially shipped*: the browser build has a `wasm_http_get` C
+   primitive (sync XHR from the runtime worker, see
+   `racket/src/cs/c/wasm_http.c`), reachable from the REPL via the
+   `ffi/unsafe/vm` pattern above. Covers the HTTP / CORS-allowed
+   case end-to-end.
+
+   What it does *not* do: raw TCP, `racket/tcp`, sockets, persistent
+   connections, anything POST-shaped that needs custom framing. The
+   real fix is a WebSocket tunnel: a small server (~50 lines of node
+   + `ws`), a JS shim on the page that owns the WebSocket and
+   proxies bytes to/from per-connection shared-memory rings, and an
+   `__EMSCRIPTEN__` branch in `racket/src/rktio/rktio_network.c`
+   that delegates to those rings instead of calling `socket(2)`.
+   With this, `(get-pure-port (string->url "..."))` would Just Work.
+   Significant effort, on the order of a week, plus the
+   bridge-server deployment caveat (must be locally hosted or
+   target-allowlisted; otherwise it's an open relay).
+
+   A useful intermediate alternative: a `racket/websocket` library
+   that lets Racket *be* a WebSocket client (no bridge needed,
+   server must speak WebSocket). Half-day; orthogonal to the bridge
+   work.
 
 5. **Native-feel line editing (libedit on WASM).** macOS / Linux
    Racket gets readline-style line editing because `readline-lib`
@@ -656,12 +741,20 @@ below).
    instead of re-expanding `.rkt` source per session, which would
    meaningfully cut warm-load time.
 
-7. **Upstream the patches against Chez/rktio.** The 5 files
-   modified in master (`ChezScheme/c/ffi.c`, `ChezScheme/s/prims.ss`,
-   `rktio/rktio_platform.h`, `rktio/rktio_poll_set.c`,
-   `rktio/rktio_process.c`) are clean conditional additions,
-   behavior-preserving on every other platform. Send them upstream
-   so this branch stops drifting from master.
+7. **Upstream the patches against Chez/rktio/cs.** Six files
+   modified in master, all clean conditional additions that are
+   behavior-preserving on every other platform:
+     - `ChezScheme/c/ffi.c`, `ChezScheme/s/prims.ss`: libffi
+       function-table-index boxing in the `pb` foreign-callable
+       path (only fires under `__EMSCRIPTEN__`).
+     - `rktio/rktio_platform.h`, `rktio/rktio_poll_set.c`,
+       `rktio/rktio_process.c`: `__EMSCRIPTEN__` feature defines
+       and the `RKTIO_USE_SYSCONF_FOR_FD_LIMIT` fallback branches.
+     - `cs/c/boot.c`: a 4-line `#ifdef RACKET_EXTRA_FOREIGN_INC` /
+       `#include` block inside `init_foreign` that lets a build
+       inject extra `Sforeign_symbol` registrations alongside
+       rktio's. No behavior change unless the macro is defined.
+   Send them upstream so this branch stops drifting from master.
 
 ### Lower priority
 
