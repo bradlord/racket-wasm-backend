@@ -70,7 +70,11 @@ source "$here/deps.sh"
 export WASM_SRC_DIR="$src"
 export WASM_SHELL_DIR="$here"
 
-DEPS=(libffi libpng pixman freetype cairo libjpeg-turbo)
+# Order is build-leaf → root: each dep can only reference earlier
+# entries via pkg-config. Note that fontconfig needs to come before
+# cairo (cairo's meson links against fontconfig when present) and
+# harfbuzz before pango.
+DEPS=(libffi libpng pixman freetype pcre2 expat glib libjpeg-turbo fontconfig cairo harfbuzz pango)
 # -L flags collected in any order (they apply globally), -l flags in
 # reverse DEPS order: leaves of the dep tree (libffi, libpng, ...) are
 # built first but must appear LAST on the wasm-ld line so that more-

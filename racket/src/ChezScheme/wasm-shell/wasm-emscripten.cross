@@ -28,7 +28,26 @@ cpu        = 'wasm32'
 endian     = 'little'
 
 [built-in options]
-c_args        = ['-pthread', '-s', 'USE_ZLIB=1']
-cpp_args      = ['-pthread', '-s', 'USE_ZLIB=1']
-c_link_args   = ['-pthread', '-s', 'USE_ZLIB=1']
-cpp_link_args = ['-pthread', '-s', 'USE_ZLIB=1']
+# clang 18+ promoted incompatible-(function-)pointer-types from warning
+# to error. GLib (gsize vs size_t) and some Cairo helpers trip this even
+# though the underlying widths match on wasm32; demote back to warning.
+c_args        = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-Wno-error=incompatible-pointer-types',
+                 '-Wno-error=incompatible-function-pointer-types',
+                 '-Wno-error=implicit-function-declaration',
+                 '-Wno-error=int-conversion']
+cpp_args      = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-Wno-error=incompatible-pointer-types',
+                 '-Wno-error=incompatible-function-pointer-types']
+# Some libraries we build (GLib) include CLI tool executables that
+# reference symbols the wasm32-emscripten sysroot doesn't provide
+# (res_query, posix_spawnp, ...). We only care about the static
+# archives that ship alongside; ignore link-time misses for the
+# tool binaries so meson compile/install can complete. The final
+# scheme-web link uses build.sh and is not affected.
+c_link_args   = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-sERROR_ON_UNDEFINED_SYMBOLS=0',
+                 '-Wl,--unresolved-symbols=ignore-all']
+cpp_link_args = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-sERROR_ON_UNDEFINED_SYMBOLS=0',
+                 '-Wl,--unresolved-symbols=ignore-all']

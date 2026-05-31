@@ -22,7 +22,7 @@ DEP_BUILD_SYSTEM=meson
 DEP_BUILD_ARGS=(
   # Font backends
   -Dfreetype=enabled
-  -Dfontconfig=disabled
+  -Dfontconfig=enabled
   -Ddwrite=disabled
   # Surface backends
   -Dpng=enabled

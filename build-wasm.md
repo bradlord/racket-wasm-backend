@@ -710,14 +710,14 @@ is rarely true for non-trivial APIs.
 
 ### Status
 
-`draw-lib` is preloaded; (Cairo + libpng + FreeType + libjpeg-turbo)
-all link, their public symbols are registered, and `(require
-racket/draw)` now load-progresses past JPEG initialization (the
-version probe's `_fpointer` callback works correctly). The
-remaining blockers are pure recipe-additions: the next missing
-symbol is `g_log_set_default_handler` from GLib. After GLib lands,
-expat, fontconfig, pango, and harfbuzz are the rest of the bridge
-to a fully usable `racket/draw`.
+**`(require racket/draw)` works.** Tier 2's full native dep tree is
+linked (Cairo + libpng + FreeType + libjpeg-turbo + pcre2 + expat +
+GLib + FontConfig + HarfBuzz + Pango, ~12 archives totalling several
+megabytes of static code). `make-bitmap` returns a real `bitmap%`,
+`make-dc` returns a working `bitmap-dc%`, and `(send dc draw-ellipse
+...)` / `(send dc draw-rectangle ...)` execute through Cairo's
+software backend without error. The wasm grew from ~26 MB to ~32 MB
+and the .data from ~87 MB to ~95 MB.
 
 A handful of libm / libc essentials (fmod, pow, sqrt, sin/cos/tan,
 atan2, exp/log, floor/ceil/round/trunc, fabs) are registered in
@@ -725,6 +725,14 @@ atan2, exp/log, floor/ceil/round/trunc, fabs) are registered in
 `(ffi-lib #f)` (look in any opened library). The Emscripten sysroot
 links the math library statically; the Sforeign_symbol entries
 just expose the addresses to `Sforeign_lookup`.
+
+Stubs in `wasm_stubs.c` cover the small set of libc functions
+GLib/FontConfig reference but the wasm32-emscripten sysroot doesn't
+ship: copy_file_range, splice, fallocate, close_range, free_sized,
+free_aligned_sized, pthread_setname_np, pthread_getaffinity_np,
+__sched_cpucount, posix_spawnp, res_query, g_inotify_file_monitor_get_type,
+getprogname. None get called on the drawing path; they exist so
+wasm-ld can satisfy references.
 
 ## Calling WASM-specific primitives from Racket
 

@@ -51,6 +51,7 @@ wasm_dep_reset() {
   DEP_LINK_FLAGS=()
   DEP_SYMBOLS=()
   DEP_SYMBOLS_MODE=none
+  unset -f wasm_dep_patch 2>/dev/null || true
 }
 
 # Derive the paths every other function uses, after the recipe is sourced.
@@ -120,6 +121,13 @@ wasm_dep_build() {
     echo "[$DEP_NAME] up to date"
     _wasm_dep_register_pkgconfig
     return 0
+  fi
+  # Recipes can define wasm_dep_patch (a shell function) to mutate the
+  # extracted source before configure -- needed when an upstream meson.build
+  # / configure script has a check we have to work around on wasm32.
+  if declare -f wasm_dep_patch >/dev/null; then
+    echo "[$DEP_NAME] patch"
+    ( cd "$DEP_SRC" && wasm_dep_patch )
   fi
   rm -rf "$DEP_BUILD" "$DEP_PREFIX"
   case "${DEP_BUILD_SYSTEM:-autotools}" in
