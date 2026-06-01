@@ -49,6 +49,30 @@ EM_JS(int, wasm_canvas_blit, (int w, int h, const void *rgba),
   return 0;
 });
 
+/* Variant for racket/draw's bitmap% pixel format: `get-argb-pixels`
+ * fills bytes in memory order A R G B (one alpha byte then RGB). Canvas
+ * putImageData expects R G B A, so we rotate by one byte per pixel.
+ * The pixels are non-premultiplied (Racket's documented surface). */
+EM_JS(int, wasm_canvas_blit_argb, (int w, int h, const void *argb),
+{
+  if (typeof self === "undefined" || typeof self.postMessage !== "function") {
+    return -1;
+  }
+  if (w <= 0 || h <= 0) return -1;
+  var bytes = (w * h) << 2;
+  var buf = new ArrayBuffer(bytes);
+  var dst = new Uint8Array(buf);
+  var src = HEAPU8;
+  for (var i = 0, p = argb; i < bytes; i += 4, p += 4) {
+    dst[i]     = src[p + 1];   // R
+    dst[i + 1] = src[p + 2];   // G
+    dst[i + 2] = src[p + 3];   // B
+    dst[i + 3] = src[p];       // A
+  }
+  self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
+  return 0;
+});
+
 /* Variant for callers whose pixel buffer is in Cairo's CAIRO_FORMAT_ARGB32
  * memory layout, which on little-endian is byte order B G R A. Canvas
  * putImageData expects R G B A, so we swap the red/blue channels during
@@ -97,6 +121,10 @@ int wasm_canvas_blit(int w, int h, const void *rgba) {
 }
 int wasm_canvas_blit_bgra(int w, int h, const void *bgra) {
   (void)w; (void)h; (void)bgra;
+  return -1;
+}
+int wasm_canvas_blit_argb(int w, int h, const void *argb) {
+  (void)w; (void)h; (void)argb;
   return -1;
 }
 

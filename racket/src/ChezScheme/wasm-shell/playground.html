@@ -188,95 +188,65 @@
         <textarea id="editor" spellcheck="false" autocapitalize="off"
           autocorrect="off" autocomplete="off">#lang racket
 
-;; Draw with Cairo, blit the result to the page canvas.
+;; Draw with racket/draw, blit the bitmap to the page canvas.
 ;;
-;; Cairo is statically linked into the WASM runtime; ffi-lib +
-;; get-ffi-obj resolve names through Chez's foreign-symbol table
-;; (no real dlopen/dlsym -- see racket/src/ChezScheme/c/foreign.c's
-;; Sforeign_lookup and racket/src/cs/c/boot.c's em_dll_* hooks).
-;; Any ffi-lib name is accepted; what matters is the symbol name.
+;; The full Cairo / FreeType / FontConfig / libpng / libjpeg / GLib /
+;; HarfBuzz / Pango stack is statically linked into the WASM runtime,
+;; so (require racket/draw) just works. `make-bitmap` returns a real
+;; bitmap%; `(send dc draw-...)` runs through Cairo's software
+;; backend. We pull the resulting ARGB pixels out with
+;; `get-argb-pixels` and hand them to `wasm_canvas_blit_argb`, which
+;; rotates A R G B -> R G B A in JS and putImageData's onto the
+;; <canvas>.
 ;;
-;; The pixel buffer is raw malloc rather than a Racket bytes: Chez's
-;; GC could otherwise relocate the bytevector between the surface
-;; create call (which stashes the pointer) and the paint/fill calls
-;; (which write through it), causing Cairo to scribble on stale
-;; memory. wasm_canvas_blit_bgra reads from the same pointer,
-;; un-premultiplies, and swizzles B/R so ARGB32 (BGRA premultiplied)
-;; renders as Canvas RGBA.
+;; Text (Pango) is intentionally not exercised here: there's still an
+;; outstanding GObject-class-init signature-mismatch trap on this
+;; build under wasm32, so `(send dc draw-text ...)` would crash.
+;; Shapes via racket/draw work pixel-perfectly.
 
-(require ffi/unsafe)
+(require racket/draw
+         ffi/unsafe
+         ffi/unsafe/vm)
 
-(define cairo  (ffi-lib "libcairo"))
-(define wasm   (ffi-lib "libwasm-extras"))   ; sentinel; any name works
-
-(define-syntax-rule (defcairo name (args ...) ret)
-  (define name (get-ffi-obj 'name cairo (_fun args ... -> ret))))
-
-(defcairo cairo_format_stride_for_width (_int _int) _int)
-(defcairo cairo_image_surface_create_for_data (_pointer _int _int _int _int) _pointer)
-(defcairo cairo_create          (_pointer) _pointer)
-(defcairo cairo_destroy         (_pointer) _void)
-(defcairo cairo_surface_destroy (_pointer) _void)
-(defcairo cairo_surface_flush   (_pointer) _void)
-(defcairo cairo_set_source_rgb  (_pointer _double _double _double) _void)
-(defcairo cairo_set_source_rgba (_pointer _double _double _double _double) _void)
-(defcairo cairo_rectangle       (_pointer _double _double _double _double) _void)
-(defcairo cairo_arc             (_pointer _double _double _double _double _double) _void)
-(defcairo cairo_fill            (_pointer) _void)
-(defcairo cairo_stroke          (_pointer) _void)
-(defcairo cairo_paint           (_pointer) _void)
-(defcairo cairo_set_line_width  (_pointer _double) _void)
-(defcairo cairo_select_font_face (_pointer _string _int _int) _void)
-(defcairo cairo_set_font_size   (_pointer _double) _void)
-(defcairo cairo_move_to         (_pointer _double _double) _void)
-(defcairo cairo_show_text       (_pointer _string) _void)
-
-(define wasm_canvas_blit_bgra
-  (get-ffi-obj 'wasm_canvas_blit_bgra wasm
-               (_fun _int _int _pointer -> _int)))
-
-(define wasm-canvas-blit-bgra
-  (cfn "wasm_canvas_blit_bgra" '((int int uptr) int)))
+(define wasm-canvas-blit-argb
+  (vm-eval '(foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int)))
 
 (define W 320)
 (define H 240)
-(define CAIRO-FORMAT-ARGB32 0)
-(define stride (cairo_format_stride_for_width CAIRO-FORMAT-ARGB32 W))
-(define total-bytes (* stride H))
-(define pixels (malloc total-bytes 'raw))   ; outside Racket's GC heap
-(memset pixels 0 total-bytes)
-(define surf (cairo_image_surface_create_for_data pixels CAIRO-FORMAT-ARGB32 W H stride))
-(define ctx  (cairo_create surf))
+
+(define bm (make-bitmap W H))
+(define dc (send bm make-dc))
+(send dc set-smoothing 'aligned)
 
 ;; Background.
-(cairo_set_source_rgb ctx 0.08 0.10 0.16) (cairo_paint ctx)
+(send dc set-brush (make-object color% 20 26 41) 'solid)
+(send dc set-pen "black" 0 'transparent)
+(send dc draw-rectangle 0 0 W H)
 
-;; Three filled circles.
-(cairo_set_source_rgba ctx 0.95 0.36 0.22 0.92)
-(cairo_arc ctx 110.0 110.0 60.0 0.0 6.2832) (cairo_fill ctx)
-(cairo_set_source_rgba ctx 0.20 0.74 0.93 0.85)
-(cairo_arc ctx 200.0 140.0 70.0 0.0 6.2832) (cairo_fill ctx)
-(cairo_set_source_rgba ctx 0.99 0.78 0.18 0.85)
-(cairo_arc ctx 160.0 60.0  40.0 0.0 6.2832) (cairo_fill ctx)
+;; Three filled circles (alpha-blended).
+(send dc set-brush (make-object color% 242 92 56 0.92) 'solid)
+(send dc draw-ellipse 50 50 120 120)
+(send dc set-brush (make-object color% 51 189 237 0.85) 'solid)
+(send dc draw-ellipse 130 70 140 140)
+(send dc set-brush (make-object color% 252 199 46 0.85) 'solid)
+(send dc draw-ellipse 120 20 80 80)
 
 ;; Outlined rect.
-(cairo_set_source_rgb ctx 1.0 1.0 1.0)
-(cairo_set_line_width ctx 3.0)
-(cairo_rectangle ctx 20.0 180.0 280.0 40.0) (cairo_stroke ctx)
+(send dc set-brush "white" 'transparent)
+(send dc set-pen "white" 3 'solid)
+(send dc draw-rectangle 20 180 280 40)
 
-;; Text.
-(cairo_select_font_face ctx "sans-serif" 0 0)
-(cairo_set_font_size ctx 18.0)
-(cairo_move_to ctx 36.0 207.0)
-(cairo_set_source_rgb ctx 1.0 1.0 1.0)
-(cairo_show_text ctx "Cairo on WebAssembly")
+;; A simple cross for the text-less variant.
+(send dc set-pen "white" 2 'solid)
+(send dc draw-line 28 200 312 200)
+(send dc draw-line 170 188 170 212)
 
-(cairo_surface_flush surf)
-(define rc (wasm_canvas_blit_bgra W H pixels))
-(cairo_destroy ctx)
-(cairo_surface_destroy surf)
-(free pixels)
-(displayln (format "blit returned ~a (stride=~a, total bytes=~a)" rc stride total-bytes))
+;; Pull pixels and blit.
+(define pixels (make-bytes (* W H 4)))
+(send bm get-argb-pixels 0 0 W H pixels)
+(define rc (wasm-canvas-blit-argb W H pixels))
+(displayln (format "blit returned ~a (~ax~a, ~a bytes)" rc W H (bytes-length pixels)))
+</textarea>
 </textarea>
         <footer class="panel-footer">
           <span class="hint"><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>

@@ -89,7 +89,9 @@
 
 {
   extern int wasm_canvas_blit_bgra(int, int, const void *);
+  extern int wasm_canvas_blit_argb(int, int, const void *);
   Sforeign_symbol("wasm_canvas_blit_bgra", (void *)wasm_canvas_blit_bgra);
+  Sforeign_symbol("wasm_canvas_blit_argb", (void *)wasm_canvas_blit_argb);
 }
 
 
