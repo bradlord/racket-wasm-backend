@@ -255,6 +255,35 @@
            "(document.querySelector('.canvas-wrap') || document.body).appendChild(n);"
            "'div appended'"))
 </textarea>
+        <footer class="panel-footer">
+          <span class="hint"><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>
+        </footer>
+      </section>
+
+      <section class="panel" aria-label="Run output">
+        <header class="panel-header">
+          <div>
+            <h2>Output</h2>
+            <div class="sub">stdout + stderr merged · exit code on completion</div>
+          </div>
+          <span class="chip" id="status" data-state="idle">Idle</span>
+        </header>
+        <pre id="output" tabindex="0" aria-label="Program output"></pre>
+        <div>
+          <div class="canvas-wrap" id="canvas-wrap" aria-label="Canvas output">
+            <canvas id="canvas" width="1" height="1"></canvas>
+          </div>
+          <textarea id="stdin" spellcheck="false" autocapitalize="off"
+            autocorrect="off" autocomplete="off"
+            placeholder="stdin: type a line and press Enter while a program is running"
+            disabled></textarea>
+          <footer class="panel-footer">
+            <span class="hint">Output truncated to a rolling window. <kbd>Enter</kbd> sends a line of stdin.</span>
+          </footer>
+        </div>
+      </section>
+    </div>
+  </main>
   <script defer src="./playground.js"></script>
 </body>
 </html>
