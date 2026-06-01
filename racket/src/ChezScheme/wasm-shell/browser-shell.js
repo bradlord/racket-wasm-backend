@@ -194,7 +194,9 @@
     if (seq === domLastSeq) return;
     domLastSeq = seq;
     var len = Atomics.load(HEAP32, domSlots.cmdLenBase);
-    var bytes = new Uint8Array(HEAP32.buffer, domSlots.cmdBufAddr, len);
+    // TextDecoder won't accept views over SharedArrayBuffer; slice()
+    // returns a Uint8Array backed by a fresh (non-shared) buffer.
+    var bytes = new Uint8Array(HEAP32.buffer, domSlots.cmdBufAddr, len).slice();
     var src = outDecoder.decode(bytes);
     var result;
     try {
