@@ -236,15 +236,21 @@ sed -i.bak 's/^MACH = tpb32l/MACH = tarm64osx/' Makefile
 mkdir -p ChezScheme/xc-tpb32l/s
 cp ../ChezScheme/xc-tpb32l/s/xpatch ChezScheme/xc-tpb32l/s/xpatch
 
-make
+bin/zuo . racket-pbchunk.boot
 ```
 
-The `make` succeeds through all CS layers — chezpart, rumble, thread,
-io, regexp, schemify, linklet, expander, main — and writes
-`racket.boot` (~4.3 MB) to the workarea root. The final
-`bootstrap-racket` step fails cosmetically (`relative-path?: not a
-path string: ""`) but by then `racket.boot` is already written, so the
-error is non-blocking.
+The `racket-pbchunk.boot` zuo target builds all the CS layers --
+chezpart, rumble, thread, io, regexp, schemify, linklet, expander,
+main -- writes `racket.boot` (~4.3 MB), and runs the
+`to-pbchunk.ss` script to produce `petite-pbchunk.boot`,
+`scheme-pbchunk.boot`, `racket-pbchunk.boot`, and the 30 pbchunk C
+sources (`{petite,scheme,racket}{0..9}.c`) in the workarea root.
+
+(`make` would do the same and then try to build the host `racketcs`
+executable from those boot files; on a cross-build that fails in
+`embed-boot.rkt` with `relative-path?: not a path string: ""`
+because the host-runtime variables aren't set. The pbchunk target
+stops cleanly before that step.)
 
 ### 5. Build Chez Emscripten for tpb32l with libffi and the rktio link
 
