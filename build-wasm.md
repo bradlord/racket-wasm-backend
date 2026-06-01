@@ -764,6 +764,83 @@ Available primitives today (both reachable from Racket via the
   `self.postMessage` is unavailable. This is the Tier 1 pixel-output
   path for everything from manual byte-pushing to a future
   `racket/draw` Cairo backend.
+- `int wasm_dom_eval(const char *js_src, int src_len, char *out,
+  int out_cap)` -- synchronous DOM RPC. See the next subsection.
+
+### DOM interaction (synchronous RPC via SAB)
+
+Workers have no DOM access (no `document`, no `window`), but the
+WASM runtime hosts Racket on a worker so it can `Atomics.wait`-block
+inside its REPL/stdin without freezing the page's event loop.
+`wasm_dom_eval` bridges the gap by using the shared linear memory
+as a single-slot RPC channel:
+
+```
+worker -> page    [cmd_seq, cmd_len, cmd_buf[]]
+page   -> worker  [reply_seq, reply_len, reply_buf[]]
+```
+
+Worker side (the `wasm_dom_eval` EM_JS body in
+`racket/src/cs/c/wasm_dom.c`):
+
+1. Copy the JS source string into `cmd_buf`, set `cmd_len`.
+2. Atomically increment `cmd_seq` (release-publishes the data).
+3. Loop on `Atomics.wait(reply_seq_addr, current)` until
+   `reply_seq == cmd_seq`.
+4. Copy `reply_buf[0..reply_len]` into the caller's output buffer.
+
+Page side (an rAF loop in `browser-shell.js` and `playground.js`):
+
+1. Each frame, read `cmd_seq`; if it advanced past the last value
+   the page handled, decode `cmd_buf[0..cmd_len]` as UTF-8.
+2. Run `eval(src)`, stringify the result.
+3. Encode the result into `reply_buf`, set `reply_len`, store
+   `reply_seq = cmd_seq`, `Atomics.notify` the worker.
+
+This design preserves the worker architecture (no Asyncify cost on
+everything else), gives Racket a synchronous-feeling DOM call from
+its perspective, and caps per-call latency at one animation frame
+(~16 ms) because the page only services commands on rAF. Reading
+DOM state in a tight loop will be visibly slow at that rate; for
+high-frequency UI the right answer is either a typed batch protocol
+on top of the same transport or selective use of Asyncify on
+specific hot paths.
+
+#### v0 limits / future direction
+
+`wasm_dom_eval` literally evaluates an arbitrary JS string. That is
+fast to prototype with, but unsuitable for exposing to untrusted
+Racket programs as-is. The clean migration path:
+
+- Define a typed opcode list (`MAKE_ELEMENT`, `SET_TEXT`,
+  `SET_ATTR`, `ON_EVENT`, `GET_ATTR`, ...).
+- Encode commands as opcode + serialized args (CBOR or a compact
+  custom format), replies as result-shape + bytes.
+- The page-side dispatcher becomes a `switch (opcode)` over the
+  typed operations rather than a JS `eval()`.
+- Racket-side wrapper (`web-dom` collection?) exposes idiomatic
+  Racket procedures over the typed protocol.
+
+The transport (single-slot SAB, rAF service, `Atomics.wait`-blocked
+return) does not change between v0 and the typed version -- only
+the payload format and the page-side handler do. Event delivery
+(page -> Racket, e.g. button clicks) reuses the existing stdin
+ring with a typed framing, or adds a third dedicated ring.
+
+A Racket-side wrapper in the playground demo:
+
+```racket
+(define wasm-dom-eval-raw
+  (vm-eval '(foreign-procedure "wasm_dom_eval" (u8* int u8* int) int)))
+(define (dom-eval js)
+  (define src (string->bytes/utf-8 js))
+  (define out (make-bytes 65536))
+  (define n (wasm-dom-eval-raw src (bytes-length src) out (bytes-length out)))
+  (bytes->string/utf-8 out #\? 0 n))
+
+(dom-eval "document.title = 'hello'")
+(define ua (dom-eval "navigator.userAgent"))
+```
 
 **The FFI access path is not `get-ffi-obj`.** Under WASM there is no
 dynamic linker -- `dlopen` doesn't exist, all symbols are statically

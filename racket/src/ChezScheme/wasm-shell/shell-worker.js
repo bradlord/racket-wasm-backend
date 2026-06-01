@@ -90,6 +90,18 @@ function buildModule(init) {
       var inCap   = M["_shell_in_cap"]();
       var outAddr = M["_shell_out_addr"]();
       var outCap  = M["_shell_out_cap"]();
+      /* DOM RPC slots (see racket/src/cs/c/wasm_dom.c). The page-
+         side rAF poller in browser-shell.js / playground.js consumes
+         commands from cmd_seq / cmd_buf and writes replies to
+         reply_seq / reply_buf. */
+      var domCmdSeq   = M["_wasm_dom_cmd_seq_addr"]   ? M["_wasm_dom_cmd_seq_addr"]()   : 0;
+      var domCmdLen   = M["_wasm_dom_cmd_len_addr"]   ? M["_wasm_dom_cmd_len_addr"]()   : 0;
+      var domCmdBuf   = M["_wasm_dom_cmd_buf_addr"]   ? M["_wasm_dom_cmd_buf_addr"]()   : 0;
+      var domCmdCap   = M["_wasm_dom_cmd_cap"]        ? M["_wasm_dom_cmd_cap"]()        : 0;
+      var domReplySeq = M["_wasm_dom_reply_seq_addr"] ? M["_wasm_dom_reply_seq_addr"]() : 0;
+      var domReplyLen = M["_wasm_dom_reply_len_addr"] ? M["_wasm_dom_reply_len_addr"]() : 0;
+      var domReplyBuf = M["_wasm_dom_reply_buf_addr"] ? M["_wasm_dom_reply_buf_addr"]() : 0;
+      var domReplyCap = M["_wasm_dom_reply_cap"]      ? M["_wasm_dom_reply_cap"]()      : 0;
       post({
         type:    "ready",
         heap:    M["HEAPU8"].buffer,            // SharedArrayBuffer
@@ -97,6 +109,16 @@ function buildModule(init) {
         inCap:   inCap,
         outBase: outAddr >> 2,
         outCap:  outCap,
+        dom: {
+          cmdSeqBase:   domCmdSeq   >> 2,
+          cmdLenBase:   domCmdLen   >> 2,
+          cmdBufAddr:   domCmdBuf,
+          cmdCap:       domCmdCap,
+          replySeqBase: domReplySeq >> 2,
+          replyLenBase: domReplyLen >> 2,
+          replyBufAddr: domReplyBuf,
+          replyCap:     domReplyCap,
+        },
       });
     },
 

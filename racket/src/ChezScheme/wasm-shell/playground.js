@@ -90,6 +90,11 @@
   var pollHandle = 0;
   var encoder = new TextEncoder();
   var decoder = new TextDecoder("utf-8");
+  /* DOM RPC slots forwarded from the runtime worker; see shell-worker.js
+     and racket/src/cs/c/wasm_dom.c. The poller below services commands
+     each animation frame. */
+  var domSlots = null;
+  var domLastSeq = 0;
 
   function sendBytes(bytes) {
     if (!ioReady) return;
@@ -117,8 +122,36 @@
     var text = decoder.decode(chunk, { stream: true });
     if (text) appendOutput(text);
   }
+  function serviceDom() {
+    if (!domSlots || !HEAP32) return;
+    var seq = Atomics.load(HEAP32, domSlots.cmdSeqBase);
+    if (seq === domLastSeq) return;
+    domLastSeq = seq;
+    var len = Atomics.load(HEAP32, domSlots.cmdLenBase);
+    var bytes = new Uint8Array(HEAP32.buffer, domSlots.cmdBufAddr, len);
+    var src = decoder.decode(bytes);
+    var result;
+    try {
+      // v0 prototype: eval the JS string. Anything the page can do
+      // is reachable; a typed protocol will replace this.
+      result = eval(src);
+      if (result === undefined) result = "";
+      else if (typeof result !== "string") result = String(result);
+    } catch (e) {
+      result = "ERROR: " + (e && (e.message || e));
+    }
+    var enc = encoder.encode(result);
+    var n = Math.min(enc.length, domSlots.replyCap);
+    var dst = new Uint8Array(HEAP32.buffer, domSlots.replyBufAddr, n);
+    dst.set(enc.subarray(0, n));
+    Atomics.store(HEAP32, domSlots.replyLenBase, n);
+    Atomics.store(HEAP32, domSlots.replySeqBase, seq);
+    Atomics.notify(HEAP32, domSlots.replySeqBase);
+  }
+
   function pollLoop() {
     drainOutput();
+    serviceDom();
     if (worker) pollHandle = requestAnimationFrame(pollLoop);
   }
 
@@ -204,6 +237,8 @@
         outBase = msg.outBase;
         outCap  = msg.outCap;
         outHead = Atomics.load(HEAP32, outBase + HEAD);
+        domSlots = msg.dom || null;
+        domLastSeq = 0;
         ioReady = true;
         stdinBox.disabled = false;
         setStatus("Running…", "run");

@@ -94,4 +94,10 @@
   Sforeign_symbol("wasm_canvas_blit_argb", (void *)wasm_canvas_blit_argb);
 }
 
+{
+  /* Synchronous DOM RPC -- see racket/src/cs/c/wasm_dom.c. */
+  extern int wasm_dom_eval(const char *, int, char *, int);
+  Sforeign_symbol("wasm_dom_eval", (void *)wasm_dom_eval);
+}
+
 

@@ -128,6 +128,10 @@ echo "[cc]  wasm_canvas.o"
 emcc "${CFLAGS[@]}" "${INCS[@]}" "${CS_INCS[@]}" \
      -o "$boot/wasm_canvas.o" -c "$src/cs/c/wasm_canvas.c"
 
+echo "[cc]  wasm_dom.o"
+emcc "${CFLAGS[@]}" "${INCS[@]}" "${CS_INCS[@]}" \
+     -o "$boot/wasm_dom.o" -c "$src/cs/c/wasm_dom.c"
+
 echo "[cc]  wasm_stubs.o"
 emcc "${CFLAGS[@]}" "${INCS[@]}" "${CS_INCS[@]}" \
      -o "$boot/wasm_stubs.o" -c "$src/cs/c/wasm_stubs.c"
@@ -187,7 +191,7 @@ link_node() {
   echo "[ld]  scheme.{js,wasm,data}  (node)"
   emcc -o "$out/scheme.html" \
        "$boot/main_em.o" "$boot/boot.o" "$boot/init_rktio.o" \
-       "$boot/wasm_http.o" "$boot/wasm_canvas.o" "$boot/wasm_stubs.o" \
+       "$boot/wasm_http.o" "$boot/wasm_canvas.o" "$boot/wasm_dom.o" "$boot/wasm_stubs.o" \
        "${chunks[@]}" \
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
        --post-js wasm-shell/node-tty.js \
@@ -206,14 +210,14 @@ link_browser() {
   emcc -o "$out/scheme-web.html" \
        "$boot/main_em.o" "$boot/boot.o" "$boot/init_rktio.o" \
        "$boot/wasm_shell_io.o" \
-       "$boot/wasm_http.o" "$boot/wasm_canvas.o" "$boot/wasm_stubs.o" \
+       "$boot/wasm_http.o" "$boot/wasm_canvas.o" "$boot/wasm_dom.o" "$boot/wasm_stubs.o" \
        "${chunks[@]}" \
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
        --pre-js  wasm-shell/idbfs-init.js \
        --post-js wasm-shell/shell-tty.js \
        "${LDFLAGS_COMMON[@]}" \
        "${uflags_read[@]+"${uflags_read[@]}"}" \
-       -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap \
+       -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap,_wasm_dom_cmd_seq_addr,_wasm_dom_cmd_len_addr,_wasm_dom_cmd_buf_addr,_wasm_dom_cmd_cap,_wasm_dom_reply_seq_addr,_wasm_dom_reply_len_addr,_wasm_dom_reply_buf_addr,_wasm_dom_reply_cap \
        -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32,FS,addRunDependency,removeRunDependency \
        -sFORCE_FILESYSTEM=1 \
        -lidbfs.js

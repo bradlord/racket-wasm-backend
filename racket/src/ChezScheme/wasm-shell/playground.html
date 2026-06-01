@@ -188,21 +188,16 @@
         <textarea id="editor" spellcheck="false" autocapitalize="off"
           autocorrect="off" autocomplete="off">#lang racket
 
-;; Draw with racket/draw, blit the bitmap to the page canvas.
+;; racket/draw to the canvas + DOM RPC to the page.
 ;;
-;; The full Cairo / FreeType / FontConfig / libpng / libjpeg / GLib /
-;; HarfBuzz / Pango stack is statically linked into the WASM runtime,
-;; so (require racket/draw) just works. `make-bitmap` returns a real
-;; bitmap%; `(send dc draw-...)` runs through Cairo's software
-;; backend. We pull the resulting ARGB pixels out with
-;; `get-argb-pixels` and hand them to `wasm_canvas_blit_argb`, which
-;; rotates A R G B -> R G B A in JS and putImageData's onto the
-;; <canvas>.
+;; `wasm_dom_eval` is a synchronous JS-on-page primitive: write a
+;; UTF-8 JS source string to a shared-memory command slot, then
+;; Atomics.wait until the page (which polls each animation frame)
+;; runs eval() and writes the reply back. Worker-only -- under node
+;; this hangs since there's no page to service the command.
 ;;
-;; Text (Pango) is intentionally not exercised here: there's still an
-;; outstanding GObject-class-init signature-mismatch trap on this
-;; build under wasm32, so `(send dc draw-text ...)` would crash.
-;; Shapes via racket/draw work pixel-perfectly.
+;; This is v0: literally evals arbitrary JS. A typed protocol on top
+;; of the same transport is the future direction; see build-wasm.md.
 
 (require racket/draw
          ffi/unsafe
@@ -210,73 +205,56 @@
 
 (define wasm-canvas-blit-argb
   (vm-eval '(foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int)))
+(define wasm-dom-eval-raw
+  (vm-eval '(foreign-procedure "wasm_dom_eval" (u8* int u8* int) int)))
 
-(define W 320)
-(define H 240)
+(define (dom-eval js)
+  (define src (string->bytes/utf-8 js))
+  (define out (make-bytes 65536))
+  (define n (wasm-dom-eval-raw src (bytes-length src) out (bytes-length out)))
+  (bytes->string/utf-8 out #\? 0 n))
 
+;; --- Draw something with racket/draw ---
+
+(define W 320) (define H 240)
 (define bm (make-bitmap W H))
 (define dc (send bm make-dc))
 (send dc set-smoothing 'aligned)
-
-;; Background.
 (send dc set-brush (make-object color% 20 26 41) 'solid)
 (send dc set-pen "black" 0 'transparent)
 (send dc draw-rectangle 0 0 W H)
-
-;; Three filled circles (alpha-blended).
-(send dc set-brush (make-object color% 242 92 56 0.92) 'solid)
+(send dc set-brush (make-object color% 242 92 56 0.9) 'solid)
 (send dc draw-ellipse 50 50 120 120)
 (send dc set-brush (make-object color% 51 189 237 0.85) 'solid)
 (send dc draw-ellipse 130 70 140 140)
 (send dc set-brush (make-object color% 252 199 46 0.85) 'solid)
 (send dc draw-ellipse 120 20 80 80)
 
-;; Outlined rect.
-(send dc set-brush "white" 'transparent)
-(send dc set-pen "white" 3 'solid)
-(send dc draw-rectangle 20 180 280 40)
-
-;; A simple cross for the text-less variant.
-(send dc set-pen "white" 2 'solid)
-(send dc draw-line 28 200 312 200)
-(send dc draw-line 170 188 170 212)
-
-;; Pull pixels and blit.
 (define pixels (make-bytes (* W H 4)))
 (send bm get-argb-pixels 0 0 W H pixels)
-(define rc (wasm-canvas-blit-argb W H pixels))
-(displayln (format "blit returned ~a (~ax~a, ~a bytes)" rc W H (bytes-length pixels)))
-</textarea>
-</textarea>
-        <footer class="panel-footer">
-          <span class="hint"><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>
-        </footer>
-      </section>
+(wasm-canvas-blit-argb W H pixels)
 
-      <section class="panel" aria-label="Run output">
-        <header class="panel-header">
-          <div>
-            <h2>Output</h2>
-            <div class="sub">stdout + stderr merged · exit code on completion</div>
-          </div>
-          <span class="chip" id="status" data-state="idle">Idle</span>
-        </header>
-        <pre id="output" tabindex="0" aria-label="Program output"></pre>
-        <div>
-          <div class="canvas-wrap" id="canvas-wrap" aria-label="Canvas output">
-            <canvas id="canvas" width="1" height="1"></canvas>
-          </div>
-          <textarea id="stdin" spellcheck="false" autocapitalize="off"
-            autocorrect="off" autocomplete="off"
-            placeholder="stdin: type a line and press Enter while a program is running"
-            disabled></textarea>
-          <footer class="panel-footer">
-            <span class="hint">Output truncated to a rolling window. <kbd>Enter</kbd> sends a line of stdin.</span>
-          </footer>
-        </div>
-      </section>
-    </div>
-  </main>
+;; --- Touch the DOM ---
+
+(displayln "DOM RPC round-trips through page eval:")
+(printf "  document.title before: ~s~n" (dom-eval "document.title"))
+(dom-eval "document.title = 'hello from Racket'")
+(printf "  document.title after:  ~s~n" (dom-eval "document.title"))
+
+(printf "  navigator.userAgent (truncated): ~s~n"
+        (substring (dom-eval "navigator.userAgent") 0 50))
+
+(define count
+  (dom-eval "document.querySelectorAll('button').length"))
+(printf "  buttons on this page: ~a~n" count)
+
+(dom-eval (string-append
+           "var n = document.createElement('div');"
+           "n.textContent = 'racket touched me (' + new Date().toLocaleTimeString() + ')';"
+           "n.style.cssText = 'margin: 8px 14px; color: #f59e0b; font-family: monospace;';"
+           "(document.querySelector('.canvas-wrap') || document.body).appendChild(n);"
+           "'div appended'"))
+</textarea>
   <script defer src="./playground.js"></script>
 </body>
 </html>

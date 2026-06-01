@@ -93,6 +93,9 @@
   var outHead = 0;
   var encoder = new TextEncoder();
   var outDecoder = new TextDecoder("utf-8");
+  /* DOM RPC: see racket/src/cs/c/wasm_dom.c. */
+  var domSlots = null;
+  var domLastSeq = 0;
 
   function sendBytes(bytes) {
     if (!ioReady) {
@@ -185,8 +188,34 @@
     var text = outDecoder.decode(chunk, { stream: true });
     if (text) appendOutput(text);
   }
+  function serviceDom() {
+    if (!domSlots || !HEAP32) return;
+    var seq = Atomics.load(HEAP32, domSlots.cmdSeqBase);
+    if (seq === domLastSeq) return;
+    domLastSeq = seq;
+    var len = Atomics.load(HEAP32, domSlots.cmdLenBase);
+    var bytes = new Uint8Array(HEAP32.buffer, domSlots.cmdBufAddr, len);
+    var src = outDecoder.decode(bytes);
+    var result;
+    try {
+      result = eval(src);
+      if (result === undefined) result = "";
+      else if (typeof result !== "string") result = String(result);
+    } catch (e) {
+      result = "ERROR: " + (e && (e.message || e));
+    }
+    var enc = encoder.encode(result);
+    var n = Math.min(enc.length, domSlots.replyCap);
+    var dst = new Uint8Array(HEAP32.buffer, domSlots.replyBufAddr, n);
+    dst.set(enc.subarray(0, n));
+    Atomics.store(HEAP32, domSlots.replyLenBase, n);
+    Atomics.store(HEAP32, domSlots.replySeqBase, seq);
+    Atomics.notify(HEAP32, domSlots.replySeqBase);
+  }
+
   function pollLoop() {
     drainOutput();
+    serviceDom();
     requestAnimationFrame(pollLoop);
   }
 
@@ -264,6 +293,8 @@
         ringOutBase  = msg.outBase;
         ringOutCap   = msg.outCap;
         outHead      = Atomics.load(HEAP32, ringOutBase + HEAD);
+        domSlots     = msg.dom || null;
+        domLastSeq   = 0;
         ioReady      = true;
         evaluateButton.disabled = false;
         saveButton.disabled = false;
