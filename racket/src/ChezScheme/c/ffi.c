@@ -595,13 +595,15 @@ ptr S_ffi_closure(ptr types, ptr proc) {
 
 #ifdef __EMSCRIPTEN__
   /* On WebAssembly, libffi's `code` is a function table index (a small
-     integer like 5, 12, 100), not a memory address.  Such indices have
-     arbitrary low bits and cannot be stored as a raw `ptr` in a Scheme
-     vector slot.  Box it as a Scheme unsigned integer; the decoder in
-     `foreign-callable-entry-point` (prims.ss) recognizes this case
-     because `Sintegerp` of the slot is true rather than `Sfixnump`. */
-  code_obj = Sunsigned((uptr)code);
-  closure_obj = Sunsigned((uptr)closure);
+     integer like 5, 12, 100), not a memory address. Wrap the integer
+     in a Scheme box so the encoding is self-describing on the read
+     side -- `foreign-callable-entry-point` (prims.ss) and
+     `find_callable_code_object` below dispatch on `box?` / `Sboxp`
+     rather than relying on a machine-type gate to know we're under
+     Emscripten. Bare aligned-pointer-as-fixnum representation is
+     still used on every other pb host. */
+  code_obj = Sbox(Sunsigned((uptr)code));
+  closure_obj = Sbox(Sunsigned((uptr)closure));
 #else
   if (!Sfixnump(TO_PTR(closure)) || !Sfixnump(TO_PTR(code)))
     S_error("foreign-callable", "libffi code allocation not sufficiently aligned");
@@ -853,7 +855,10 @@ ptr Sforeign_callable_code_object(void *addr) {
   while (p != Snil) {
     ptr a = Scar(p);
 #ifdef __EMSCRIPTEN__
+    /* Stored value is a box wrapping the integer table index; see the
+       Sbox call in S_ffi_closure. */
     ptr stored = Scdr(Scdr(a));
+    if (Sboxp(stored)) stored = Sunbox(stored);
     if ((Sfixnump(stored) || Sbignump(stored))
         && Sunsigned_value(stored) == addr_uval) {
       result = Scar(a);
@@ -885,7 +890,13 @@ void check_prune_callables() {
       ptr a = Scar(p);
       if (Scar(a) == Sbwp_object) {
 #ifdef __EMSCRIPTEN__
-        ffi_closure_free((void *)(uptr)Sunsigned_value(Scar(Scdr(a))));
+        /* Stored value is a box wrapping the integer closure pointer;
+           see the Sbox call in S_ffi_closure. */
+        {
+          ptr stored = Scar(Scdr(a));
+          if (Sboxp(stored)) stored = Sunbox(stored);
+          ffi_closure_free((void *)(uptr)Sunsigned_value(stored));
+        }
 #else
         ffi_closure_free(TO_VOIDP(Scar(Scdr(a))));
 #endif

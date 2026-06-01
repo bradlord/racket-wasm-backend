@@ -686,25 +686,23 @@
        (unless (vector? x)
          ($oops 'foreign-callable-entry-point "~s is not a vector" x))
        (let ([v (vector-ref x 2)])
-         ;; On WebAssembly the code-pointer slot holds a raw integer
-         ;; (Sunsigned-encoded function-table index); it may be a fixnum
-         ;; when the index is small, but we must NOT shift it -- the
-         ;; index is the literal value the call_indirect site uses.
-         ;; On other pb hosts the slot holds an aligned pointer encoded
-         ;; as a fixnum, which we recover by shifting left by
-         ;; `fixnum-offset`.
-         (constant-case machine-type-name
-           [(tpb32l)
-            ;; tpb32l is our Emscripten target (S_ffi_closure stores
-            ;; the table index via Sunsigned); never apply the
-            ;; aligned-pointer shift, even when the index happens to
-            ;; fit a fixnum.
-            v]
-           [else
-            (if (fixnum? v)
-                (bitwise-and (bitwise-arithmetic-shift-left v (constant fixnum-offset))
-                             (- (bitwise-arithmetic-shift-left 1 (constant ptr-bits)) 1))
-                v)]))]
+         ;; Three possible encodings, dispatched on value shape:
+         ;;  - box wrapping an integer: the WebAssembly tag from
+         ;;    S_ffi_closure under __EMSCRIPTEN__. The wrapped value
+         ;;    is the raw function-table index call_indirect uses.
+         ;;  - fixnum: aligned pointer packed in the fixnum bits on
+         ;;    non-WASM pb hosts; recover by shifting left.
+         ;;  - bignum / other integer: address too large for fixnum
+         ;;    packing on non-WASM pb hosts; return as-is.
+         ;; Dispatching on shape rather than machine-type-name keeps
+         ;; the Scheme side correct for both Emscripten and any
+         ;; hypothetical non-Emscripten tpb32l configuration.
+         (cond
+           [(box? v) (unbox v)]
+           [(fixnum? v)
+            (bitwise-and (bitwise-arithmetic-shift-left v (constant fixnum-offset))
+                         (- (bitwise-arithmetic-shift-left 1 (constant ptr-bits)) 1))]
+           [else v]))]
       [else
        (unless ($code? x)
          ($oops 'foreign-callable-entry-point "~s is not a code object" x))
