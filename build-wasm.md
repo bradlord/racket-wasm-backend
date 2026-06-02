@@ -117,6 +117,8 @@ repository root. The work directories that get created live under
 
 ### 1. Cross-compile rktio for WebAssembly
 
+Scripted as `wasm-shell/build-rktio.sh`. The manual steps:
+
 ```sh
 cd racket/src/rktio
 mkdir -p build-em && cd build-em
@@ -132,6 +134,15 @@ mv '@HIDE_NOT_STANDALONE@librktio.a' librktio.a   # configure leaves an
 This uses the `__EMSCRIPTEN__` branch added to `rktio_platform.h`
 (commit `1a2130c981`); no further patches are needed. The archive is
 ~388 KB.
+
+The `cd build-em` before `../configure` matters: it makes `../configure`
+resolve to rktio's own autoconf script. Running `../configure` from
+`racket/src/rktio` instead invokes the top-level `racket/src/configure`,
+which recurses into `cs/c/configure` and dies with "Platform is not
+supported natively by Racket CS"; adding `--enable-mach=tpb32l` to escape
+that then lands in `cs/c/configure`, which demands a WASM libffi rktio
+never links. rktio's configure has neither a machine-type option nor a
+libffi check, so either error means the wrong configure is running.
 
 ### 2. Optional libraries (libffi, future Cairo/Pango/etc.)
 
@@ -189,6 +200,10 @@ type is) Chez built by `make cs`, *not* from a basic-pb host scheme —
 the latter trips Chez's cp0 optimizer with `unexpected context ...
 call current-thread/in-racket` on `thread.sls`.
 
+Scripted as `wasm-shell/build-tpb32l-boot.sh` (auto-detects the native
+host machine type and skips the `pb-host` rebuild if present). The
+manual steps:
+
 ```sh
 cd racket/src/ChezScheme
 # A native basic-pb host workarea, needed only to invoke bootquick:
@@ -219,6 +234,10 @@ cleanly when `--enable-pb --enable-mach=tpb32l` are passed together —
 it sets `MACH = tpb32l` and tries to use a tpb32l host scheme. The
 workaround is to configure normally and then edit `MACH` in the
 generated Makefile to be the native host:
+
+Scripted as `wasm-shell/build-racket-boot.sh` (depends on §3's xpatch;
+defaults `XCODE_FFI` to the macOS SDK's `ffi.h` via `xcrun`, override the
+env var elsewhere). The manual steps:
 
 ```sh
 cd racket/src

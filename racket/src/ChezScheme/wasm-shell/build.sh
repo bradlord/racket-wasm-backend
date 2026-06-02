@@ -51,9 +51,23 @@ out=em-tpb32l/bin/tpb32l
 rktio_a="$src/rktio/build-em/librktio.a"
 cs_boot="$src/build-cs-tpb32l"
 
-for f in "$rktio_a" "$cs_boot/racket-pbchunk.boot" "$boot/libkernel.a"; do
-  [ -e "$f" ] || { echo "missing prerequisite: $f" >&2; exit 1; }
-done
+# Each prereq maps to the stage (and now, helper script) that builds
+# it. See build-wasm.md for the full six-stage sequence.
+missing=0
+need() {
+  local f="$1" how="$2"
+  [ -e "$f" ] && return 0
+  missing=1
+  echo "missing prerequisite: $f" >&2
+  echo "  -> $how" >&2
+}
+need "$rktio_a" \
+     "wasm-shell/build-rktio.sh        (build-wasm.md §1)"
+need "$cs_boot/racket-pbchunk.boot" \
+     "wasm-shell/build-tpb32l-boot.sh then wasm-shell/build-racket-boot.sh  (§3, §4)"
+need "$boot/libkernel.a" \
+     "configure Chez Emscripten + build the kernel (build-wasm.md §5)"
+[ "$missing" = 0 ] || exit 1
 
 mkdir -p "$out"
 
