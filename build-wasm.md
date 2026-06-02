@@ -255,6 +255,9 @@ sed -i.bak 's/^MACH = tpb32l/MACH = tarm64osx/' Makefile
 mkdir -p ChezScheme/xc-tpb32l/s
 cp ../ChezScheme/xc-tpb32l/s/xpatch ChezScheme/xc-tpb32l/s/xpatch
 
+# bin/zuo is a Makefile target (compiles zuo/zuo.c). A fresh workarea
+# has none, so build it before driving the boot build:
+make bin/zuo
 bin/zuo . racket-pbchunk.boot
 ```
 

@@ -68,6 +68,13 @@ echo "[cp]  xpatch -> ChezScheme/xc-tpb32l/s/"
 mkdir -p ChezScheme/xc-tpb32l/s
 cp "$xpatch" ChezScheme/xc-tpb32l/s/xpatch
 
+# bin/zuo is a Makefile target (compiles zuo/zuo.c); a fresh workarea
+# has no bin/zuo yet, so build it before driving the boot build.
+if [ ! -x bin/zuo ]; then
+  echo "[mk]  bin/zuo"
+  make bin/zuo
+fi
+
 echo "[mk]  racket-pbchunk.boot"
 # The pbchunk target stops cleanly before the host racketcs link that
 # `make` would attempt (and fail on a cross-build).
