@@ -177,6 +177,11 @@ fi
 chunks=( "$boot"/{petite,scheme,racket}{0,1,2,3,4,5,6,7,8,9}.o )
 
 cross_dir="../../src/build-cs-tpb32l/cross-root/tpb32l"
+if [ ! -d "$cross_dir/collects" ]; then
+  echo "missing cross-root collects: $chez/$cross_dir/collects" >&2
+  echo "  -> run wasm-shell/build-racket-collections.sh" >&2
+  exit 1
+fi
 LDFLAGS_COMMON=(
   -O2 -pthread -s USE_ZLIB=1
   "${DEPS_LIBDIRS[@]+"${DEPS_LIBDIRS[@]}"}"
