@@ -33,7 +33,7 @@ from commit messages, which is slower and lossier.
 
 Concretely, update `build-wasm.md` when:
 
-- a new dep recipe lands under `racket/src/ChezScheme/wasm-shell/deps/`,
+- a new dep recipe lands under `wasm-shell/deps/`,
 - a new C primitive in `racket/src/cs/c/wasm_*.c` becomes
   registered for FFI access,
 - the build script gains a new stage / target / workaround,
@@ -54,7 +54,7 @@ otherwise.
   commands assume relative paths from here.
 - Branch: `wasm-backend`. Commits stay on this branch; nothing has
   been upstreamed yet.
-- Build entry point: `racket/src/ChezScheme/wasm-shell/build.sh`.
+- Build entry point: `wasm-shell/build.sh`.
   See `build-wasm.md` §5 for the prerequisites (rktio, libffi,
   tpb32l boot, Chez Emscripten workarea) and the recipe-driven dep
   builds.

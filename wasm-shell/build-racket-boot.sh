@@ -25,8 +25,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-chez="$(cd "$here/.." && pwd)"          # racket/src/ChezScheme
-src="$(cd "$chez/.." && pwd)"           # racket/src
+chez="$(cd "$here/../racket/src/ChezScheme" && pwd)"  # repo/racket/src/ChezScheme
+src="$(cd "$here/../racket/src" && pwd)"              # repo/racket/src
 build="$src/build-cs-tpb32l"
 
 xpatch="$chez/xc-tpb32l/s/xpatch"

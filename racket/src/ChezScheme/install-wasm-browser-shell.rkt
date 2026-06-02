@@ -6,7 +6,9 @@
 
 (define script-path (path->complete-path (find-system-path 'run-file)))
 (define chez-dir (simplify-path (path-only script-path)))
-(define shell-dir (build-path chez-dir "wasm-shell"))
+;; wasm-shell now lives at the repo root (chez-dir is repo/racket/src/ChezScheme).
+(define repo-dir (simplify-path (build-path chez-dir 'up 'up 'up)))
+(define shell-dir (build-path repo-dir "wasm-shell"))
 
 (define target-dir
   (command-line

@@ -26,8 +26,8 @@ set -euo pipefail
 target="${1:-all}"
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-chez="$(cd "$here/.." && pwd)"          # racket/src/ChezScheme
-src="$(cd "$chez/.." && pwd)"           # racket/src
+chez="$(cd "$here/../racket/src/ChezScheme" && pwd)"  # repo/racket/src/ChezScheme
+src="$(cd "$here/../racket/src" && pwd)"              # repo/racket/src
 
 cd "$chez"
 
@@ -208,7 +208,7 @@ link_node() {
        "$boot/wasm_http.o" "$boot/wasm_canvas.o" "$boot/wasm_dom.o" "$boot/wasm_stubs.o" \
        "${chunks[@]}" \
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
-       --post-js wasm-shell/node-tty.js \
+       --post-js "$here/node-tty.js" \
        "${LDFLAGS_COMMON[@]}" \
        "${uflags_read[@]+"${uflags_read[@]}"}" \
        -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset \
@@ -227,8 +227,8 @@ link_browser() {
        "$boot/wasm_http.o" "$boot/wasm_canvas.o" "$boot/wasm_dom.o" "$boot/wasm_stubs.o" \
        "${chunks[@]}" \
        "$boot/libkernel.a" em-tpb32l/lz4/lib/liblz4.a "$rktio_a" \
-       --pre-js  wasm-shell/idbfs-init.js \
-       --post-js wasm-shell/shell-tty.js \
+       --pre-js  "$here/idbfs-init.js" \
+       --post-js "$here/shell-tty.js" \
        "${LDFLAGS_COMMON[@]}" \
        "${uflags_read[@]+"${uflags_read[@]}"}" \
        -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap,_wasm_dom_cmd_seq_addr,_wasm_dom_cmd_len_addr,_wasm_dom_cmd_buf_addr,_wasm_dom_cmd_cap,_wasm_dom_reply_seq_addr,_wasm_dom_reply_len_addr,_wasm_dom_reply_buf_addr,_wasm_dom_reply_cap \

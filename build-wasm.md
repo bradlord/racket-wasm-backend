@@ -148,7 +148,7 @@ libffi check, so either error means the wrong configure is running.
 
 Optional cross-compiled libraries are built by `build.sh` itself
 through a recipe system rooted at
-`racket/src/ChezScheme/wasm-shell/deps/`. Each `deps/<name>.sh` is a
+`wasm-shell/deps/`. Each `deps/<name>.sh` is a
 shell file that sets a handful of `DEP_*` variables (source URL +
 sha256, configure args, archive name, link flags, optional list of C
 symbols to register with `Sforeign_symbol`); `deps.sh` provides the
@@ -288,9 +288,9 @@ Once everything above (rktio, libffi, host pb, `racket.boot`) exists, the
 whole compile-and-link of the WASM runtime is automated by
 
 ```sh
-racket/src/ChezScheme/wasm-shell/build.sh           # node + browser
-racket/src/ChezScheme/wasm-shell/build.sh node      # node only
-racket/src/ChezScheme/wasm-shell/build.sh browser   # browser only
+wasm-shell/build.sh           # node + browser
+wasm-shell/build.sh node      # node only
+wasm-shell/build.sh browser   # browser only
 ```
 
 The script (re)compiles `main_em.o`, `boot.o`, `init_rktio.o`, and (on
@@ -467,7 +467,7 @@ profiling is no longer needed.
 
 ### Browser shell
 
-The browser shell in `racket/src/ChezScheme/wasm-shell/` is a
+The browser shell in `wasm-shell/` is a
 **shared runtime + per-surface host** design: one
 `scheme-web.{js,wasm,data}` binary backs every browser surface (the
 REPL today; a playground POC; future doc widgets / embeds / canvas
@@ -512,7 +512,7 @@ pthreads of its own):
 
 - `racket/src/cs/c/wasm_shell_io.c` reserves the rings in the shared
   heap and exports their addresses.
-- `racket/src/ChezScheme/wasm-shell/shell-tty.js` is linked in with
+- `wasm-shell/shell-tty.js` is linked in with
   `emcc --post-js`. It replaces the TTY `get_char`/`put_char` ops:
   `get_char` blocks on the input ring with `Atomics.wait` (legal on
   the runtime worker), `put_char` pushes each byte into the output
@@ -531,7 +531,7 @@ adds `wasm_shell_io.o`, the `--post-js shell-tty.js`, and the ring
 exports, and installs the page assets):
 
 ```sh
-racket/src/ChezScheme/wasm-shell/build.sh browser
+wasm-shell/build.sh browser
 ```
 
 The underlying link is:
@@ -633,7 +633,7 @@ has been exercised on a broader set of collections.
 
 ## Running the Racket test suite
 
-`racket/src/ChezScheme/wasm-shell/run-tests.sh` runs a slice of the
+`wasm-shell/run-tests.sh` runs a slice of the
 checked-in Racket core tests (the `.rktl` files in
 `pkgs/racket-test-core/tests/racket/`) under the WASM/node build. Each
 `.rktl` is a flat script that expects to be `load`ed inside a session
@@ -642,8 +642,8 @@ two and pipes them through `node scheme.js`, then greps for the per-test
 summary line.
 
 ```sh
-racket/src/ChezScheme/wasm-shell/run-tests.sh             # default slice
-racket/src/ChezScheme/wasm-shell/run-tests.sh list hash   # by name
+wasm-shell/run-tests.sh             # default slice
+wasm-shell/run-tests.sh list hash   # by name
 ```
 
 The default slice covers `control` (delimited continuations / prompts),

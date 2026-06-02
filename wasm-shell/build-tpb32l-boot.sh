@@ -24,8 +24,8 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-chez="$(cd "$here/.." && pwd)"          # racket/src/ChezScheme
-src="$(cd "$chez/.." && pwd)"           # racket/src
+chez="$(cd "$here/../racket/src/ChezScheme" && pwd)"  # repo/racket/src/ChezScheme
+src="$(cd "$here/../racket/src" && pwd)"              # repo/racket/src
 
 # Auto-detect the native threaded host machine (tarm64osx on Apple
 # silicon, ta6osx on Intel, ...). It is the t<arch> dir under the

@@ -18,8 +18,8 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-chez="$(cd "$here/.." && pwd)"
-repo="$(cd "$chez/../../.." && pwd)"
+repo="$here"
+chez="$(cd "$here/racket/src/ChezScheme" && pwd)"
 
 scheme_js="$chez/em-tpb32l/bin/tpb32l/scheme.js"
 tests_dir="$repo/pkgs/racket-test-core/tests/racket"
