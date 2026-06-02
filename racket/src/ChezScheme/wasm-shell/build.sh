@@ -176,6 +176,7 @@ fi
 
 chunks=( "$boot"/{petite,scheme,racket}{0,1,2,3,4,5,6,7,8,9}.o )
 
+cross_dir="../../src/build-cs-tpb32l/cross-root/tpb32l"
 LDFLAGS_COMMON=(
   -O2 -pthread -s USE_ZLIB=1
   "${DEPS_LIBDIRS[@]+"${DEPS_LIBDIRS[@]}"}"
@@ -183,10 +184,9 @@ LDFLAGS_COMMON=(
   --preload-file "$cs_boot/petite-pbchunk.boot@petite.boot"
   --preload-file "$cs_boot/scheme-pbchunk.boot@scheme.boot"
   --preload-file "$cs_boot/racket-pbchunk.boot@racket.boot"
-  --preload-file ../../collects@/collects
-  --preload-file ../../etc@/etc
-  --preload-file ../../share/pkgs/draw-lib@/share/pkgs/draw-lib
-  --preload-file wasm-shell/share-links.rktd@/share/links.rktd
+  --preload-file "$cross_dir/collects@/collects"
+  --preload-file "$cross_dir/etc@/etc"
+  --preload-file "$cross_dir/share@/share"
   -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1
   -sALLOW_TABLE_GROWTH=1
 )

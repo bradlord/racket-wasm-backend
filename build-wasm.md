@@ -700,13 +700,6 @@ plus each declared package via emcc `--preload-file` directives in
 --preload-file wasm-shell/share-links.rktd@/share/links.rktd
 ```
 
-`main_em.c` already sets `cs_compiled_subdir = 1`, so the host's
-existing `compiled/*.zo` files (built for tarm64osx / similar) are
-ignored and the runtime falls back to compiling sources on first
-load. Slower than a cached `.zo`, correct on every architecture. A
-follow-up `precompile-target-compiled.rkt` (see *WIP* below) can
-populate `compiled/tpb32l/` to speed warm load.
-
 ### Adding a new package
 
 1. Pick the package's repo path under `racket/share/pkgs/`. Check its

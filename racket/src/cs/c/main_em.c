@@ -61,10 +61,6 @@ int main(int argc, char **argv) {
   ba.collects_dir = "/collects";
   ba.config_dir   = "/etc";
 
-  /* Use a machine-specific compiled-file subdirectory so the WASM
-     runtime does not try to load host-native fasls from `compiled/`. */
-  ba.cs_compiled_subdir = 1;
-
   /* segment_offset is for `-k` embedded bytecode, which we never
      produce on this target. */
   ba.segment_offset = 0;
