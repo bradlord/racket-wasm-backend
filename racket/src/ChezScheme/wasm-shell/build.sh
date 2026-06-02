@@ -66,7 +66,7 @@ need "$rktio_a" \
 need "$cs_boot/racket-pbchunk.boot" \
      "wasm-shell/build-tpb32l-boot.sh then wasm-shell/build-racket-boot.sh  (§3, §4)"
 need "$boot/libkernel.a" \
-     "configure Chez Emscripten + build the kernel (build-wasm.md §5)"
+     "wasm-shell/build-em-kernel.sh    (build-wasm.md §5)"
 [ "$missing" = 0 ] || exit 1
 
 mkdir -p "$out"

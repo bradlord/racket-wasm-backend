@@ -300,7 +300,11 @@ the supported entry point — the rest of this section explains what it
 runs and why, so the recipe can be reproduced or modified by hand.
 
 The Chez Emscripten workarea has to be configured once before the
-script can be used:
+script can be used. The setup half below -- build the WASM libffi,
+configure the workarea, patch `mdlinkflags`, and build `libkernel.a` --
+is scripted as `wasm-shell/build-em-kernel.sh` (it builds libffi itself
+because `build.sh`'s dep loop runs after its `libkernel.a` prereq check,
+too late to satisfy `configure --enable-libffi`). The manual steps:
 
 ```sh
 cd racket/src/ChezScheme
