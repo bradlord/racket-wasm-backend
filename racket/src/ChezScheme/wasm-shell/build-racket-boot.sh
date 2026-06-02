@@ -75,6 +75,15 @@ if [ ! -x bin/zuo ]; then
   make bin/zuo
 fi
 
+# Build the Chez tpb32l kernel + boot files first. The racket-pbchunk
+# target consumes ChezScheme/tpb32l/boot/tpb32l/{petite,scheme}.boot as
+# plain inputs (they have no build rule of their own -- the `scheme`
+# target produces them as a side effect via bootquick --xpatch). Skip
+# this and the pbchunk build dies with
+#   missing input file: "ChezScheme/tpb32l/boot/tpb32l/petite.boot".
+echo "[mk]  Chez tpb32l kernel + boot (scheme target)"
+bin/zuo . scheme
+
 echo "[mk]  racket-pbchunk.boot"
 # The pbchunk target stops cleanly before the host racketcs link that
 # `make` would attempt (and fail on a cross-build).

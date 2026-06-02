@@ -258,6 +258,14 @@ cp ../ChezScheme/xc-tpb32l/s/xpatch ChezScheme/xc-tpb32l/s/xpatch
 # bin/zuo is a Makefile target (compiles zuo/zuo.c). A fresh workarea
 # has none, so build it before driving the boot build:
 make bin/zuo
+
+# Build the Chez tpb32l kernel + boot files first. racket-pbchunk.boot
+# consumes ChezScheme/tpb32l/boot/tpb32l/{petite,scheme}.boot as plain
+# inputs; they have no build rule of their own (the `scheme` target
+# produces them as a side effect via bootquick --xpatch), so a fresh
+# workarea that jumps straight to racket-pbchunk.boot dies with
+#   missing input file: "ChezScheme/tpb32l/boot/tpb32l/petite.boot".
+bin/zuo . scheme
 bin/zuo . racket-pbchunk.boot
 ```
 
