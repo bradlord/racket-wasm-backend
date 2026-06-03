@@ -54,6 +54,12 @@
   (define boot-files (list petite-chunked.boot scheme-chunked.boot racket-chunked.boot))
 
   (define cross? (equal? (lookup 'CROSS_MODE) "cross"))
+  ;; A WebAssembly/Emscripten target: the native `racketcs` executable
+  ;; and the `embed-boot` step are not meaningful (boot images are
+  ;; preloaded into MEMFS at the emcc link, not embedded). The CS build
+  ;; stops at the (pbchunk) boot images; the `wasm` link target consumes
+  ;; them together with the in-tree kernel/rktio objects.
+  (define emscripten? (equal? (lookup 'EMSCRIPTEN) "t"))
 
   (define scheme.exe+args
     (cond
@@ -407,10 +413,14 @@
      `([:target build ()
                 ,(lambda (token)
                    (build/dep (find-target "build-racketcs" the-targets) token)
-                   (build/dep (find-target gracketcs the-targets) token)
-                   (build/dep (find-target "starter" starter-targets) token)
-                   (when (and mac? (not mac-fw?))
-                     (build/dep (find-target framework the-targets) token)))
+                   ;; For a WASM target there is no native gracket/starter
+                   ;; executable and no Mac framework -- the build stops at
+                   ;; the boot images produced by `build-racketcs`.
+                   (unless emscripten?
+                     (build/dep (find-target gracketcs the-targets) token)
+                     (build/dep (find-target "starter" starter-targets) token)
+                     (when (and mac? (not mac-fw?))
+                       (build/dep (find-target framework the-targets) token))))
                 :recur]
 
        [:target build-and-prepare ()
@@ -447,7 +457,13 @@
                    (build/dep (find-target "scheme" the-targets) token)
                    (unless cross?
                      (build/dep (find-target racket.boot the-targets) token))
-                   (build/dep (find-target racketcs the-targets) token))
+                   (if emscripten?
+                       ;; Stop at the (pbchunk) boot images; building
+                       ;; `racket-chunked.boot` transitively builds
+                       ;; `racket.boot` and the pbchunk C sources. The
+                       ;; native `racketcs`/embed-boot step is skipped.
+                       (build/dep (find-target racket-chunked.boot the-targets) token)
+                       (build/dep (find-target racketcs the-targets) token)))
                 :recur]
 
        ,(if windows?
@@ -765,7 +781,11 @@
                                  token))])]
            [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                 (not (equal? (lookup 'RACKET) "")))
-            ;; use `BOOTFILE_RACKET` or `RACKET` to build boot files
+            ;; use `BOOTFILE_RACKET` or `RACKET` to build boot files.
+            ;; `rktboot` produces target boot files but not the cross-compiler
+            ;; xpatch, so a real cross build (target machine != host) must use
+            ;; the `--enable-scheme`/`--enable-racket=auto` route, which runs
+            ;; `bootquick --xpatch`.
             (when xpatch?
               (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
             `([:target bootfiles ()

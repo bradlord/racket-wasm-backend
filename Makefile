@@ -67,6 +67,11 @@ CONFIGURE_ARGS =
 # replaced with the build subdirectory where `configure` is run
 CONFIGURE_ARGS_qq =
 
+# Command to wrap each `configure` invocation, e.g. `emconfigure` for
+# a WebAssembly/Emscripten cross build. Empty means run `configure`
+# directly.
+CONFIGURE_WRAPPER =
+
 # ------------------------------------------------------------
 # Cross-build support
 
@@ -185,6 +190,7 @@ BUILD_VARS = MAKE=$(MAKE) \
              CPUS="$(CPUS)" \
              CONFIGURE_ARGS_qq='$(CONFIGURE_ARGS_qq)' \
              CONFIGURE_ARGS="$(CONFIGURE_ARGS)" \
+             CONFIGURE_WRAPPER="$(CONFIGURE_WRAPPER)" \
              CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
              RACKET="$(RACKET)" \
              PLAIN_RACKET="$(PLAIN_RACKET)" \

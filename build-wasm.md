@@ -142,6 +142,79 @@ also targets, e.g. `bin/zuo wasm-shell/build.zuo em-kernel` (or
 available for working outside the build system. The remainder of this
 section documents what each stage does.
 
+### Folding the cross build into the stock `make` (configure-driven, WIP)
+
+The `make wasm` path above orchestrates the separate `wasm-shell/` stage
+scripts, each with its own workarea (`ChezScheme/em-tpb32l`,
+`build-cs-tpb32l`, `build-libffi-em`, `cross-root`). A parallel effort is
+underway to make the *stock* build system (`configure` + the `cs/c`
+`build.zuo`) cross-compile the runtime directly under `build/cs/c`, so the
+`wasm-shell/` scripts can eventually be retired. What works today:
+
+- **`CONFIGURE_WRAPPER=emconfigure`** -- a new make/zuo variable
+  (top-level `Makefile`, threaded through `main.zuo` into
+  `configured-targets-at` in `racket/src/lib.zuo`). When set, every
+  `configure` the build runs is wrapped (`emconfigure ./configure ...`).
+  Because the C compiles/links read `CC`/`AR`/`LDFLAGS`/`LIBS` out of the
+  configure-generated Makefile, recording `CC=emcc` there makes all
+  downstream `c-compile`/`c-link` (rktio, the Chez kernel, the final
+  link) use `emcc` automatically -- no `emmake` needed, since zuo replaces
+  `make` for the inner build. The wrapper is applied to both the `cs/c`
+  configure and the rktio configure (`setup-rktio` passes it through).
+  Source the emsdk (`source <emsdk>/emsdk_env.sh`) before `make` so
+  `emconfigure`/`emcc` are on `PATH`.
+
+- **Configure flags.** Drive the stock build with
+  ```sh
+  make CONFIGURE_WRAPPER=emconfigure \
+       SCHEME=<native-threaded-host-scheme> \
+       CS_CROSS_SUFFIX=-cross \
+       SETUP_MACHINE_FLAGS="-MCR `pwd`/build/zo:" \
+       CONFIGURE_ARGS="--enable-pb --enable-mach=tpb32l --enable-crossany \
+                       --host=wasm32-unknown-emscripten"
+  ```
+  `--host=wasm32-unknown-emscripten` is what makes configure cross
+  (`build_os != host_os`), sets the new `EMSCRIPTEN=t` marker, and (with
+  the wrapper) triggers the emcc toolchain. `--enable-mach=tpb32l` is
+  required because `wasm32` is not a recognized host CPU, so without it
+  configure bails with "Platform is not supported natively"; it names the
+  target machine explicitly. **`--enable-pb` is also required**: the
+  `enable_pb` block is what sets `SCHEME_LIBFFI=yes` (the kernel's libffi
+  path that Racket uses to reach rktio) and `PBCHUNK_MODE=pbchunk`.
+  Reaching `tpb32l` via `--enable-mach` *alone* silently yields
+  `SCHEME_LIBFFI=no` + `PBCHUNK_MODE=plain` -- a runtime that can't do
+  I/O and a boot with no pbchunk. (`PLT_CS_MACHINE_TYPE` is no longer
+  gated on `enable_pb` -- see the patches list -- so that one is set for
+  any pb target regardless.)
+
+- **The CS build stops at the boot images.** For an `EMSCRIPTEN=t`
+  target, `cs/c/build.zuo` skips the native `racketcs`/`gracketcs`
+  executables and the `embed-boot` step (boot images are
+  `--preload-file`'d into MEMFS at the emcc link, not embedded), stopping
+  at `racket.boot` + the `{petite,scheme,racket}-pbchunk.boot` images and
+  the 30 pbchunk C sources under `build/cs/c/`. Drive it as
+  `cd racket/src/build/cs/c && bin/zuo . build` (not `make in-place`,
+  whose install/`raco setup` steps still expect a native `racketcs`).
+
+What is **not** yet folded in (still needs `wasm-shell/` or new work):
+
+1. **The Chez kernel's emscripten config.** `cs/c/build.zuo`'s `scheme`
+   target synthesizes an empty `Mf-config` and never runs ChezScheme's
+   `./configure --emscripten --pbarch --threads --enable-libffi` (what
+   `build-em-kernel.sh` does). The stock `libkernel.a` therefore gets
+   `CC=emcc` but not the emscripten cflags / pb-arch selection /
+   libffi-closure `mdlinkflags`. This is the gating prerequisite for a
+   real emcc link.
+2. WASM **libffi** (`build-libffi-em`, `deps/libffi.sh`).
+3. The **recipe deps** + `wasm_deps.inc` / `wasm_deps_uflags.txt` /
+   `.wasm-deps-linkflags.txt` (`build-deps.sh`).
+4. The **cross-root collects/etc/share** for the preloads
+   (`build-racket-collections.sh`).
+5. The **emcc link target** itself (compile `main_em.c`/`boot.c`/
+   `init_rktio.c`/`wasm_*.c` + pbchunk objs, link `scheme.{js,wasm,data}`
+   node + `scheme-web.*` browser with preloads) -- the command is in
+   `wasm-shell/build.sh`; folding it in is the last step.
+
 ### 0. Build the native host Chez (only if missing)
 
 Scripted as `wasm-shell/build-chez-host.sh`. The boot and `racket.boot`
@@ -1100,7 +1173,7 @@ below).
    instead of re-expanding `.rkt` source per session, which would
    meaningfully cut warm-load time.
 
-7. **Upstream the patches against Chez/rktio/cs.** Eight files
+7. **Upstream the patches against Chez/rktio/cs.** Several files
    modified in master, all clean conditional additions that are
    behavior-preserving on every other platform:
      - `ChezScheme/c/ffi.c`, `ChezScheme/s/prims.ss`: libffi
@@ -1124,7 +1197,26 @@ below).
        `-sALLOW_TABLE_GROWTH=1` that libffi's wasm closures need, so
        the WASM kernel build no longer has to awk-patch `mdlinkflags`
        in `Mf-config` after configure. Only affects emscripten builds.
-   Send them upstream so this branch stops drifting from master.
+     - `cs/c/configure[.ac]`: emit
+       `PLT_CS_MACHINE_TYPE=${KERNEL_TARGET_MACH}` for *any* pb/tpb
+       target (a `case "${KERNEL_TARGET_MACH}" in *pb*)` block) rather
+       than only inside the `enable_pb` block. A pb target compiles
+       `(machine-type)` to a constant read from `PLT_CS_MACHINE_TYPE`
+       (see `rumble/system.ss`), and that is needed whether the pb
+       target was reached via `--enable-pb` or via `--enable-mach=<tpb>`
+       with a cross `--host`. Behavior-preserving for non-pb targets.
+     - `cs/c/configure[.ac]` + `cs/c/Makefile.in`: a new `EMSCRIPTEN`
+       substitution var, set `t` by an `*emscripten*` `host_os` case.
+       Lets `cs/c/build.zuo` recognize a WASM target and skip the native
+       `racketcs`/`gracketcs`/`embed-boot` steps, stopping at the boot
+       images. No effect off emscripten.
+
+   Branch-local build machinery (probably stays on the branch, not
+   upstreamed): the `CONFIGURE_WRAPPER` knob (top-level `Makefile`,
+   `main.zuo`, `racket/src/lib.zuo`) that wraps each `configure` with
+   `emconfigure`, and the `EMSCRIPTEN`-gated skips in `cs/c/build.zuo`.
+   Send the conditional fixes above upstream so this branch stops
+   drifting from master.
 
 ### Lower priority
 

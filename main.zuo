@@ -201,6 +201,7 @@
                               'configure (if (eq? 'windows (hash-ref (runtime-env) 'toolchain-type))
                                              (at-source "racket/src" subdir "winfig.bat")
                                              (at-source "racket/src" subdir "configure"))
+                              'configure-wrapper (lookup 'CONFIGURE_WRAPPER)
                               'inputs (list (at-source "racket/src" subdir "Makefile.in"))
                               'outputs (list (at-source "racket/src/build" subdir "Makefile"))
                               'configure-args (append
@@ -260,7 +261,11 @@
                                       ;; `DESTDIR` fixes later:
                                       'SKIP_DESTDIR_FIX "skip"
                                       ;; Propagate `MAKE`
-                                      'MAKE (lookup 'MAKE))
+                                      'MAKE (lookup 'MAKE)
+                                      ;; Propagate the configure wrapper so the
+                                      ;; rktio configure (run from cs/c/build.zuo
+                                      ;; via setup-rktio) is wrapped too
+                                      'CONFIGURE_WRAPPER (lookup 'CONFIGURE_WRAPPER))
                                      ;; Propagate `RACKET` and similar if specified
                                      'RACKET (get-provided-racket)
                                      'BOOTFILE_RACKET (lookup 'BOOTFILE_RACKET)
