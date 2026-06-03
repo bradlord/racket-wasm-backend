@@ -229,11 +229,14 @@ cs: $(ZUO)
 bc: $(ZUO)
 	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
 
-# In-place WebAssembly (Emscripten) build of Racket CS. Bootstraps the
-# native host Chez itself (no full `make cs` needed); requires an active
-# emsdk and a one-time `wasm-shell/build-deps.sh`. The collections stage
-# needs a full Racket -- it uses racket/bin/racket, or pass RACKET=<path>
-# (`make wasm RACKET=/path/to/racket`). See build-wasm.md.
+# WebAssembly (Emscripten) cross build of Racket CS, driven through the
+# stock build system: configure + cross-build the tpb32l CS runtime and
+# emcc-link it (the `wasm` target in racket/src/cs/c/build.zuo). Requires
+# an active emsdk (source emsdk_env.sh first), the wasm libffi prereq
+# (wasm-shell/build-deps.sh), and a native threaded host Chez passed as
+# SCHEME=<scheme>: `make wasm SCHEME=/path/to/scheme`. Produces
+# racket/src/build/cs/c/wasm/scheme.{js,wasm,data}. See build-wasm.md.
+# (The legacy orchestration is still at `bin/zuo wasm-shell/build.zuo`.)
 wasm: $(ZUO)
 	$(RUN_ZUO) wasm $(BUILD_VARS)
 

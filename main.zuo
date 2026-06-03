@@ -195,13 +195,20 @@
   (define (build-base subdir token [options (hash)])
     (define also? (hash-ref options 'also? #f))
     (define prefix (hash-ref options 'prefix #f))
+    ;; WASM/Emscripten one-shot: inject the wasm cross-configure flags,
+    ;; default the configure wrapper to `emconfigure`, force cross mode,
+    ;; and finish at the `wasm` emcc-link target instead of installing.
+    (define wasm? (hash-ref options 'wasm? #f))
     (define msvc? (eq? 'windows (hash-ref (runtime-env) 'toolchain-type)))
     (define targets
       (configured-targets-at (hash
                               'configure (if (eq? 'windows (hash-ref (runtime-env) 'toolchain-type))
                                              (at-source "racket/src" subdir "winfig.bat")
                                              (at-source "racket/src" subdir "configure"))
-                              'configure-wrapper (lookup 'CONFIGURE_WRAPPER)
+                              'configure-wrapper (let ([w (lookup 'CONFIGURE_WRAPPER)])
+                                                   (if (and wasm? (equal? w ""))
+                                                       "emconfigure"
+                                                       w))
                               'inputs (list (at-source "racket/src" subdir "Makefile.in"))
                               'outputs (list (at-source "racket/src/build" subdir "Makefile"))
                               'configure-args (append
@@ -216,6 +223,13 @@
                                                      '()))
                                                (if (hash-ref options 'server-compile-machine? #f)
                                                    '("--enable-crossany")
+                                                   '())
+                                               ;; WASM target: pb tpb32l cross to Emscripten
+                                               (if wasm?
+                                                   '("--enable-pb"
+                                                     "--enable-mach=tpb32l"
+                                                     "--enable-crossany"
+                                                     "--host=wasm32-unknown-emscripten")
                                                    '())
                                                (shell->strings (lookup 'DISABLE_STATIC_LIBS))
                                                (cond
@@ -274,7 +288,8 @@
                                                    (if (equal? s "")
                                                        ""
                                                        (build-path s "ChezScheme")))
-                                     'CROSS_MODE (if (equal? (lookup 'CS_CROSS_SUFFIX) "-cross")
+                                     'CROSS_MODE (if (or wasm?
+                                                         (equal? (lookup 'CS_CROSS_SUFFIX) "-cross"))
                                                      "cross"
                                                      "")))))
     (build (find-target "build" targets)
@@ -282,7 +297,9 @@
            (build-options))
     (when (eq? 'windows (system-type))
       (remove-early-load-dlls))
-    (build (find-target "install-again" targets)
+    ;; For a WASM build, finish with the emcc link rather than the
+    ;; native install step (there is no `racketcs` to install).
+    (build (find-target (if wasm? "wasm" "install-again") targets)
            #f
            (build-options)))
 
@@ -846,16 +863,16 @@
     (build-one "racket/src/cs/main.zuo" "schemified"))
 
   ;; ------------------------------------------------------------
-  ;; WebAssembly (Emscripten) build -- orchestrated by
-  ;; wasm-shell/build.zuo. See build-wasm.md.
+  ;; WebAssembly (Emscripten) build -- configure + cross-build the CS
+  ;; runtime for tpb32l and emcc-link it, all through the stock build
+  ;; system (the `wasm` target in racket/src/cs/c/build.zuo). See
+  ;; build-wasm.md. Pass SCHEME=<native-threaded-host-scheme> and make
+  ;; sure the emsdk is sourced and the wasm libffi prereq is built
+  ;; (wasm-shell/build-deps.sh). The legacy wasm-shell/build.zuo
+  ;; orchestration is still available via `bin/zuo wasm-shell/build.zuo`.
 
   (define (wasm token)
-    (define src (at-source "wasm-shell/build.zuo"))
-    (define t (find-target "wasm"
-                           ((dynamic-require src 'targets-at)
-                            (make-at-dir (path-only src))
-                            vars)))
-    (build (command-target->target t '()) token))
+    (build-base "cs/c" token (hash 'wasm? #t)))
 
   ;; ------------------------------------------------------------
   ;; Targets

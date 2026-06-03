@@ -388,6 +388,12 @@ case "$host_os" in
     # the pointer size (wasm32 / tpb32l are 32-bit) so AC_CHECK_SIZEOF
     # takes its cached path instead of computing 0.
     ac_cv_sizeof_void_p=4
+    # Emscripten needs -pthread at *compile* time (not just link) for the
+    # threaded tpb32l build: it enables atomics/bulk-memory/TLS. Mixing
+    # -pthread and non-pthread objects yields runtime "null function or
+    # function signature mismatch" crashes. Put it in CFLAGS so every
+    # translation unit (kernel, boot.o, pbchunk, main_em.o, ...) gets it.
+    CFLAGS="${CFLAGS} -pthread"
     ;;
   *)
     ;;

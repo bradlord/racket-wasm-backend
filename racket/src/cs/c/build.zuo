@@ -200,6 +200,10 @@
     (map .c->.o pbchunk-srcs))
 
   (define boot.o (at-dir (.c->.o "boot.c")))
+  ;; WASM/Emscripten link inputs (see the `wasm` target): Racket's
+  ;; Emscripten entry point and the rktio-init object, compiled with emcc.
+  (define main_em.o (at-dir "main_em.o"))
+  (define init_rktio.o (at-dir "init_rktio.o"))
   (define boot-objs
     (append (list boot.o)
             (list (at-dir CS m "boot" m (.a "kernel")))
@@ -726,6 +730,87 @@
                    (c-compile MemoryModule.o
                               (at-source "../../start/MemoryModule.c")
                               config))]
+
+       ;; --- WASM/Emscripten link (the `wasm` target below) ---------------
+       ;; Racket's Emscripten entry point, compiled with emcc (CC).
+       [:target ,main_em.o (,(at-source "main_em.c")
+                            ,(at-source "boot.h")
+                            ,(at-dir CS m "boot" m "scheme.h"))
+                ,(lambda (path token)
+                   (c-compile main_em.o
+                              (at-source "main_em.c")
+                              (config-merge
+                               (config-include config
+                                               (at-dir CS m "boot" m)
+                                               (at-dir CS m "c")
+                                               (at-source "../../ChezScheme/c"))
+                               'CPPFLAGS "-DPORTABLE_BYTECODE -sUSE_ZLIB=1")))]
+
+       ;; The rktio-init object (registers rktio's foreign symbols).
+       [:target ,init_rktio.o (,(at-source "../../ChezScheme/c/init_rktio.c")
+                               ,(at-source "../../ChezScheme/c/init_rktio.h")
+                               ,rktio_config.h)
+                ,(lambda (path token)
+                   (c-compile init_rktio.o
+                              (at-source "../../ChezScheme/c/init_rktio.c")
+                              (config-merge
+                               (config-include config
+                                               (at-source "../../rktio")
+                                               rktio-dir
+                                               (at-dir CS m "boot" m)
+                                               (at-dir CS m "c"))
+                               'CPPFLAGS "-DPORTABLE_BYTECODE -sUSE_ZLIB=1")))]
+
+       ;; Final emcc link: Racket-on-WASM for node. Consumes the in-tree
+       ;; kernel/rktio/boot/pbchunk artifacts produced by `bin/zuo . build`
+       ;; plus the wasm libffi (hardcoded, see add-scheme-kernel-config).
+       ;; First cut = the build-wasm.md §5 node link (no wasm_*/deps yet).
+       ;; Run from the build dir: `bin/zuo . wasm`.
+       [:target wasm ()
+                ,(lambda (token)
+                   (unless emscripten?
+                     (error "wasm target requires an Emscripten cross build (configure with --host=...-emscripten)"))
+                   (unless pbchunk?
+                     (error "wasm target expects PBCHUNK_MODE=pbchunk (configure with --enable-pb)"))
+                   ;; Build the cheap/wasm-specific link inputs.
+                   (build/dep (find-target main_em.o the-targets) token)
+                   (build/dep (find-target init_rktio.o the-targets) token)
+                   (build/dep (find-target boot.o the-targets) token)
+                   (build/dep librktio.a token)
+                   (for-each (lambda (o) (build/dep (find-target o the-targets) token)) pbchunk-objs)
+                   (for-each (lambda (b) (build/dep (find-target b the-targets) token)) boot-files)
+                   ;; The kernel + lz4 come from `bin/zuo . build`; require them.
+                   (define libkernel.a (at-dir CS m "boot" m (.a "kernel")))
+                   (define liblz4.a (at-dir CS m "lz4/lib/liblz4.a"))
+                   (for-each (lambda (f)
+                               (unless (file-exists? f)
+                                 (error (~a "missing prerequisite: " f
+                                            " -- run `bin/zuo . build` first"))))
+                             (list libkernel.a liblz4.a))
+                   (define emcc (lookup 'CC))
+                   (define out-dir (at-dir "wasm"))
+                   (mkdir-p out-dir)
+                   (define (preload src dest) (list "--preload-file" (~a src "@" dest)))
+                   (define args
+                     (append
+                      (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"
+                            "-o" (build-path out-dir "scheme.html")
+                            main_em.o boot.o init_rktio.o)
+                      pbchunk-objs
+                      (list libkernel.a liblz4.a (target->path librktio.a)
+                            (~a "-L" (at-source "../../build-libffi-em/install/lib")))
+                      (list "--post-js" (at-source "../../../../wasm-shell/node-tty.js"))
+                      (preload petite-chunked.boot "petite.boot")
+                      (preload scheme-chunked.boot "scheme.boot")
+                      (preload racket-chunked.boot "racket.boot")
+                      (preload (at-source "../../../collects") "/collects")
+                      (preload (at-source "../../../etc") "/etc")
+                      (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
+                            "-sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset"
+                            "-sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction"
+                            "-lffi")))
+                   (shell/wait (map string->shell args)))
+                :recur]
 
        [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                 ,(lambda (path token)

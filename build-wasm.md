@@ -121,22 +121,40 @@ repository root. The work directories that get created live under
 
 ### Integrated entry point: `make wasm`
 
-The whole pipeline is wired into the build system as a target:
+The build is wired into the stock build system as a target:
 
 ```sh
-make wasm
+source <emsdk>/emsdk_env.sh
+make wasm SCHEME=<native-threaded-host-scheme>
 ```
 
-`make wasm` bounces through `main.zuo`'s `wasm` target to
+`make wasm` runs `main.zuo`'s `wasm` target, which calls `build-base
+"cs/c"` in a `wasm?` mode: it injects the cross-configure flags
+(`--enable-pb --enable-mach=tpb32l --enable-crossany
+--host=wasm32-unknown-emscripten`), defaults `CONFIGURE_WRAPPER` to
+`emconfigure`, forces `CROSS_MODE=cross`, runs the CS `build` (configure
++ cross-build the tpb32l kernel, rktio, boot images, pbchunk), and
+finishes at the `wasm` emcc-link target in `racket/src/cs/c/build.zuo`
+instead of the native install step. The result is
+`racket/src/build/cs/c/wasm/scheme.{js,wasm,data}`.
+
+Prerequisites it does **not** do for you: source the emsdk first
+(`emconfigure`/`emcc` on `PATH`); build the wasm libffi once
+(`wasm-shell/build-deps.sh`, currently hardcoded at
+`racket/src/build-libffi-em/install`); and pass a native threaded host
+Chez as `SCHEME=<scheme>` (the cross-compiler host -- see stage 0). This
+is a work in progress (see "Folding the cross build into the stock make"
+below); the older stage scripts remain the complete path.
+
+The legacy orchestration -- `main.zuo`'s old `wasm` target bounced to
 `wasm-shell/build.zuo`, which checks prerequisites and runs the per-stage
-scripts below in order. It needs an active emsdk and a one-time
-`wasm-shell/build-deps.sh` (the recipe-driven library deps stay a manual
-prerequisite for now -- `make wasm` checks for their output and fails with
-guidance if absent). It bootstraps the native host Chez itself (stage 0),
-so a prior full `make cs` is *not* required; the collections stage uses
-`racket/bin/racket` or a `RACKET=<path>` you pass. Individual stages are
-also targets, e.g. `bin/zuo wasm-shell/build.zuo em-kernel` (or
-`chez-host`).
+scripts below, bootstrapping the host Chez itself (stage 0) -- is still
+available directly:
+
+```sh
+bin/zuo wasm-shell/build.zuo            # full pipeline
+bin/zuo wasm-shell/build.zuo em-kernel  # an individual stage
+```
 
 `wasm-shell/build-all.sh` runs the same stage scripts directly and stays
 available for working outside the build system. The remainder of this
@@ -217,10 +235,21 @@ What is **not** yet folded in (still needs `wasm-shell/` or new work):
    `.wasm-deps-linkflags.txt` (`build-deps.sh`).
 4. The **cross-root collects/etc/share** for the preloads
    (`build-racket-collections.sh`).
-5. The **emcc link target** itself (compile `main_em.c`/`boot.c`/
-   `init_rktio.c`/`wasm_*.c` + pbchunk objs, link `scheme.{js,wasm,data}`
-   node + `scheme-web.*` browser with preloads) -- the command is in
-   `wasm-shell/build.sh`; folding it in is the last step.
+5. The **emcc link target** -- a first cut now exists as the `wasm`
+   target in `cs/c/build.zuo`. After `bin/zuo . build`, run
+   `cd racket/src/build/cs/c && bin/zuo . wasm`; it compiles `main_em.o`
+   + `init_rktio.o` (reusing the already-built `boot.o` and pbchunk
+   objects), then emcc-links `wasm/scheme.{js,wasm,data}` against the
+   in-tree `libkernel.a`/`liblz4.a`/`librktio.a` + the hardcoded wasm
+   libffi, preloading the pbchunk boots and the source `collects`/`etc`.
+   It is the build-wasm.md §5 **node** link only. Still missing, vs
+   `wasm-shell/build.sh`: the `wasm_*.c` primitives +
+   `-DRACKET_EXTRA_FOREIGN_INC` (so the http/canvas/dom/stubs symbols
+   register), the recipe-dep link flags (item 3), the trimmed cross-root
+   collects (item 4, so it currently preloads the full source tree), and
+   the **browser** `scheme-web.*` variant with its shell JS. Whether it
+   actually boots also depends on item 1 (the kernel's full emscripten
+   config / `mdlinkflags`).
 
 ### 0. Build the native host Chez (only if missing)
 
