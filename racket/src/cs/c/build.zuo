@@ -121,7 +121,27 @@
                'enablelibffi (lookup 'SCHEME_LIBFFI "no")
                'disablecurses (lookup 'DISABLE_CURSES "no")
                'disableiconv (lookup 'DISABLE_ICONV "no")
-               'exePostStep (lookup 'POST_LINKER)))
+               'exePostStep (lookup 'POST_LINKER)
+               ;; The Chez kernel compile (c/ffi.c) needs ffi.h, and the
+               ;; scheme-exe link needs libffi (ffi.o references
+               ;; ffi_prep_cif / ffi_type_*). The wasm libffi isn't in a
+               ;; system include/lib dir, so point at the headers and
+               ;; archive built by wasm-shell/build-deps.sh. `-lffi` goes
+               ;; in LIBS so it follows libkernel.a on the link line.
+               ;; Hardcoded for now -- folding the libffi build into the
+               ;; stock build is a pending prerequisite (see build-wasm.md,
+               ;; "Folding the cross build into the stock make").
+               'CPPFLAGS (if emscripten?
+                             (build-shell
+                              (hash-ref config 'CPPFLAGS "")
+                              (~a "-I" (at-source "../../build-libffi-em/install/include")))
+                             (hash-ref config 'CPPFLAGS ""))
+               'LIBS (if emscripten?
+                         (build-shell
+                          (hash-ref config 'LIBS "")
+                          (~a "-L" (at-source "../../build-libffi-em/install/lib"))
+                          "-lffi")
+                         (hash-ref config 'LIBS ""))))
 
   (define (add-scheme-boot-config config)
     (if (equal? (lookup 'ENABLE_EXTRA_CHECKS "no") "yes")

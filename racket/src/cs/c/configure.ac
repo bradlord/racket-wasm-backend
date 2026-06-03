@@ -384,6 +384,10 @@ case "$host_os" in
     # the build system's wasm target rather than the native executable
     # embed path.
     EMSCRIPTEN="t"
+    # The cross sizeof bisection can't run a wasm test binary; preset
+    # the pointer size (wasm32 / tpb32l are 32-bit) so AC_CHECK_SIZEOF
+    # takes its cached path instead of computing 0.
+    ac_cv_sizeof_void_p=4
     ;;
   *)
     ;;

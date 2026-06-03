@@ -205,7 +205,14 @@ What is **not** yet folded in (still needs `wasm-shell/` or new work):
    `CC=emcc` but not the emscripten cflags / pb-arch selection /
    libffi-closure `mdlinkflags`. This is the gating prerequisite for a
    real emcc link.
-2. WASM **libffi** (`build-libffi-em`, `deps/libffi.sh`).
+2. WASM **libffi** (`build-libffi-em`, `deps/libffi.sh`). The Chez
+   kernel compile (`c/ffi.c`) needs `ffi.h` and the scheme-exe link
+   needs `libffi.a`; for now `cs/c/build.zuo`'s
+   `add-scheme-kernel-config` hardcodes, on emscripten,
+   `-I../../build-libffi-em/install/include` into `CPPFLAGS` and
+   `-L../../build-libffi-em/install/lib -lffi` into `LIBS` (relative to
+   the `cs/c` source). Folding the libffi build into the stock build
+   would replace those hardcodes.
 3. The **recipe deps** + `wasm_deps.inc` / `wasm_deps_uflags.txt` /
    `.wasm-deps-linkflags.txt` (`build-deps.sh`).
 4. The **cross-root collects/etc/share** for the preloads
@@ -1209,7 +1216,19 @@ below).
        substitution var, set `t` by an `*emscripten*` `host_os` case.
        Lets `cs/c/build.zuo` recognize a WASM target and skip the native
        `racketcs`/`gracketcs`/`embed-boot` steps, stopping at the boot
-       images. No effect off emscripten.
+       images. The same case presets `ac_cv_sizeof_void_p=4` (wasm32 /
+       tpb32l are 32-bit), since the cross sizeof bisection can't run a
+       wasm test binary and otherwise computes 0 ("Something has gone
+       wrong getting the pointer size"). No effect off emscripten.
+     - `ac/libffi.m4` (and the generated `cs/c/configure`): skip the
+       libffi `AC_TRY_LINK` when `EMSCRIPTEN=t` and treat libffi as
+       present. The link test can't run in a wasm cross environment, and
+       libffi is provided out-of-band (`wasm-shell/build-deps.sh` builds
+       it; it is linked at the emcc step). Without this, `--enable-pb`
+       (needed for `SCHEME_LIBFFI=yes`) fails configure with "unable to
+       link to libffi". No effect off emscripten. (The kernel compile
+       still needs `ffi.h` on `CPPFLAGS` -- point it at the wasm libffi
+       `install/include`, as `build-em-kernel.sh` does.)
 
    Branch-local build machinery (probably stays on the branch, not
    upstreamed): the `CONFIGURE_WRAPPER` knob (top-level `Makefile`,
