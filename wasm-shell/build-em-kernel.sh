@@ -12,10 +12,9 @@
 #   1. build the WASM libffi (deps/libffi.sh) -- §5's configure links
 #      against it, and build.sh's own dep loop runs too late (after its
 #      libkernel.a prereq check) to satisfy that.
-#   2. ./configure --emscripten ... --workarea=em-tpb32l
-#   3. rewrite Mf-config's mdlinkflags (libffi wasm closures need the
-#      extra emcc link flags; the stock line omits them).
-#   4. bin/zuo em-tpb32l kernel  -> libkernel.a
+#   2. ./configure --emscripten ... --workarea=em-tpb32l (the `em)`
+#      mdlinkflags case already emits the libffi-closure link flags)
+#   3. bin/zuo em-tpb32l kernel  -> libkernel.a
 #
 # Depends on §4 (build-cs-tpb32l/racket.boot) and §3 (bin/zuo). Run
 # from anywhere; paths resolve from this script's location.
@@ -74,21 +73,12 @@ else
   echo "[skip] configure (em-tpb32l/Mf-config exists)"
 fi
 
-# ---- 3. patch Mf-config's mdlinkflags (idempotent) -------------------
-# libffi's wasm closures need addFunction/removeFunction + table growth;
-# the stock mdlinkflags line doesn't export them.
-mdlinkflags='mdlinkflags=-s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction -sALLOW_TABLE_GROWTH=1'
-if grep -q '^mdlinkflags=' em-tpb32l/Mf-config; then
-  awk -v repl="$mdlinkflags" \
-      '/^mdlinkflags=/{print repl; next} {print}' \
-      em-tpb32l/Mf-config > em-tpb32l/Mf-config.tmp
-  mv em-tpb32l/Mf-config.tmp em-tpb32l/Mf-config
-else
-  printf '%s\n' "$mdlinkflags" >> em-tpb32l/Mf-config
-fi
-echo "[mf]  mdlinkflags patched"
-
-# ---- 4. build the kernel -> libkernel.a ------------------------------
+# ---- 3. build the kernel -> libkernel.a ------------------------------
+#
+# (The mdlinkflags awk patch that used to live here is gone: the `em)`
+# case in ChezScheme/configure now emits the addFunction/removeFunction
+# exports + ALLOW_TABLE_GROWTH that libffi's wasm closures need. See
+# build-wasm.md's upstream-patches list.)
 libkernel=em-tpb32l/boot/tpb32l/libkernel.a
 if [ ! -e "$libkernel" ]; then
   echo "[mk]  $libkernel (bin/zuo em-tpb32l kernel)"

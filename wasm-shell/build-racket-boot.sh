@@ -5,10 +5,13 @@
 #
 # Host machine type is the native host (so it can run the compiler);
 # target machine type is tpb32l (so racket.boot matches what Chez
-# Emscripten loads). configure can't express that split when
-# --enable-pb --enable-mach=tpb32l are given together (it sets
-# MACH=tpb32l and tries to use a tpb32l host scheme), so we configure
-# normally and then rewrite MACH in the generated Makefile.
+# Emscripten loads). `cs/c/configure --enable-pb --enable-target=tpb32l`
+# now expresses that split directly: it auto-detects the host MACH and
+# keeps TARGET_MACH/KERNEL_TARGET_MACH at the requested pb machine. (It
+# used to clobber an explicit pb target with the host-derived pb name,
+# so this script passed --enable-mach=tpb32l and sed-rewrote MACH back
+# to the host; that workaround is gone now that configure honors the
+# explicit target -- see build-wasm.md's upstream-patches list.)
 #
 # Produces in racket/src/build-cs-tpb32l/:
 #   racket.boot (~4.3 MB)
@@ -52,16 +55,14 @@ mkdir -p "$build"
 cd "$build"
 
 echo "[cfg] build-cs-tpb32l"
+# `--enable-target=tpb32l` (a pb machine) now cross-builds cleanly: the
+# host MACH is auto-detected and TARGET_MACH/KERNEL_TARGET_MACH stay
+# tpb32l. This used to require `--enable-mach=tpb32l` plus a post-hoc
+# `sed` to put MACH back to the host; cs/c/configure now honors an
+# explicit pb `--enable-target` (see build-wasm.md upstream-patches).
 CPPFLAGS="${XCODE_FFI:+-I$XCODE_FFI}" ../cs/c/configure \
-  --enable-pb --enable-mach=tpb32l --enable-target=tpb32l \
+  --enable-pb --enable-target=tpb32l \
   --enable-scheme="$PWD/../build/cs/c"
-
-# Force cross-build: host is the native machine, target stays tpb32l.
-host_scheme="$(ls "$src"/build/cs/c/ChezScheme/t*/bin/t*/scheme 2>/dev/null | head -n1 || true)"
-[ -n "$host_scheme" ] || { echo "no native host Chez; run \`make cs\`" >&2; exit 1; }
-host_mach="$(basename "$(dirname "$host_scheme")")"
-echo "[mach] MACH = tpb32l -> $host_mach (host)"
-sed -i.bak "s/^MACH = tpb32l/MACH = $host_mach/" Makefile
 
 # Make the cross-compile xpatch visible where build.zuo looks for it.
 echo "[cp]  xpatch -> ChezScheme/xc-tpb32l/s/"

@@ -841,6 +841,18 @@
     (build-one "racket/src/cs/main.zuo" "schemified"))
 
   ;; ------------------------------------------------------------
+  ;; WebAssembly (Emscripten) build -- orchestrated by
+  ;; wasm-shell/build.zuo. See build-wasm.md.
+
+  (define (wasm token)
+    (define src (at-source "wasm-shell/build.zuo"))
+    (define t (find-target "wasm"
+                           ((dynamic-require src 'targets-at)
+                            (make-at-dir (path-only src))
+                            vars)))
+    (build (command-target->target t '()) token))
+
+  ;; ------------------------------------------------------------
   ;; Targets
 
   (define the-targets
@@ -871,6 +883,8 @@
        [:target pb-build () ,(lambda (token) (pb-manage 'build))]
        [:target pb-stage () ,(lambda (token) (pb-manage 'stage))]
        [:target pb-push () ,(lambda (token) (pb-manage 'push))]
+
+       [:target wasm () ,(lambda (token) (wasm token))]
 
        [:target pkgs-catalog () ,(lambda (token) (pkgs-catalog token (find-racket vars vm)))]
 

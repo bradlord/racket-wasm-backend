@@ -115,6 +115,26 @@ The full pipeline is six stages. All paths below are relative to the
 repository root. The work directories that get created live under
 `racket/src/` and are gitignored.
 
+### Integrated entry point: `make wasm`
+
+The whole pipeline is wired into the build system as a target:
+
+```sh
+make wasm
+```
+
+`make wasm` bounces through `main.zuo`'s `wasm` target to
+`wasm-shell/build.zuo`, which checks prerequisites and runs the per-stage
+scripts below in order. It assumes a prior native `make cs`, an active
+emsdk, and a one-time `wasm-shell/build-deps.sh` (the recipe-driven
+library deps stay a manual prerequisite for now -- `make wasm` checks for
+their output and fails with guidance if absent). Individual stages are
+also targets, e.g. `bin/zuo wasm-shell/build.zuo em-kernel`.
+
+`wasm-shell/build-all.sh` runs the same stage scripts directly and stays
+available for working outside the build system. The remainder of this
+section documents what each stage does.
+
 ### 1. Cross-compile rktio for WebAssembly
 
 Scripted as `wasm-shell/build-rktio.sh`. The manual steps:
@@ -235,11 +255,15 @@ cp xc-tpb32l/boot/tpb32l/scheme.boot boot/tpb32l/
 The Racket CS build needs to be told the host machine type is the
 existing native tarm64osx (so it can run the compiler) but the target
 machine type is tpb32l (so the produced `racket.boot` matches what
-Chez Emscripten will load). The configure script doesn't expose this
-cleanly when `--enable-pb --enable-mach=tpb32l` are passed together —
-it sets `MACH = tpb32l` and tries to use a tpb32l host scheme. The
-workaround is to configure normally and then edit `MACH` in the
-generated Makefile to be the native host:
+Chez Emscripten will load). `cs/c/configure --enable-pb
+--enable-target=tpb32l` expresses exactly that split: it auto-detects
+the native host `MACH` and keeps `TARGET_MACH`/`KERNEL_TARGET_MACH` at
+the requested pb machine. (Earlier this clobbered an explicit pb target
+with the host-derived pb name, so the build passed
+`--enable-mach=tpb32l` and then sed-rewrote `MACH` back to the host in
+the generated Makefile. `cs/c/configure` now honors the explicit pb
+target -- see the upstream-patches list -- so neither workaround is
+needed.)
 
 Scripted as `wasm-shell/build-racket-boot.sh` (depends on §3's xpatch;
 defaults `XCODE_FFI` to the macOS SDK's `ffi.h` via `xcrun`, override the
@@ -249,13 +273,11 @@ env var elsewhere). The manual steps:
 cd racket/src
 mkdir -p build-cs-tpb32l && cd build-cs-tpb32l
 CPPFLAGS="-I$XCODE_FFI" ../cs/c/configure \
-  --enable-pb --enable-mach=tpb32l --enable-target=tpb32l \
+  --enable-pb --enable-target=tpb32l \
   # --disable-pbchunk \
   --enable-scheme=$PWD/../build/cs/c
 # (Adjust XCODE_FFI / CPPFLAGS for your platform's libffi headers.)
-
-# Force cross-build: host is native, target is tpb32l.
-sed -i.bak 's/^MACH = tpb32l/MACH = tarm64osx/' Makefile
+# Yields MACH=<native host>, TARGET_MACH=tpb32l -- no Makefile sed.
 
 # Make the cross-compile xpatch visible where build.zuo looks for it:
 mkdir -p ChezScheme/xc-tpb32l/s
@@ -323,12 +345,10 @@ LDFLAGS="-L$PWD/../build-libffi-em/install/lib" \
             --workarea=em-tpb32l \
             --emboot=$PWD/../build-cs-tpb32l/racket.boot
 
-# libffi's wasm closures need a few extra link flags. Edit
-# em-tpb32l/Mf-config and replace the mdlinkflags line with:
-#   mdlinkflags=-s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
-#       -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset \
-#       -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction \
-#       -sALLOW_TABLE_GROWTH=1
+# The `em)` mdlinkflags case in ChezScheme/configure already emits the
+# libffi-closure flags (addFunction/removeFunction exports +
+# -sALLOW_TABLE_GROWTH=1), so Mf-config needs no post-configure edit.
+# (This used to be an awk patch here; see the upstream-patches list.)
 ```
 
 Then build the rktio-init object and the kernel with `CUSTOM_INIT`:
@@ -1045,7 +1065,7 @@ below).
    instead of re-expanding `.rkt` source per session, which would
    meaningfully cut warm-load time.
 
-7. **Upstream the patches against Chez/rktio/cs.** Six files
+7. **Upstream the patches against Chez/rktio/cs.** Eight files
    modified in master, all clean conditional additions that are
    behavior-preserving on every other platform:
      - `ChezScheme/c/ffi.c`, `ChezScheme/s/prims.ss`: libffi
@@ -1058,6 +1078,17 @@ below).
        `#include` block inside `init_foreign` that lets a build
        inject extra `Sforeign_symbol` registrations alongside
        rktio's. No behavior change unless the macro is defined.
+     - `cs/c/configure`: honor an explicit pb `--enable-target`
+       (e.g. `--enable-target=tpb32l`) instead of overwriting
+       `TARGET_MACH` with the host-derived `pb_machine_name`. Only
+       changes behavior when `--enable-target` names a `pb`/`tpb`
+       machine; lets the WASM build drop `--enable-mach=tpb32l` and
+       the `sed 's/^MACH = tpb32l/.../' Makefile` workaround.
+     - `ChezScheme/configure`: the `em)` `mdlinkflags` case now emits
+       the `addFunction`/`removeFunction` exports and
+       `-sALLOW_TABLE_GROWTH=1` that libffi's wasm closures need, so
+       the WASM kernel build no longer has to awk-patch `mdlinkflags`
+       in `Mf-config` after configure. Only affects emscripten builds.
    Send them upstream so this branch stops drifting from master.
 
 ### Lower priority

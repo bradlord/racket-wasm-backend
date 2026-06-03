@@ -6102,6 +6102,18 @@ if test "${enable_pb}" = "yes" ; then
   enable_libffi=yes
   enable_foreign=yes
   SCHEME_LIBFFI=yes
+  # If the cross target was given explicitly as a pb machine
+  # (e.g. `--enable-target=tpb32l`), honor it instead of the
+  # host-derived `pb_machine_name`. Without this, an explicit pb
+  # target with a different word size than the host (tpb32l on a
+  # 64-bit host) is silently overwritten by the assignment below --
+  # the reason the WASM build previously passed `--enable-mach=tpb32l`
+  # and then sed-rewrote `MACH` back to the host in the Makefile.
+  case "${enable_target}" in
+    pb* | tpb* )
+      pb_machine_name="${enable_target}"
+      ;;
+  esac
   TARGET_MACH=${pb_machine_name}
   if test "${CROSS_MODE}" != "cross" ; then
     MACH=${pb_machine_name}
