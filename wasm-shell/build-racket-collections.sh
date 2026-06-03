@@ -19,5 +19,5 @@ ROOT_DIR="$PWD/.."
 # Build the collections.
 ./raco-cross setup --no-docs
 
-# Install packages
-./raco-cross pkg install --auto --scope installation --no-docs draw-lib
+# Install packages. Raco pkg install exits with a non-zero code if the package is already installed, so ignore failures.
+./raco-cross pkg install --auto --scope installation --no-docs draw-lib || true
