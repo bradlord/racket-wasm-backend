@@ -44,10 +44,18 @@
   ;; (`bin/zuo wasm-shell/build.zuo em-kernel`); `wasm` runs the lot in
   ;; order. The scripts are idempotent and self-source emsdk_env.sh, so
   ;; the ordering here is just the build-wasm.md stage sequence.
+  ;;
+  ;; The collections stage is the only one that needs a full Racket; it
+  ;; uses $RACKET from the environment (defaulting to racket/bin/racket).
+  ;; `make wasm RACKET=/path` reaches it for free: GNU make exports
+  ;; command-line variable assignments into every recipe's environment,
+  ;; which `shell/wait` then inherits -- so no special threading here.
+
   (make-targets
    `([:target wasm ()
               ,(lambda (token . args)
                  (check-deps)
+                 (run-script "host Chez (build if missing)" "build-chez-host.sh")
                  (run-script "rktio (cross-compile librktio.a)" "build-rktio.sh")
                  (run-script "tpb32l boot + xpatch" "build-tpb32l-boot.sh")
                  (run-script "racket.boot (cross-build for tpb32l)" "build-racket-boot.sh")
@@ -58,6 +66,7 @@
               :command]
 
      [:target check-deps () ,(lambda (token) (check-deps))]
+     [:target chez-host () ,(lambda (token) (run-script "host Chez (build if missing)" "build-chez-host.sh"))]
      [:target rktio () ,(lambda (token) (run-script "rktio" "build-rktio.sh"))]
      [:target tpb32l-boot () ,(lambda (token) (run-script "tpb32l boot + xpatch" "build-tpb32l-boot.sh"))]
      [:target racket-boot () ,(lambda (token) (run-script "racket.boot" "build-racket-boot.sh"))]

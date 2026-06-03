@@ -91,6 +91,8 @@
   (define host-machine (find-host-machine who))
   (define candidates
     (list (build-path src-dir "build" "cs" "c" "ChezScheme" host-machine "bin" host-machine "scheme")
+          ;; standalone host Chez from wasm-shell/build-chez-host.sh
+          (build-path src-dir "ChezScheme" host-machine "bin" host-machine "scheme")
           (build-path build-dir* "ChezScheme" host-machine "bin" host-machine "scheme")
           (build-path src-dir "build-cs-pb12" "ChezScheme" host-machine "bin" host-machine "scheme")
           (build-path src-dir "build-cs-pb13" "ChezScheme" host-machine "bin" host-machine "scheme")))

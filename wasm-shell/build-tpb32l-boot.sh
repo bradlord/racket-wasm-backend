@@ -28,12 +28,16 @@ chez="$(cd "$here/../racket/src/ChezScheme" && pwd)"  # repo/racket/src/ChezSche
 src="$(cd "$here/../racket/src" && pwd)"              # repo/racket/src
 
 # Auto-detect the native threaded host machine (tarm64osx on Apple
-# silicon, ta6osx on Intel, ...). It is the t<arch> dir under the
-# Chez built by `make cs` -- never the "pb" or "boot" dirs.
-host_scheme="$(ls "$src"/build/cs/c/ChezScheme/t*/bin/t*/scheme 2>/dev/null | head -n1 || true)"
+# silicon, ta6osx on Intel, ...). Built either by `make cs` (under
+# build/cs/c/ChezScheme) or standalone by build-chez-host.sh (under
+# ChezScheme/<mach>); never the "pb" or "boot" dirs.
+# shellcheck disable=SC1091
+source "$here/host-scheme.sh"
+host_scheme="$(find_host_scheme "$src" || true)"
 if [ -z "$host_scheme" ]; then
-  echo "no native host Chez under $src/build/cs/c/ChezScheme/t*/" >&2
-  echo "run \`make cs\` from the repo root first (build-wasm.md prereqs)" >&2
+  echo "no native threaded host Chez found" >&2
+  echo "  -> run wasm-shell/build-chez-host.sh (or \`make wasm\`, which" >&2
+  echo "     bootstraps it automatically; or \`make cs\`)" >&2
   exit 1
 fi
 host_mach="$(basename "$(dirname "$host_scheme")")"

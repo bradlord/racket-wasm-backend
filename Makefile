@@ -223,9 +223,11 @@ cs: $(ZUO)
 bc: $(ZUO)
 	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
 
-# In-place WebAssembly (Emscripten) build of Racket CS. Requires a prior
-# native `make cs`, an active emsdk, and a one-time `wasm-shell/build-deps.sh`
-# run. See build-wasm.md.
+# In-place WebAssembly (Emscripten) build of Racket CS. Bootstraps the
+# native host Chez itself (no full `make cs` needed); requires an active
+# emsdk and a one-time `wasm-shell/build-deps.sh`. The collections stage
+# needs a full Racket -- it uses racket/bin/racket, or pass RACKET=<path>
+# (`make wasm RACKET=/path/to/racket`). See build-wasm.md.
 wasm: $(ZUO)
 	$(RUN_ZUO) wasm $(BUILD_VARS)
 

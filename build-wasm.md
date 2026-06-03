@@ -98,13 +98,17 @@ Open:
   then `./emsdk install latest && ./emsdk activate latest`. The scripts
   below assume `source <emsdk>/emsdk_env.sh` makes `emcc`/`emconfigure`/`emmake`
   available.
-- A working native Racket CS build of the same source tree. Run
-  `make cs` from the repository root once. This produces:
-  - `racket/bin/racket` (the host Racket used during the cross-build),
-  - `racket/src/build/cs/c/ChezScheme/tarm64osx/...` (the native Chez
-    used as the cross-compiler host),
-  - `racket/src/build/cs/c/ChezScheme/pb/...` (a host-side basic-pb
-    Chez used for bootquick).
+- A native **host Chez Scheme** (the cross-compiler host for the boot and
+  `racket.boot` stages). A full `make cs` produces one at
+  `racket/src/build/cs/c/ChezScheme/<mach>/...`, but it is no longer
+  required: `make wasm` (and `wasm-shell/build-chez-host.sh`) bootstrap a
+  native threaded Chez under `racket/src/ChezScheme/<mach>/` via the
+  committed pb boot files when none is present. See stage 0 below.
+- A **full Racket** for the cross-root collections stage (it runs
+  `raco`/`raco-cross`). This is the one piece `make wasm` does not build
+  itself: it uses `racket/bin/racket` if present, otherwise pass
+  `RACKET=<path>` (`make wasm RACKET=/path/to/racket`). A `make cs` build
+  provides `racket/bin/racket`.
 - libffi source tarball (release 3.5.x). 3.5.2 is known to work; older
   3.4.x versions use deprecated Emscripten JS-library names
   (`generateFuncType`, `uleb128Encode`) that newer emsdk renames.
@@ -125,15 +129,41 @@ make wasm
 
 `make wasm` bounces through `main.zuo`'s `wasm` target to
 `wasm-shell/build.zuo`, which checks prerequisites and runs the per-stage
-scripts below in order. It assumes a prior native `make cs`, an active
-emsdk, and a one-time `wasm-shell/build-deps.sh` (the recipe-driven
-library deps stay a manual prerequisite for now -- `make wasm` checks for
-their output and fails with guidance if absent). Individual stages are
-also targets, e.g. `bin/zuo wasm-shell/build.zuo em-kernel`.
+scripts below in order. It needs an active emsdk and a one-time
+`wasm-shell/build-deps.sh` (the recipe-driven library deps stay a manual
+prerequisite for now -- `make wasm` checks for their output and fails with
+guidance if absent). It bootstraps the native host Chez itself (stage 0),
+so a prior full `make cs` is *not* required; the collections stage uses
+`racket/bin/racket` or a `RACKET=<path>` you pass. Individual stages are
+also targets, e.g. `bin/zuo wasm-shell/build.zuo em-kernel` (or
+`chez-host`).
 
 `wasm-shell/build-all.sh` runs the same stage scripts directly and stays
 available for working outside the build system. The remainder of this
 section documents what each stage does.
+
+### 0. Build the native host Chez (only if missing)
+
+Scripted as `wasm-shell/build-chez-host.sh`. The boot and `racket.boot`
+stages run a native **threaded** host Chez as the cross-compiler. If one
+already exists -- from a prior `make cs`
+(`racket/src/build/cs/c/ChezScheme/<mach>/`) or a prior run of this script
+(`racket/src/ChezScheme/<mach>/`) -- it is reused. Otherwise it is built
+standalone, the same way the "Solo Chez Build" CI does:
+
+```sh
+cd racket/src/ChezScheme
+./configure --threads      # auto-detects the native threaded machine
+make                       # bootstraps via the committed boot/pb files
+```
+
+This works without `make fetch-pb` because the pb boot files are committed
+under `racket/src/ChezScheme/boot/pb/` and `enableFrompb=yes` is the
+configure default, so a native `./configure` arranges to "create boot
+files via pb". Threaded is required (`t<arch>`): the cross-compiler is
+generated from a threaded host so cp0 doesn't trip on `thread.sls` (see
+§3). `wasm-shell/host-scheme.sh`'s `find_host_scheme` is the shared
+detector used here and by stages 3-4.
 
 ### 1. Cross-compile rktio for WebAssembly
 
@@ -221,22 +251,24 @@ symbol list empty.
 
 The Racket `thread` layer uses `make-pthread-parameter`, so the target
 must be a **threaded** pb variant: `tpb32l`. The cross-compiler is
-generated from the native `tarm64osx` (or whatever the host machine
-type is) Chez built by `make cs`, *not* from a basic-pb host scheme —
-the latter trips Chez's cp0 optimizer with `unexpected context ...
-call current-thread/in-racket` on `thread.sls`.
+generated from the native threaded host Chez (`tarm64osx` or whatever the
+host machine type is) -- from §0, whether that came from `make cs` or
+`build-chez-host.sh` -- *not* from a basic-pb host scheme, which trips
+Chez's cp0 optimizer with `unexpected context ... call
+current-thread/in-racket` on `thread.sls`.
 
-Scripted as `wasm-shell/build-tpb32l-boot.sh` (auto-detects the native
-host machine type and skips the `pb-host` rebuild if present). The
-manual steps:
+Scripted as `wasm-shell/build-tpb32l-boot.sh` (locates the host Chez via
+`host-scheme.sh`'s `find_host_scheme` and skips the `pb-host` rebuild if
+present). The manual steps:
 
 ```sh
 cd racket/src/ChezScheme
 # A native basic-pb host workarea, needed only to invoke bootquick:
 ./configure --pb --workarea=pb-host && make
-# Cross-build pb32l boot files and the xpatch using tarm64osx as host:
+# Cross-build pb32l boot files and the xpatch using the native threaded
+# host scheme (from §0; path as detected by find_host_scheme):
 bin/zuo pb-host bootquick \
-  --host-scheme ../build/cs/c/ChezScheme/tarm64osx/bin/tarm64osx/scheme \
+  --host-scheme <native-threaded-scheme> \
   tpb32l
 ```
 
@@ -275,9 +307,12 @@ mkdir -p build-cs-tpb32l && cd build-cs-tpb32l
 CPPFLAGS="-I$XCODE_FFI" ../cs/c/configure \
   --enable-pb --enable-target=tpb32l \
   # --disable-pbchunk \
-  --enable-scheme=$PWD/../build/cs/c
+  --enable-scheme=<native-threaded-scheme>   # the §0 host Chez executable
 # (Adjust XCODE_FFI / CPPFLAGS for your platform's libffi headers.)
 # Yields MACH=<native host>, TARGET_MACH=tpb32l -- no Makefile sed.
+# `--enable-scheme=<exe>` (configure's SCHEME= cross path) works for a
+# host Chez in either layout; build-racket-boot.sh passes the path that
+# find_host_scheme returns.
 
 # Make the cross-compile xpatch visible where build.zuo looks for it:
 mkdir -p ChezScheme/xc-tpb32l/s

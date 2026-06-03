@@ -32,6 +32,18 @@ chez="$(cd "$here/../racket/src/ChezScheme" && pwd)"  # repo/racket/src/ChezSche
 src="$(cd "$here/../racket/src" && pwd)"              # repo/racket/src
 build="$src/build-cs-tpb32l"
 
+# Native threaded host Chez that runs the cross-compiler. Built by
+# `make cs` or standalone by build-chez-host.sh.
+# shellcheck disable=SC1091
+source "$here/host-scheme.sh"
+host_scheme="$(find_host_scheme "$src" || true)"
+if [ -z "$host_scheme" ]; then
+  echo "no native threaded host Chez found" >&2
+  echo "  -> run wasm-shell/build-chez-host.sh (or \`make wasm\`)" >&2
+  exit 1
+fi
+echo "[host] $host_scheme"
+
 xpatch="$chez/xc-tpb32l/s/xpatch"
 if [ ! -e "$xpatch" ]; then
   echo "missing $xpatch" >&2
@@ -60,9 +72,14 @@ echo "[cfg] build-cs-tpb32l"
 # tpb32l. This used to require `--enable-mach=tpb32l` plus a post-hoc
 # `sed` to put MACH back to the host; cs/c/configure now honors an
 # explicit pb `--enable-target` (see build-wasm.md upstream-patches).
+#
+# `--enable-scheme=<exe>` points at the detected host Chez executable
+# directly (configure's SCHEME= cross path), so this works whether the
+# host came from `make cs` (build/cs/c/ChezScheme) or build-chez-host.sh
+# (ChezScheme/<mach>), rather than assuming the build/cs/c layout.
 CPPFLAGS="${XCODE_FFI:+-I$XCODE_FFI}" ../cs/c/configure \
   --enable-pb --enable-target=tpb32l \
-  --enable-scheme="$PWD/../build/cs/c"
+  --enable-scheme="$host_scheme"
 
 # Make the cross-compile xpatch visible where build.zuo looks for it.
 echo "[cp]  xpatch -> ChezScheme/xc-tpb32l/s/"
