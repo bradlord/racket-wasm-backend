@@ -146,9 +146,10 @@ libffi check, so either error means the wrong configure is running.
 
 ### 2. Optional libraries (libffi, future Cairo/Pango/etc.)
 
-Optional cross-compiled libraries are built by `build.sh` itself
-through a recipe system rooted at
-`wasm-shell/deps/`. Each `deps/<name>.sh` is a
+Optional cross-compiled libraries are built by their own stage,
+`wasm-shell/build-deps.sh` (run by `build-all.sh` ahead of the
+boot/kernel stages, since the deps are independent of them), through a
+recipe system rooted at `wasm-shell/deps/`. Each `deps/<name>.sh` is a
 shell file that sets a handful of `DEP_*` variables (source URL +
 sha256, configure args, archive name, link flags, optional list of C
 symbols to register with `Sforeign_symbol`); `deps.sh` provides the
@@ -160,8 +161,13 @@ builds in `racket/src/build-<name>-em/` (the same layout the old
 manual step used, so existing instructions in §5 still point at the
 right paths).
 
+`build-deps.sh` also writes the resolved `-L`/`-l` flags, in final link
+order, to `<boot>/.wasm-deps-linkflags.txt`; the later `build.sh` link
+stage reads that file (plus `wasm_deps_uflags.txt`) rather than
+re-running the recipe loop, so the two scripts share no in-memory state.
+
 The driver picks up new deps from a `DEPS=(...)` list near the top of
-`build.sh`. Recipe schema in brief:
+`build-deps.sh`. Recipe schema in brief:
 
 ```sh
 DEP_NAME=libffi
@@ -303,8 +309,9 @@ The Chez Emscripten workarea has to be configured once before the
 script can be used. The setup half below -- build the WASM libffi,
 configure the workarea, patch `mdlinkflags`, and build `libkernel.a` --
 is scripted as `wasm-shell/build-em-kernel.sh` (it builds libffi itself
-because `build.sh`'s dep loop runs after its `libkernel.a` prereq check,
-too late to satisfy `configure --enable-libffi`). The manual steps:
+so `configure --enable-libffi` is satisfied even when this stage is run
+on its own, independently of the `build-deps.sh` recipe loop). The
+manual steps:
 
 ```sh
 cd racket/src/ChezScheme
