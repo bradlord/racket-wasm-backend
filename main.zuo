@@ -317,6 +317,8 @@
        ;; Install PKGS into share/pkgs (sources) before the cross setup,
        ;; so `wasm-setup`'s `raco setup` compiles them for tpb32l too.
        (build/dep (find-target build-config.rktd the-targets) token)
+       ;; Run raco setup so raco pkg commands are available
+       (setup (find-racket vm))
        (install-base-pkgs token (find-racket vm))
        (build (find-target "wasm-setup" targets) #f (build-options))
        (build (find-target "wasm" targets) #f (build-options))]
