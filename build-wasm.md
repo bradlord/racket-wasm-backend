@@ -136,9 +136,26 @@ make wasm SCHEME=<native-threaded-host-scheme> RACKET=<host-racket>
 + cross-build the tpb32l kernel, rktio, boot images, pbchunk), then runs
 `wasm-setup` (cross `raco pkg install` + `raco setup`, compiling
 collections to `compiled/tpb32l`), and finishes at the `wasm` emcc-link
-target in `racket/src/cs/c/build.zuo`. The result is
-`racket/src/build/cs/c/wasm/scheme.{js,wasm,data}`, with the target
-`.zo` packaged in.
+target in `racket/src/cs/c/build.zuo`.
+
+That link target emits **both** runtime surfaces into
+`racket/src/build/cs/c/wasm/`, with the target `.zo` packaged in:
+
+- the **node** REPL -- `scheme.{js,wasm,data}` (run with
+  `echo '(+ 1 2)' | node scheme.js`); and
+- the **browser** runtime -- `scheme-web.{js,wasm,data}` (adds the
+  browser-only `wasm_shell_io.o`, the SAB/DOM exports, IDBFS, and the
+  `idbfs-init.js`/`shell-tty.js` glue), plus the page assets copied next
+  to it: `browser-shell.html`/`.js` (the REPL surface),
+  `playground.html`/`.js` (the playground), `shell-worker.js`, and
+  `serve.py`. Serve them with `python3 serve.py 8123` (it sets the
+  COOP/COEP headers `SharedArrayBuffer` needs) and open
+  `browser-shell.html` or `playground.html`.
+
+The browser-link flags mirror `wasm-shell/build.sh`'s `link_browser`,
+and the staged page-asset list mirrors
+`racket/src/ChezScheme/install-wasm-browser-shell.rkt` (the legacy
+`build.sh` path uses that script); keep the two in sync.
 
 `wasm-setup` (a `cs/c/build.zuo` target) assembles the cross-compiler
 xpatch (`compile-xpatch.tpb32l`/`library-xpatch.tpb32l`, via the shared
