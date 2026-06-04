@@ -18,10 +18,9 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$here"
-chez="$(cd "$here/racket/src/ChezScheme" && pwd)"
+repo="$(cd "$here/.." && pwd)"
 
-scheme_js="$chez/em-tpb32l/bin/tpb32l/scheme.js"
+scheme_js="$repo/racket/src/build/cs/c/wasm/scheme.js"
 tests_dir="$repo/pkgs/racket-test-core/tests/racket"
 
 [ -f "$scheme_js" ]                      || { echo "scheme.js not built: $scheme_js" >&2; exit 1; }

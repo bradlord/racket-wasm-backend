@@ -14,7 +14,7 @@
 ;;     allocation, paint, primitives, surface_get_data.
 ;;
 ;; Run from the build dir:
-;;   cd racket/src/ChezScheme/em-tpb32l/bin/tpb32l
+;;   cd racket/src/build/cs/c/wasm
 ;;   node scheme.js -u .../draw-stack-test.rkt
 ;;
 ;; (Pipe via stdin if you don't have file access into MEMFS yet:

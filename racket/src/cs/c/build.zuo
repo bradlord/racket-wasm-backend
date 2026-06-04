@@ -960,9 +960,9 @@
                    ;; The browser (`scheme-web.*`) link: drives stdin/stdout and
                    ;; the DOM over SharedArrayBuffers from a worker, with IDBFS
                    ;; persistence. Adds wasm_shell_io.o, the idbfs/shell-tty JS,
-                   ;; the SAB/DOM exports, and FORCE_FILESYSTEM + idbfs.js. Keep
-                   ;; the EXPORTED_FUNCTIONS list in sync with the browser link
-                   ;; in wasm-shell/build.sh (link_browser).
+                   ;; the SAB/DOM exports, and FORCE_FILESYSTEM + idbfs.js. The
+                   ;; EXPORTED_FUNCTIONS list must match the addresses
+                   ;; shell-worker.js / shell-tty.js read out of the module.
                    (define browser-args
                      (append
                       (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"

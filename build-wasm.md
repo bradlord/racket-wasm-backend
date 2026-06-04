@@ -101,9 +101,9 @@ Open:
 - A native **host Chez Scheme** (the cross-compiler host for the boot and
   `racket.boot` stages). A full `make cs` produces one at
   `racket/src/build/cs/c/ChezScheme/<mach>/...`, but it is no longer
-  required: `make wasm` (and `wasm-shell/build-chez-host.sh`) bootstrap a
-  native threaded Chez under `racket/src/ChezScheme/<mach>/` via the
-  committed pb boot files when none is present. See stage 0 below.
+  required: `make wasm` bootstraps a native threaded Chez under
+  `racket/src/ChezScheme/<mach>/` via the committed pb boot files when
+  none is present. See stage 0 below.
 - A **full Racket** for the cross-root collections stage (it runs
   `raco`/`raco-cross`). This is the one piece `make wasm` does not build
   itself: it uses `racket/bin/racket` if present, otherwise pass
@@ -152,10 +152,10 @@ That link target emits **both** runtime surfaces into
   COOP/COEP headers `SharedArrayBuffer` needs) and open
   `browser-shell.html` or `playground.html`.
 
-The browser-link flags mirror `wasm-shell/build.sh`'s `link_browser`,
-and the staged page-asset list mirrors
-`racket/src/ChezScheme/install-wasm-browser-shell.rkt` (the legacy
-`build.sh` path uses that script); keep the two in sync.
+The browser-link flags live in the `wasm` target itself; the staged
+page-asset list mirrors
+`racket/src/ChezScheme/install-wasm-browser-shell.rkt` (kept around for
+re-staging assets without a relink) -- keep the two lists in sync.
 
 `wasm-setup` (a `cs/c/build.zuo` target) assembles the cross-compiler
 xpatch (`compile-xpatch.tpb32l`/`library-xpatch.tpb32l`, via the shared
@@ -171,33 +171,23 @@ Prerequisites it does **not** do for you: source the emsdk first
 as `SCHEME=<scheme>` (the cross-compiler host -- see stage 0); and pass a
 same-version host Racket as `RACKET=<racket>` (the `raco setup`
 cross-server). The native library deps (libffi always, plus `WASM_DEPS`)
-are now built automatically by the `wasm-deps` target -- see "Native
-library deps" below. This is a work in progress (see "Folding the cross
-build into the stock make" below); the older stage scripts remain the
-complete path.
+are built automatically by the `wasm-deps` target -- see "Native library
+deps" below.
 
-The legacy orchestration -- `main.zuo`'s old `wasm` target bounced to
-`wasm-shell/build.zuo`, which checks prerequisites and runs the per-stage
-scripts below, bootstrapping the host Chez itself (stage 0) -- is still
-available directly:
+`make wasm` is now the only build path. The earlier per-stage
+`wasm-shell/*.sh` scripts (and the `wasm-shell/build.zuo` orchestrator)
+have been removed; `wasm-shell/` retains only the browser runtime assets
+and glue it still serves (`browser-shell.*`, `playground.*`,
+`shell-worker.js`, `serve.py`, `idbfs-init.js`, `node-tty.js`,
+`shell-tty.js`) plus the two WASM test files (`run-tests.sh`,
+`draw-stack-test.rkt`). The stage descriptions below document what
+`make wasm` does internally, stage by stage.
 
-```sh
-bin/zuo wasm-shell/build.zuo            # full pipeline
-bin/zuo wasm-shell/build.zuo em-kernel  # an individual stage
-```
+### How the stock cross build works (configure-driven)
 
-`wasm-shell/build-all.sh` runs the same stage scripts directly and stays
-available for working outside the build system. The remainder of this
-section documents what each stage does.
-
-### Folding the cross build into the stock `make` (configure-driven, WIP)
-
-The `make wasm` path above orchestrates the separate `wasm-shell/` stage
-scripts, each with its own workarea (`ChezScheme/em-tpb32l`,
-`build-cs-tpb32l`, `build-libffi-em`, `cross-root`). A parallel effort is
-underway to make the *stock* build system (`configure` + the `cs/c`
-`build.zuo`) cross-compile the runtime directly under `build/cs/c`, so the
-`wasm-shell/` scripts can eventually be retired. What works today:
+`make wasm` drives the *stock* build system (`configure` + the `cs/c`
+`build.zuo`) to cross-compile the runtime directly under `build/cs/c`.
+The mechanism:
 
 - **`CONFIGURE_WRAPPER=emconfigure`** -- a new make/zuo variable
   (top-level `Makefile`, threaded through `main.zuo` into
@@ -244,12 +234,12 @@ underway to make the *stock* build system (`configure` + the `cs/c`
   `cd racket/src/build/cs/c && bin/zuo . build` (not `make in-place`,
   whose install/`raco setup` steps still expect a native `racketcs`).
 
-What is **not** yet folded in (still needs `wasm-shell/` or new work):
+What is **not** yet folded in (still needs new work):
 
 1. **The Chez kernel's emscripten config.** `cs/c/build.zuo`'s `scheme`
    target synthesizes an empty `Mf-config` and never runs ChezScheme's
-   `./configure --emscripten --pbarch --threads --enable-libffi` (what
-   `build-em-kernel.sh` does). The stock `libkernel.a` therefore gets
+   `./configure --emscripten --pbarch --threads --enable-libffi` (the em
+   kernel stage, §5). The stock `libkernel.a` therefore gets
    `CC=emcc` but not the emscripten cflags / pb-arch selection /
    libffi-closure `mdlinkflags`. This is the gating prerequisite for a
    real emcc link.
@@ -270,36 +260,34 @@ What is **not** yet folded in (still needs `wasm-shell/` or new work):
    in-tree: the `wasm-setup` target runs the cross `raco setup`
    (`--cross-compiler tpb32l`) so `racket/collects/**/compiled/tpb32l/`
    is populated before the link preloads `collects`. What is still not
-   folded in is the *trimmed* cross-root `collects/etc/share`
-   (`build-racket-collections.sh`) -- `make wasm` currently preloads the
+   folded in is the *trimmed* cross-root `collects/etc/share` (the
+   cross-root collections stage, §6) -- `make wasm` currently preloads the
    **full** source `collects` (now including the `compiled/tpb32l` .zo),
    which is large.
-5. The **emcc link target** -- a first cut now exists as the `wasm`
-   target in `cs/c/build.zuo`. After `bin/zuo . build`, run
-   `cd racket/src/build/cs/c && bin/zuo . wasm`; it compiles `main_em.o`
-   + `init_rktio.o` (reusing the already-built `boot.o` and pbchunk
-   objects), then emcc-links `wasm/scheme.{js,wasm,data}` against the
-   in-tree `libkernel.a`/`liblz4.a`/`librktio.a` + the hardcoded wasm
-   libffi, preloading the pbchunk boots and the source `collects`/`etc`.
-   It is the build-wasm.md §5 **node** link only. `boot.o` is now compiled
-   with `-DRACKET_EXTRA_FOREIGN_INC="wasm_extras.inc"` (so the libm +
-   recipe-dep `wasm_deps.inc` symbols register), the recipe-dep link flags
-   are spliced in (item 3, done), and the `wasm_*.c` primitives
+5. ~~The **emcc link target**~~ **(done)** -- the `wasm` target in
+   `cs/c/build.zuo` compiles `main_em.o` + `init_rktio.o` (reusing the
+   already-built `boot.o` and pbchunk objects) and emcc-links against the
+   in-tree `libkernel.a`/`liblz4.a`/`librktio.a` + the recipe-dep libffi,
+   preloading the pbchunk boots and the source `collects`/`etc`. `boot.o`
+   is compiled with `-DRACKET_EXTRA_FOREIGN_INC="wasm_extras.inc"` (so the
+   libm + recipe-dep `wasm_deps.inc` symbols register), the recipe-dep
+   link flags are spliced in (item 3), and the `wasm_*.c` primitives
    (`wasm_http`/`wasm_canvas`/`wasm_dom` entry points + `wasm_stubs`, which
    stubs the libc functions the deps reference -- `getprogname`,
    `copy_file_range`, `res_query`, `pthread_setname_np`, ...) are compiled
-   and linked. Still missing, vs `wasm-shell/build.sh`: the trimmed
+   and linked. It emits **both** the §5 **node** link
+   (`scheme.{js,wasm,data}`) and the **browser** `scheme-web.*` variant
+   with its shell JS + staged page assets. Still missing: the trimmed
    cross-root collects (item 4, so it currently preloads the full source
-   tree) and the **browser** `scheme-web.*` variant with its shell JS.
-   Whether it actually boots also depends on item 1 (the kernel's full
-   emscripten config / `mdlinkflags`).
+   tree). Whether it actually boots also depends on item 1 (the kernel's
+   full emscripten config / `mdlinkflags`).
 
 ### 0. Build the native host Chez (only if missing)
 
-Scripted as `wasm-shell/build-chez-host.sh`. The boot and `racket.boot`
+Part of `make wasm` (stage 0). The boot and `racket.boot`
 stages run a native **threaded** host Chez as the cross-compiler. If one
 already exists -- from a prior `make cs`
-(`racket/src/build/cs/c/ChezScheme/<mach>/`) or a prior run of this script
+(`racket/src/build/cs/c/ChezScheme/<mach>/`) or a prior run of this stage
 (`racket/src/ChezScheme/<mach>/`) -- it is reused. Otherwise it is built
 standalone, the same way the "Solo Chez Build" CI does:
 
@@ -314,12 +302,11 @@ under `racket/src/ChezScheme/boot/pb/` and `enableFrompb=yes` is the
 configure default, so a native `./configure` arranges to "create boot
 files via pb". Threaded is required (`t<arch>`): the cross-compiler is
 generated from a threaded host so cp0 doesn't trip on `thread.sls` (see
-§3). `wasm-shell/host-scheme.sh`'s `find_host_scheme` is the shared
-detector used here and by stages 3-4.
+§3). The same host-Chez detector is shared here and by stages 3-4.
 
 ### 1. Cross-compile rktio for WebAssembly
 
-Scripted as `wasm-shell/build-rktio.sh`. The manual steps:
+`make wasm` stage 1. The equivalent manual steps:
 
 ```sh
 cd racket/src/rktio
@@ -388,9 +375,9 @@ points at `build/cs/c/wasm-deps/`. The `boot.o` compile and the `wasm`
 link read those files back rather than re-running the recipe loop. The
 driver is incremental (per-dep state cache), so re-running is cheap.
 
-(The legacy `wasm-shell/build-all.sh` orchestration invoked the same
-machinery as a standalone `build-deps.sh` stage; the recipes were moved
-under `cs/c/wasm-deps/` when the build was folded into `make`.)
+(The recipes live under `cs/c/wasm-deps/`; the `wasm-deps` target runs
+them automatically before the kernel build, since `ffi.c` needs libffi's
+headers.)
 
 Recipe schema in brief:
 
@@ -427,14 +414,13 @@ symbol list empty.
 The Racket `thread` layer uses `make-pthread-parameter`, so the target
 must be a **threaded** pb variant: `tpb32l`. The cross-compiler is
 generated from the native threaded host Chez (`tarm64osx` or whatever the
-host machine type is) -- from §0, whether that came from `make cs` or
-`build-chez-host.sh` -- *not* from a basic-pb host scheme, which trips
+host machine type is) -- from §0, whether that came from `make cs` or the
+stage-0 bootstrap -- *not* from a basic-pb host scheme, which trips
 Chez's cp0 optimizer with `unexpected context ... call
 current-thread/in-racket` on `thread.sls`.
 
-Scripted as `wasm-shell/build-tpb32l-boot.sh` (locates the host Chez via
-`host-scheme.sh`'s `find_host_scheme` and skips the `pb-host` rebuild if
-present). The manual steps:
+`make wasm` stage 3 (locates the host Chez and skips the `pb-host`
+rebuild if present). The equivalent manual steps:
 
 ```sh
 cd racket/src/ChezScheme
@@ -472,9 +458,9 @@ the generated Makefile. `cs/c/configure` now honors the explicit pb
 target -- see the upstream-patches list -- so neither workaround is
 needed.)
 
-Scripted as `wasm-shell/build-racket-boot.sh` (depends on §3's xpatch;
-defaults `XCODE_FFI` to the macOS SDK's `ffi.h` via `xcrun`, override the
-env var elsewhere). The manual steps:
+`make wasm` stage 4 (depends on §3's xpatch; defaults `XCODE_FFI` to the
+macOS SDK's `ffi.h` via `xcrun`, override the env var elsewhere). The
+equivalent manual steps:
 
 ```sh
 cd racket/src
@@ -486,8 +472,7 @@ CPPFLAGS="-I$XCODE_FFI" ../cs/c/configure \
 # (Adjust XCODE_FFI / CPPFLAGS for your platform's libffi headers.)
 # Yields MACH=<native host>, TARGET_MACH=tpb32l -- no Makefile sed.
 # `--enable-scheme=<exe>` (configure's SCHEME= cross path) works for a
-# host Chez in either layout; build-racket-boot.sh passes the path that
-# find_host_scheme returns.
+# host Chez in either layout; stage 4 passes the detected host path.
 
 # Make the cross-compile xpatch visible where build.zuo looks for it:
 mkdir -p ChezScheme/xc-tpb32l/s
@@ -523,27 +508,19 @@ stops cleanly before that step.)
 ### 5. Build Chez Emscripten for tpb32l with libffi and the rktio link
 
 Once everything above (rktio, libffi, host pb, `racket.boot`) exists, the
-whole compile-and-link of the WASM runtime is automated by
+whole compile-and-link of the WASM runtime is performed by `make wasm`'s
+final stages: the `wasm` target (re)compiles `main_em.o`, `boot.o`,
+`init_rktio.o`, and (on first run) the 30 pbchunk objects, then links
+**both** `scheme.{js,wasm,data}` (node) and `scheme-web.{js,wasm,data}`
+(browser) and stages the page assets. The rest of this section explains
+what that stage runs and why, so the recipe can be reproduced or modified
+by hand.
 
-```sh
-wasm-shell/build.sh           # node + browser
-wasm-shell/build.sh node      # node only
-wasm-shell/build.sh browser   # browser only
-```
-
-The script (re)compiles `main_em.o`, `boot.o`, `init_rktio.o`, and (on
-first run) the 30 pbchunk objects, then links `scheme.{js,wasm,data}`
-and/or `scheme-web.{js,wasm,data}` and installs the page assets. It is
-the supported entry point — the rest of this section explains what it
-runs and why, so the recipe can be reproduced or modified by hand.
-
-The Chez Emscripten workarea has to be configured once before the
-script can be used. The setup half below -- build the WASM libffi,
-configure the workarea, patch `mdlinkflags`, and build `libkernel.a` --
-is scripted as `wasm-shell/build-em-kernel.sh` (it builds libffi itself
-so `configure --enable-libffi` is satisfied even when this stage is run
-on its own, independently of the `build-deps.sh` recipe loop). The
-manual steps:
+The Chez Emscripten workarea has to be configured once before the kernel
+can be linked. The setup half below -- build the WASM libffi, configure
+the workarea, patch `mdlinkflags`, and build `libkernel.a` -- is the em
+kernel stage (it builds libffi so `configure --enable-libffi` is
+satisfied). The manual steps:
 
 ```sh
 cd racket/src/ChezScheme
@@ -763,15 +740,11 @@ pthreads of its own):
   polls the output ring each animation frame and writes typed lines
   into the input ring followed by `Atomics.notify`.
 
-Build the browser runtime via the same script as the node one (it
-adds `wasm_shell_io.o`, the `--post-js shell-tty.js`, and the ring
-exports, and installs the page assets):
-
-```sh
-wasm-shell/build.sh browser
-```
-
-The underlying link is:
+`make wasm`'s `wasm` target builds the browser runtime alongside the
+node one (it adds `wasm_shell_io.o`, the `--post-js shell-tty.js`, and
+the ring exports, and stages the page assets). The underlying link is
+(the example paths below predate the move to `build/cs/c/wasm/`, but the
+flags are what the `wasm` target emits):
 
 ```sh
 emcc -O2 -pthread -s USE_ZLIB=1 \

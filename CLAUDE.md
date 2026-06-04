@@ -54,12 +54,16 @@ otherwise.
   commands assume relative paths from here.
 - Branch: `wasm-backend`. Commits stay on this branch; nothing has
   been upstreamed yet.
-- Build entry point: `wasm-shell/build.sh`.
-  See `build-wasm.md` §5 for the prerequisites (rktio, libffi,
-  tpb32l boot, Chez Emscripten workarea) and the recipe-driven dep
-  builds.
+- Build entry point: `make wasm SCHEME=<host-scheme> RACKET=<host-racket>`
+  (emsdk sourced first). This runs the stock build system end to end and
+  emits both runtime surfaces into `racket/src/build/cs/c/wasm/`:
+  `scheme.{js,wasm,data}` (node) and `scheme-web.{js,wasm,data}` plus the
+  playground/REPL page assets. See `build-wasm.md` for the stage
+  breakdown and prerequisites. (The legacy per-stage `wasm-shell/*.sh`
+  scripts have been removed; `wasm-shell/` now holds only the browser
+  runtime assets/glue and the two test files.)
 - The browser shell needs COOP/COEP headers for `SharedArrayBuffer`.
-  Serve via `racket/src/ChezScheme/em-tpb32l/bin/tpb32l/serve.py`.
+  Serve via `racket/src/build/cs/c/wasm/serve.py`.
 
 ## What this tree is *not*
 

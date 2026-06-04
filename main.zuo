@@ -895,10 +895,10 @@
   ;; WebAssembly (Emscripten) build -- configure + cross-build the CS
   ;; runtime for tpb32l and emcc-link it, all through the stock build
   ;; system (the `wasm` target in racket/src/cs/c/build.zuo). See
-  ;; build-wasm.md. Pass SCHEME=<native-threaded-host-scheme> and make
-  ;; sure the emsdk is sourced and the wasm libffi prereq is built
-  ;; (wasm-shell/build-deps.sh). The legacy wasm-shell/build.zuo
-  ;; orchestration is still available via `bin/zuo wasm-shell/build.zuo`.
+  ;; build-wasm.md. Pass SCHEME=<native-threaded-host-scheme> and
+  ;; RACKET=<host-racket>, and make sure the emsdk is sourced. The native
+  ;; library deps (libffi + any WASM_DEPS) are built automatically by the
+  ;; `wasm-deps` target in racket/src/cs/c/build.zuo.
 
   (define (wasm token)
     (build-base "cs/c" token (hash 'wasm? #t)))
