@@ -31,8 +31,9 @@ if test "${enable_libffi}" = "yes" ; then
   LIBS="${LIBS} ${libffi_config_libs}"
   if test "${EMSCRIPTEN}" = "t" ; then
     # Cross-compiling for WebAssembly: an AC_TRY_LINK can't run, and
-    # libffi is provided out-of-band (wasm-shell/build-deps.sh builds it;
-    # it is linked at the emcc step). Assume it is available, but drop
+    # libffi is provided out-of-band (the `wasm-deps` build target,
+    # cs/c/wasm-deps/build-deps.sh, builds it; it is linked at the emcc
+    # step). Assume it is available, but drop
     # -lffi from LIBS: there is no wasm libffi for configure's own test
     # links, and leaving it in breaks the rktio sub-configure's
     # "C compiler works" check (wasm-ld: unable to find library -lffi).

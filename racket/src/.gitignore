@@ -3,7 +3,7 @@
 
 # WASM port (see ../../build-wasm.md): build workareas for cross-building
 # pb32l/tpb32l Racket-CS layers, optional cross-compiled deps (libffi
-# today; future Cairo/Pango/etc. driven by wasm-shell/deps/), and any
+# plus the Cairo/Pango/etc. stack, driven by cs/c/wasm-deps/deps/), and any
 # build-cs-* attempts at different machine-type configurations. Tarball
 # downloads cache in .wasm-cache/.
 /build-cs-*/
