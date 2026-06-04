@@ -150,14 +150,14 @@ version as the tree** being built, since it loads the version-stamped
 xpatch.
 
 Prerequisites it does **not** do for you: source the emsdk first
-(`emconfigure`/`emcc` on `PATH`); build the wasm libffi once
-(`wasm-shell/build-deps.sh`, currently hardcoded at
-`racket/src/build-libffi-em/install`); pass a native threaded host Chez
+(`emconfigure`/`emcc` on `PATH`); pass a native threaded host Chez
 as `SCHEME=<scheme>` (the cross-compiler host -- see stage 0); and pass a
 same-version host Racket as `RACKET=<racket>` (the `raco setup`
-cross-server). This is a work in progress (see "Folding the cross build
-into the stock make" below); the older stage scripts remain the complete
-path.
+cross-server). The native library deps (libffi always, plus `WASM_DEPS`)
+are now built automatically by the `wasm-deps` target -- see "Native
+library deps" below. This is a work in progress (see "Folding the cross
+build into the stock make" below); the older stage scripts remain the
+complete path.
 
 The legacy orchestration -- `main.zuo`'s old `wasm` target bounced to
 `wasm-shell/build.zuo`, which checks prerequisites and runs the per-stage
@@ -236,16 +236,19 @@ What is **not** yet folded in (still needs `wasm-shell/` or new work):
    `CC=emcc` but not the emscripten cflags / pb-arch selection /
    libffi-closure `mdlinkflags`. This is the gating prerequisite for a
    real emcc link.
-2. WASM **libffi** (`build-libffi-em`, `deps/libffi.sh`). The Chez
-   kernel compile (`c/ffi.c`) needs `ffi.h` and the scheme-exe link
-   needs `libffi.a`; for now `cs/c/build.zuo`'s
-   `add-scheme-kernel-config` hardcodes, on emscripten,
-   `-I../../build-libffi-em/install/include` into `CPPFLAGS` and
-   `-L../../build-libffi-em/install/lib -lffi` into `LIBS` (relative to
-   the `cs/c` source). Folding the libffi build into the stock build
-   would replace those hardcodes.
-3. The **recipe deps** + `wasm_deps.inc` / `wasm_deps_uflags.txt` /
-   `.wasm-deps-linkflags.txt` (`build-deps.sh`).
+2. ~~WASM **libffi**~~ **(done)** -- libffi is now built automatically by
+   the `wasm-deps` target (see "Native library deps" below); it always
+   runs first, so `add-scheme-kernel-config`'s `-I`/`-L` into the libffi
+   install is satisfied without a separate manual step. The `-I`/`-L`
+   paths into `build-libffi-em/install` remain (the recipe builds there)
+   but are no longer a hardcode pending other work.
+3. ~~The **recipe deps**~~ **(done)** -- the recipe driver
+   (`racket/src/cs/c/wasm-deps/`) is folded in as the `wasm-deps` zuo
+   target; `WASM_DEPS="<libs>"` selects which to build (or `draw` for the
+   full cairo/pango stack), `boot.o` is compiled with
+   `-DRACKET_EXTRA_FOREIGN_INC` so `wasm_deps.inc` registrations apply,
+   and the `wasm` link splices `.wasm-deps-linkflags.txt` +
+   `wasm_deps_uflags.txt`. See "Native library deps" below.
 4. **Trimming the preloaded collects.** Target `.zo` are now produced
    in-tree: the `wasm-setup` target runs the cross `raco setup`
    (`--cross-compiler tpb32l`) so `racket/collects/**/compiled/tpb32l/`
@@ -261,14 +264,18 @@ What is **not** yet folded in (still needs `wasm-shell/` or new work):
    objects), then emcc-links `wasm/scheme.{js,wasm,data}` against the
    in-tree `libkernel.a`/`liblz4.a`/`librktio.a` + the hardcoded wasm
    libffi, preloading the pbchunk boots and the source `collects`/`etc`.
-   It is the build-wasm.md §5 **node** link only. Still missing, vs
-   `wasm-shell/build.sh`: the `wasm_*.c` primitives +
-   `-DRACKET_EXTRA_FOREIGN_INC` (so the http/canvas/dom/stubs symbols
-   register), the recipe-dep link flags (item 3), the trimmed cross-root
-   collects (item 4, so it currently preloads the full source tree), and
-   the **browser** `scheme-web.*` variant with its shell JS. Whether it
-   actually boots also depends on item 1 (the kernel's full emscripten
-   config / `mdlinkflags`).
+   It is the build-wasm.md §5 **node** link only. `boot.o` is now compiled
+   with `-DRACKET_EXTRA_FOREIGN_INC="wasm_extras.inc"` (so the libm +
+   recipe-dep `wasm_deps.inc` symbols register), the recipe-dep link flags
+   are spliced in (item 3, done), and the `wasm_*.c` primitives
+   (`wasm_http`/`wasm_canvas`/`wasm_dom` entry points + `wasm_stubs`, which
+   stubs the libc functions the deps reference -- `getprogname`,
+   `copy_file_range`, `res_query`, `pthread_setname_np`, ...) are compiled
+   and linked. Still missing, vs `wasm-shell/build.sh`: the trimmed
+   cross-root collects (item 4, so it currently preloads the full source
+   tree) and the **browser** `scheme-web.*` variant with its shell JS.
+   Whether it actually boots also depends on item 1 (the kernel's full
+   emscripten config / `mdlinkflags`).
 
 ### 0. Build the native host Chez (only if missing)
 
@@ -322,30 +329,53 @@ that then lands in `cs/c/configure`, which demands a WASM libffi rktio
 never links. rktio's configure has neither a machine-type option nor a
 libffi check, so either error means the wrong configure is running.
 
-### 2. Optional libraries (libffi, future Cairo/Pango/etc.)
+### 2. Native library deps (libffi + the Cairo/Pango stack)
 
-Optional cross-compiled libraries are built by their own stage,
-`wasm-shell/build-deps.sh` (run by `build-all.sh` ahead of the
-boot/kernel stages, since the deps are independent of them), through a
-recipe system rooted at `wasm-shell/deps/`. Each `deps/<name>.sh` is a
-shell file that sets a handful of `DEP_*` variables (source URL +
-sha256, configure args, archive name, link flags, optional list of C
-symbols to register with `Sforeign_symbol`); `deps.sh` provides the
-shared fetch / configure / `emmake` / cache logic, and `symgen.sh`
-emits `wasm_deps.inc` + `wasm_deps_uflags.txt` (`-Wl,-u` flags so
-wasm-ld retains symbols nothing else references). The first recipe is
-`deps/libffi.sh`; tarballs land in `racket/src/.wasm-cache/` and
-builds in `racket/src/build-<name>-em/` (the same layout the old
-manual step used, so existing instructions in §5 still point at the
-right paths).
+Cross-compiled native libraries are built by a recipe driver rooted at
+`racket/src/cs/c/wasm-deps/`. In the stock build this is the **`wasm-deps`
+zuo target** (`cs/c/build.zuo`), which `main.zuo` runs before the kernel
+`build` (the Chez kernel's `ffi.c` needs libffi's headers). Drive it via
+make:
 
-`build-deps.sh` also writes the resolved `-L`/`-l` flags, in final link
-order, to `<boot>/.wasm-deps-linkflags.txt`; the later `build.sh` link
-stage reads that file (plus `wasm_deps_uflags.txt`) rather than
-re-running the recipe loop, so the two scripts share no in-memory state.
+```sh
+make wasm SCHEME=... RACKET=...                 # libffi only (default)
+make wasm WASM_DEPS="draw" SCHEME=... RACKET=... # + the cairo/pango stack
+```
 
-The driver picks up new deps from a `DEPS=(...)` list near the top of
-`build-deps.sh`. Recipe schema in brief:
+`WASM_DEPS` is a space-separated list of recipe names from
+`wasm-deps/deps/`, plus the group alias **`draw`** which expands to the
+full `racket/draw` stack (`libpng pixman freetype pcre2 expat glib
+libjpeg-turbo fontconfig cairo harfbuzz pango`, in build-leaf→root order;
+fontconfig must precede cairo, harfbuzz must precede pango). **libffi is
+always built first**, regardless of `WASM_DEPS`. The make var threads
+through `main.zuo` (`build-base`'s `vars`) into `cs/c/build.zuo`'s
+`(lookup 'WASM_DEPS)`.
+
+Each `deps/<name>.sh` is a shell file that sets a handful of `DEP_*`
+variables (source URL + sha256, configure args, archive name, link
+flags, optional list of C symbols to register with `Sforeign_symbol`);
+`deps.sh` provides the shared fetch / configure / `emmake` / cache logic,
+and `symgen.sh` emits `wasm_deps.inc` (the `Sforeign_symbol`
+registrations, `#include`d by `wasm_extras.inc` when `boot.o` is compiled
+with `-DRACKET_EXTRA_FOREIGN_INC`) + `wasm_deps_uflags.txt` (`-Wl,-u`
+flags so wasm-ld retains symbols nothing else references). Tarballs land
+in `racket/src/.wasm-cache/` and builds in `racket/src/build-<name>-em/`
+(a cache *outside* `build/`, so `make clean` of the build dir doesn't
+discard them).
+
+`build-deps.sh --src <racket/src> --out <dir> --deps "<list>"` writes its
+three artifacts (`wasm_deps.inc`, `wasm_deps_uflags.txt`, and the
+resolved `-L`/`-l` flags in final link order as
+`.wasm-deps-linkflags.txt`) into `--out`, which the `wasm-deps` target
+points at `build/cs/c/wasm-deps/`. The `boot.o` compile and the `wasm`
+link read those files back rather than re-running the recipe loop. The
+driver is incremental (per-dep state cache), so re-running is cheap.
+
+(The legacy `wasm-shell/build-all.sh` orchestration invoked the same
+machinery as a standalone `build-deps.sh` stage; the recipes were moved
+under `cs/c/wasm-deps/` when the build was folded into `make`.)
+
+Recipe schema in brief:
 
 ```sh
 DEP_NAME=libffi
@@ -361,7 +391,7 @@ DEP_SYMBOLS_MODE=explicit              # or "scrape" or "none"
 DEP_SYMBOLS=(cairo_create cairo_destroy ...)
 ```
 
-Meson recipes use `wasm-shell/wasm-emscripten.cross` as their
+Meson recipes use `cs/c/wasm-deps/wasm-emscripten.cross` as their
 cross-compilation file (emcc/em++/emar wrappers; `system='emscripten'`;
 `-pthread` + `USE_ZLIB=1` propagated to all c/cpp args + link args).
 `PKG_CONFIG_PATH` is accumulated as each dep installs, so later
@@ -922,7 +952,7 @@ pango, glib, harfbuzz at the time of writing), `(require <pkg>)`
 fails at module load with `ffi-obj: could not find export from
 foreign library, name: <C-symbol>`. That error names exactly the
 missing entry point; the fix is to add a recipe for the underlying
-library and relink. `wasm-shell/deps/cairo.sh` is the template for
+library and relink. `cs/c/wasm-deps/deps/cairo.sh` is the template for
 a meson recipe with symbol scraping.
 
 A stub mechanism exists for the few cases where binding to a no-op
@@ -1274,12 +1304,24 @@ below).
      - `ac/libffi.m4` (and the generated `cs/c/configure`): skip the
        libffi `AC_TRY_LINK` when `EMSCRIPTEN=t` and treat libffi as
        present. The link test can't run in a wasm cross environment, and
-       libffi is provided out-of-band (`wasm-shell/build-deps.sh` builds
+       libffi is provided out-of-band (the `wasm-deps` target builds
        it; it is linked at the emcc step). Without this, `--enable-pb`
        (needed for `SCHEME_LIBFFI=yes`) fails configure with "unable to
        link to libffi". No effect off emscripten. (The kernel compile
-       still needs `ffi.h` on `CPPFLAGS` -- point it at the wasm libffi
-       `install/include`, as `build-em-kernel.sh` does.)
+       still needs `ffi.h` on `CPPFLAGS` -- the `wasm-deps` target builds
+       the wasm libffi and `add-scheme-kernel-config` points at its
+       `install/include`.)
+
+   **Deferred: upgrade the in-tree libffi to 3.5.x.** The `wasm-deps`
+   driver downloads and builds libffi 3.5.2 from upstream because the
+   libffi copies vendored in this repo (`racket/src/bc/foreign/libffi`,
+   and Chez's bundled copy) are 3.4.x, which uses Emscripten JS-library
+   names (`generateFuncType`, `uleb128Encode`) that newer emsdk renamed,
+   so they don't cross-build under a current emsdk. Once the vendored
+   libffi is updated to 3.5.x upstream, the `wasm-deps` libffi recipe's
+   tarball download could be dropped in favor of the in-tree source.
+   That bump belongs upstream (it affects the native BC/Chez builds too),
+   not on this branch.
 
    Branch-local build machinery (probably stays on the branch, not
    upstreamed): the `CONFIGURE_WRAPPER` knob (top-level `Makefile`,

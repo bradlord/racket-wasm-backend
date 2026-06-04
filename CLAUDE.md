@@ -33,7 +33,7 @@ from commit messages, which is slower and lossier.
 
 Concretely, update `build-wasm.md` when:
 
-- a new dep recipe lands under `wasm-shell/deps/`,
+- a new dep recipe lands under `racket/src/cs/c/wasm-deps/deps/`,
 - a new C primitive in `racket/src/cs/c/wasm_*.c` becomes
   registered for FFI access,
 - the build script gains a new stage / target / workaround,

@@ -278,7 +278,12 @@
                                       ;; Propagate the configure wrapper so the
                                       ;; rktio configure (run from cs/c/build.zuo
                                       ;; via setup-rktio) is wrapped too
-                                      'CONFIGURE_WRAPPER (lookup 'CONFIGURE_WRAPPER))
+                                      'CONFIGURE_WRAPPER (lookup 'CONFIGURE_WRAPPER)
+                                      ;; WASM native-library dep selection
+                                      ;; (consumed by cs/c/build.zuo's
+                                      ;; `wasm-deps` target). libffi is always
+                                      ;; built; this adds more (e.g. "draw").
+                                      'WASM_DEPS (lookup 'WASM_DEPS ""))
                                      ;; Propagate `RACKET` and similar if specified
                                      'RACKET (get-provided-racket)
                                      'BOOTFILE_RACKET (lookup 'BOOTFILE_RACKET)
@@ -291,6 +296,12 @@
                                                          (equal? (lookup 'CS_CROSS_SUFFIX) "-cross"))
                                                      "cross"
                                                      "")))))
+    ;; For WASM, build the native library deps (libffi always; more via
+    ;; WASM_DEPS) before the kernel: the Chez kernel's ffi.c needs
+    ;; libffi's headers, and the `wasm` link consumes the deps' symbol /
+    ;; link-flag artifacts.
+    (when wasm?
+      (build (find-target "wasm-deps" targets) #f (build-options)))
     (build (find-target "build" targets)
            #f
            (build-options))

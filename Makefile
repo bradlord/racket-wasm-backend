@@ -72,6 +72,12 @@ CONFIGURE_ARGS_qq =
 # directly.
 CONFIGURE_WRAPPER =
 
+# WebAssembly: additional native C library dependencies to build and
+# link for `make wasm` (libffi is always built). Space-separated recipe
+# names from racket/src/cs/c/wasm-deps/deps/, or the group alias `draw`
+# (the full cairo/pango stack that racket/draw needs). Empty = libffi only.
+WASM_DEPS =
+
 # ------------------------------------------------------------
 # Cross-build support
 
@@ -191,6 +197,7 @@ BUILD_VARS = MAKE=$(MAKE) \
              CONFIGURE_ARGS_qq='$(CONFIGURE_ARGS_qq)' \
              CONFIGURE_ARGS="$(CONFIGURE_ARGS)" \
              CONFIGURE_WRAPPER="$(CONFIGURE_WRAPPER)" \
+             WASM_DEPS="$(WASM_DEPS)" \
              CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
              RACKET="$(RACKET)" \
              PLAIN_RACKET="$(PLAIN_RACKET)" \
@@ -230,16 +237,19 @@ bc: $(ZUO)
 	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
 
 # WebAssembly (Emscripten) cross build of Racket CS, driven through the
-# stock build system: configure + cross-build the tpb32l CS runtime, run
-# the cross `raco setup` (compiling collections to compiled/tpb32l), and
-# emcc-link it (the `wasm-setup` + `wasm` targets in
+# stock build system: build the native deps (libffi + any WASM_DEPS),
+# configure + cross-build the tpb32l CS runtime, run the cross `raco
+# setup` (compiling collections to compiled/tpb32l), and emcc-link it
+# (the `wasm-deps` + `wasm-setup` + `wasm` targets in
 # racket/src/cs/c/build.zuo). Requires an active emsdk (source
-# emsdk_env.sh first), the wasm libffi prereq (wasm-shell/build-deps.sh),
-# a native threaded host Chez (SCHEME=<scheme>), and a host Racket of the
-# same version as the tree (RACKET=<racket>, used as the --cross-server
-# for `raco setup`): `make wasm SCHEME=/path/to/scheme RACKET=/path/to/racket`.
+# emsdk_env.sh first), a native threaded host Chez (SCHEME=<scheme>), and
+# a host Racket of the same version as the tree (RACKET=<racket>, used as
+# the --cross-server for `raco setup`):
+#   make wasm SCHEME=/path/to/scheme RACKET=/path/to/racket
+# Add the cairo/pango stack for racket/draw with WASM_DEPS="draw":
+#   make wasm WASM_DEPS="draw" SCHEME=... RACKET=...
 # Produces racket/src/build/cs/c/wasm/scheme.{js,wasm,data}. See
-# build-wasm.md. (Legacy orchestration: `bin/zuo wasm-shell/build.zuo`.)
+# build-wasm.md.
 wasm: $(ZUO)
 	$(RUN_ZUO) wasm $(BUILD_VARS)
 
