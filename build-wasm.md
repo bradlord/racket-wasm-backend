@@ -1160,14 +1160,53 @@ below).
 
 ### Capability gaps (concrete TODOs)
 
-1. **PRNG large-range corner case.** `(random N prng)` for
-   `N > 2^31` returns a value off by exactly `2^31` from the
-   reference. A 32-bit signed/unsigned interpretation specific to
-   `tpb32l` in the wide-range path of the PRNG; ordinary `random`
-   and the other ~76,000 number tests pass. Self-contained,
-   probably a one-line fix once located (look in the pb/wasm path of
-   `racket/src/cs/rumble/random.ss` or wherever the random
-   wide-range branch lives).
+1. **PRNG large-range corner case.** `(random N)` for some `N > 2^31`
+   disagrees with a native CS build. Ordinary `random` and the other
+   ~76,000 number tests pass; this is a narrow wide-range corner.
+
+   Minimal reproducer (native CS `v9.2.0.5 [cs]` is the reference):
+
+   ```
+   (random-seed 7) (random 2147483649)
+   ;; native => 845508111   wasm => 330626979
+   ```
+
+   Note it is *not* a uniform "off by exactly `2^31`" as originally
+   filed -- that holds for some inputs (a fresh
+   `make-pseudo-random-generator` + `(random 3000000000)` is off by
+   `2^31`) but not this one, and many wide-range inputs match exactly
+   (e.g. with the *default* generator `(random-seed 42)` +
+   `(random 3000000000)` agrees: both `315132820`). The set of
+   diverging inputs has not been fully mapped.
+
+   **Diagnosis (revised -- the earlier "32-bit signed/unsigned in the
+   wide path" guess was wrong).** The Chez kernel wide-range routine
+   is `pseudo-random-generator-next!` in
+   `racket/src/ChezScheme/s/5_3.ss` (~line 3237), whose `random-integer`
+   builds an `N`-wide result from 31-bit `random-int(s, ...)` foreign
+   calls plus a rejection step. Reimplementing that exact algorithm in
+   plain Racket (using `(random k)` as the `random-int` primitive) and
+   tracing it produces a *byte-identical* draw/reject sequence on
+   native and wasm, and on both it yields the **wasm** answer
+   (`330626979`), via: first attempt `low=845508111 hi=1 =>
+   maybe=2992991759 >= x => reject`, second attempt `=> 330626979`.
+
+   So wasm is faithfully executing the `5_3.ss` wide-range wrapper; it
+   is the *native* builtin that does **not** match that algorithm (it
+   returns the un-rejected first low draw, `845508111`). The real
+   divergence is therefore *which* implementation of `(random bignum)`
+   each build dispatches to -- native reaches a different path (a
+   Racket-level `random` in `racket/src/cs/rumble/random.ss`, or a
+   direct primitive, that pre-empts the Chez `5_3.ss` wrapper) while
+   wasm falls through to the Chez wrapper. The mrg32k3a stream itself
+   and the single-digit path (`(random 2^31)`) are bit-identical
+   across the two builds, so the generator core is fine.
+
+   Next step when this is picked up: trace what `(random bignum)`
+   actually binds to on native CS and why the wasm build resolves a
+   different one, rather than hunting for an arithmetic bug in the
+   `5_3.ss` path (there isn't one). Left as a known, low-impact
+   divergence for now.
 
 2. **`#:pool 'own` thread pool slowdown surfaced by `port.rktl`.**
    The hypothesis that `port.rktl` was tripping an unimplemented
