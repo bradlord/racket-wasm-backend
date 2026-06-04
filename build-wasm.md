@@ -125,7 +125,7 @@ The build is wired into the stock build system as a target:
 
 ```sh
 source <emsdk>/emsdk_env.sh
-make wasm SCHEME=<native-threaded-host-scheme>
+make wasm SCHEME=<native-threaded-host-scheme> RACKET=<host-racket>
 ```
 
 `make wasm` runs `main.zuo`'s `wasm` target, which calls `build-base
@@ -133,18 +133,31 @@ make wasm SCHEME=<native-threaded-host-scheme>
 (`--enable-pb --enable-mach=tpb32l --enable-crossany
 --host=wasm32-unknown-emscripten`), defaults `CONFIGURE_WRAPPER` to
 `emconfigure`, forces `CROSS_MODE=cross`, runs the CS `build` (configure
-+ cross-build the tpb32l kernel, rktio, boot images, pbchunk), and
-finishes at the `wasm` emcc-link target in `racket/src/cs/c/build.zuo`
-instead of the native install step. The result is
-`racket/src/build/cs/c/wasm/scheme.{js,wasm,data}`.
++ cross-build the tpb32l kernel, rktio, boot images, pbchunk), then runs
+`wasm-setup` (cross `raco pkg install` + `raco setup`, compiling
+collections to `compiled/tpb32l`), and finishes at the `wasm` emcc-link
+target in `racket/src/cs/c/build.zuo`. The result is
+`racket/src/build/cs/c/wasm/scheme.{js,wasm,data}`, with the target
+`.zo` packaged in.
+
+`wasm-setup` (a `cs/c/build.zuo` target) assembles the cross-compiler
+xpatch (`compile-xpatch.tpb32l`/`library-xpatch.tpb32l`, via the shared
+`assemble-cross-xpatch`) and calls the existing cross `setup`
+(`run-raco-setup` with `--cross-compiler tpb32l`). In cross mode that
+runs the host `RACKET=` as both driver and `--cross-server` and never
+needs the (absent) wasm `racketcs`. `RACKET=` must be the **same Racket
+version as the tree** being built, since it loads the version-stamped
+xpatch.
 
 Prerequisites it does **not** do for you: source the emsdk first
 (`emconfigure`/`emcc` on `PATH`); build the wasm libffi once
 (`wasm-shell/build-deps.sh`, currently hardcoded at
-`racket/src/build-libffi-em/install`); and pass a native threaded host
-Chez as `SCHEME=<scheme>` (the cross-compiler host -- see stage 0). This
-is a work in progress (see "Folding the cross build into the stock make"
-below); the older stage scripts remain the complete path.
+`racket/src/build-libffi-em/install`); pass a native threaded host Chez
+as `SCHEME=<scheme>` (the cross-compiler host -- see stage 0); and pass a
+same-version host Racket as `RACKET=<racket>` (the `raco setup`
+cross-server). This is a work in progress (see "Folding the cross build
+into the stock make" below); the older stage scripts remain the complete
+path.
 
 The legacy orchestration -- `main.zuo`'s old `wasm` target bounced to
 `wasm-shell/build.zuo`, which checks prerequisites and runs the per-stage
@@ -233,8 +246,14 @@ What is **not** yet folded in (still needs `wasm-shell/` or new work):
    would replace those hardcodes.
 3. The **recipe deps** + `wasm_deps.inc` / `wasm_deps_uflags.txt` /
    `.wasm-deps-linkflags.txt` (`build-deps.sh`).
-4. The **cross-root collects/etc/share** for the preloads
-   (`build-racket-collections.sh`).
+4. **Trimming the preloaded collects.** Target `.zo` are now produced
+   in-tree: the `wasm-setup` target runs the cross `raco setup`
+   (`--cross-compiler tpb32l`) so `racket/collects/**/compiled/tpb32l/`
+   is populated before the link preloads `collects`. What is still not
+   folded in is the *trimmed* cross-root `collects/etc/share`
+   (`build-racket-collections.sh`) -- `make wasm` currently preloads the
+   **full** source `collects` (now including the `compiled/tpb32l` .zo),
+   which is large.
 5. The **emcc link target** -- a first cut now exists as the `wasm`
    target in `cs/c/build.zuo`. After `bin/zuo . build`, run
    `cd racket/src/build/cs/c && bin/zuo . wasm`; it compiles `main_em.o`
@@ -781,9 +800,12 @@ REPL.
 
 ### WIP: pre-generate `compiled/tpb32l`
 
-This part is still in progress, but there is now a helper script for
-pre-generating target-specific compiled files in machine-specific
-subdirectories such as `compiled/tpb32l`.
+`make wasm` now does this for the whole collection tree: its `wasm-setup`
+stage runs the cross `raco setup` (`--cross-compiler tpb32l`, driven by
+the host `RACKET=`), populating `racket/collects/**/compiled/tpb32l/`
+before the link. The helper below predates that and remains useful for
+compiling a single collection in isolation (e.g. when iterating on one
+collection without a full `raco setup`).
 
 From the repository root:
 

@@ -230,13 +230,16 @@ bc: $(ZUO)
 	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
 
 # WebAssembly (Emscripten) cross build of Racket CS, driven through the
-# stock build system: configure + cross-build the tpb32l CS runtime and
-# emcc-link it (the `wasm` target in racket/src/cs/c/build.zuo). Requires
-# an active emsdk (source emsdk_env.sh first), the wasm libffi prereq
-# (wasm-shell/build-deps.sh), and a native threaded host Chez passed as
-# SCHEME=<scheme>: `make wasm SCHEME=/path/to/scheme`. Produces
-# racket/src/build/cs/c/wasm/scheme.{js,wasm,data}. See build-wasm.md.
-# (The legacy orchestration is still at `bin/zuo wasm-shell/build.zuo`.)
+# stock build system: configure + cross-build the tpb32l CS runtime, run
+# the cross `raco setup` (compiling collections to compiled/tpb32l), and
+# emcc-link it (the `wasm-setup` + `wasm` targets in
+# racket/src/cs/c/build.zuo). Requires an active emsdk (source
+# emsdk_env.sh first), the wasm libffi prereq (wasm-shell/build-deps.sh),
+# a native threaded host Chez (SCHEME=<scheme>), and a host Racket of the
+# same version as the tree (RACKET=<racket>, used as the --cross-server
+# for `raco setup`): `make wasm SCHEME=/path/to/scheme RACKET=/path/to/racket`.
+# Produces racket/src/build/cs/c/wasm/scheme.{js,wasm,data}. See
+# build-wasm.md. (Legacy orchestration: `bin/zuo wasm-shell/build.zuo`.)
 wasm: $(ZUO)
 	$(RUN_ZUO) wasm $(BUILD_VARS)
 

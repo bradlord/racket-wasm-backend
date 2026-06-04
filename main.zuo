@@ -228,7 +228,6 @@
                                                (if wasm?
                                                    '("--enable-pb"
                                                      "--enable-mach=tpb32l"
-                                                     "--enable-crossany"
                                                      "--host=wasm32-unknown-emscripten")
                                                    '())
                                                (shell->strings (lookup 'DISABLE_STATIC_LIBS))
@@ -297,11 +296,17 @@
            (build-options))
     (when (eq? 'windows (system-type))
       (remove-early-load-dlls))
-    ;; For a WASM build, finish with the emcc link rather than the
-    ;; native install step (there is no `racketcs` to install).
-    (build (find-target (if wasm? "wasm" "install-again") targets)
-           #f
-           (build-options)))
+    ;; For a WASM build, run the cross `raco setup` (compiling collections
+    ;; to compiled/<m>) and then the emcc link, rather than the native
+    ;; install step (there is no `racketcs` to install). `wasm-setup` runs
+    ;; before `wasm` so the target .zo are present in `collects` when the
+    ;; link preloads them.
+    (cond
+      [wasm?
+       (build (find-target "wasm-setup" targets) #f (build-options))
+       (build (find-target "wasm" targets) #f (build-options))]
+      [else
+       (build (find-target "install-again" targets) #f (build-options))]))
 
   (define (remove-early-load-dlls)
     ;; On Windows, remove DLLs that might be loaded by `raco` on startup,

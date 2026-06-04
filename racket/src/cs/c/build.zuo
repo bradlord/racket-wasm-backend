@@ -1003,7 +1003,19 @@
                 ,(lambda (token)
                    (install #f)
                    (setup))]
-       
+
+       ;; WASM cross setup: assemble the cross-compiler xpatch and run the
+       ;; cross `raco pkg install` + `raco setup` (via the host RACKET as
+       ;; --cross-server), compiling collections to compiled/<m>. Unlike
+       ;; `install-again`, this does not run the native `install` (which
+       ;; would try to copy the absent `racketcs`).
+       [:target wasm-setup ()
+                ,(lambda (token)
+                   (unless emscripten?
+                     (error "wasm-setup requires an Emscripten cross build"))
+                   (assemble-cross-xpatch)
+                   (wasm-setup))]
+
        [:target plain-install ()
                 ,(lambda (token)
                    (install #f))]
@@ -1217,32 +1229,39 @@
                  (list petite-v.boot scheme-v.boot racket-v.boot)
                  (list "petite.boot" "scheme.boot" "racket.boot")))])
 
-       (when xpatch?
-         ;; These two files don't get installed anywhere, because they're
-         ;; not part of a distribution, but a distro build expects them
-         ;; to be created in the directory where Racket was cross-built
-         (define compile-xpatch (at-dir (~a "compile-xpatch." m)))
-         (define library-xpatch (at-dir (~a "library-xpatch." m)))
-         (scheme/options (hash 'dir (at-dir "."))
-                         (list "--script"
-                               (find-relative-path (at-dir ".") (at-source "mk-cross-serve.ss"))
-                               (find-relative-path (at-dir ".") (at-source "."))
-                               "cross-serve.ss"
-                               (find-relative-path (at-dir ".") (at-source "../expander/env.ss"))))
-         (display-to-file (~a (file->string (at-dir "cross-serve.so"))
-                              (file->string xpatch))
-                          compile-xpatch
-                          :truncate)
-         (display-to-file (apply ~a
-                                 (map (lambda (name)
-                                        (file->string (at-dir (~a name "." host-m))))
-                                      library-xpatch-names))
-                          library-xpatch
-                          :truncate))
+       (assemble-cross-xpatch)
 
        (install-license-files sharepltdir))))
 
-  (define (setup)
+  ;; Assemble the cross-compiler xpatch files that `--cross-compiler`
+  ;; consumes: `cross-serve.so` plus `compile-xpatch.<m>` and
+  ;; `library-xpatch.<m>` in the build dir. Used by the native `install`
+  ;; and by the `wasm-setup` target (no `racketcs` needed).
+  (define (assemble-cross-xpatch)
+    (when xpatch?
+      ;; These two files don't get installed anywhere, because they're
+      ;; not part of a distribution, but a distro build expects them
+      ;; to be created in the directory where Racket was cross-built
+      (define compile-xpatch (at-dir (~a "compile-xpatch." m)))
+      (define library-xpatch (at-dir (~a "library-xpatch." m)))
+      (scheme/options (hash 'dir (at-dir "."))
+                      (list "--script"
+                            (find-relative-path (at-dir ".") (at-source "mk-cross-serve.ss"))
+                            (find-relative-path (at-dir ".") (at-source "."))
+                            "cross-serve.ss"
+                            (find-relative-path (at-dir ".") (at-source "../expander/env.ss"))))
+      (display-to-file (~a (file->string (at-dir "cross-serve.so"))
+                           (file->string xpatch))
+                       compile-xpatch
+                       :truncate)
+      (display-to-file (apply ~a
+                              (map (lambda (name)
+                                     (file->string (at-dir (~a name "." host-m))))
+                                   library-xpatch-names))
+                       library-xpatch
+                       :truncate)))
+
+  (define (cross-setup cross-compiler-args)
     (call-with-dest-racket
      (lambda (bindir dest-racket)
        (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
@@ -1250,13 +1269,37 @@
                                    (hash-set config 'copytree-prepared-setup-files #t)
                                    config))
        (maybe-copytree copytree-config dest-racket copytree-racket at-dir)
-       (run-raco-setup config dest-racket copytree-racket
-                       ;; this can be redundant if it's also supplied via `SETUP_MACHINE_FLAGS`,
-                       ;; but redundant should be ok:
-                       (list "-MCR" (~a (path->complete-path (at-dir "compiled")) ":")
-                             "--cross-compiler" m (at-dir ".")))
+       (run-raco-setup config dest-racket copytree-racket cross-compiler-args)
        (maybe-libzo-move config dest-racket copytree-racket at-dir)
        (maybe-destdir-fix config dest-racket copytree-racket at-dir)
        (maybe-set-install-scope config dest-racket copytree-racket at-dir))))
+
+  (define (setup)
+    ;; `-MCR` = `-M -C -R`: machine-INDEPENDENT (`-M`) cross output, the
+    ;; standard portable cross-distribution form.
+    (cross-setup (list "-MCR" (~a (path->complete-path (at-dir "compiled")) ":")
+                       "--cross-compiler" m (at-dir "."))))
+
+  ;; Machine-SPECIFIC cross setup for the WASM build. Producing
+  ;; `compiled/<m>/*.zo` (target form, in place under `collects`) needs the
+  ;; cross-multi-compile mode -- i.e. `-M` + multiple `-R` roots (what the
+  ;; `setup` function's `-MCR` already does), *not* `--compile-machine`
+  ;; (which sets a non-#f compile-target-machine and disables cross-multi).
+  ;; The target form is only emitted when `cross-system-type` reports the
+  ;; target machine, which comes from the installed `system.rktd`; the
+  ;; surgical path skips the native install, so generate that file here
+  ;; (as `install` does via `gen-system.rkt`). Without it the cross-multi
+  ;; mode produces only the portable machine-independent `compiled/*.zo`.
+  (define (wasm-setup)
+    (define libpltdir (at-destdir config (shell-subst (lookup 'libpltdir) config)))
+    (mkdir-p libpltdir)
+    (install-racket (at-source "gen-system.rkt")
+                    (build-path libpltdir (~a (cs-suffix "system") ".rktd"))
+                    m (lookup 'KERNEL_TARGET_MACH m)
+                    (lookup 'CROSS_COMPILE_TARGET_KIND "machine")
+                    (at-source ".")
+                    (lookup 'PLT_CS_SLSP_SUFFIX)
+                    (if mac? "macosx" "other"))
+    (setup))
 
   the-targets)
