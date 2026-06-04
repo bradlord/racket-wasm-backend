@@ -990,25 +990,66 @@ one is discovered at `<config-dir>/../share/links.rktd`; our
 `(root (#"pkgs" #"<name>"))` says "treat everything under
 `/share/pkgs/<name>/` as if it were on the collection root path."
 
-We ship one such file at `wasm-shell/share-links.rktd` and preload it
-plus each declared package via emcc `--preload-file` directives in
-`build.sh`:
+Both that links file and the package tree are **build artifacts**, not
+hand-maintained: `racket/share/links.rktd` and `racket/share/pkgs/` are
+git-ignored and populated by the in-tree package install (main.zuo
+`install-base-pkgs`, run on the wasm path before `wasm-setup`). The
+wasm link (`cs/c/build.zuo`, `share-preloads`) then preloads them
+**wholesale**:
 
-```sh
---preload-file ../../share/pkgs/draw-lib@/share/pkgs/draw-lib
---preload-file wasm-shell/share-links.rktd@/share/links.rktd
 ```
+--preload-file racket/share/pkgs@/share/pkgs
+--preload-file racket/share/links.rktd@/share/links.rktd
+```
+
+plus the two static metapackages `pkgs/base` and `pkgs/racket-lib` at
+`/pkgs/...` (the links file's `static-root` entries point there). So
+there are no per-package emcc flags: anything the install dropped under
+`racket/share/pkgs` with a links entry ships automatically. (The old
+`wasm-shell/share-links.rktd` + per-package `--preload-file` scheme is
+gone.)
 
 ### Adding a new package
 
-1. Pick the package's repo path under `racket/share/pkgs/`. Check its
-   `info.rkt` for `(define deps ...)` -- any non-`#:platform`-gated
-   entry is a transitive package you also need.
-2. Add a `--preload-file ../../share/pkgs/<name>@/share/pkgs/<name>`
-   entry to `LDFLAGS_COMMON` in `build.sh`.
-3. Add `(root (#"pkgs" #"<name>"))` to `wasm-shell/share-links.rktd`.
-4. Relink (`build.sh browser` or `node`). The new package is now
-   on the collection path.
+The selector is the build's **`PKGS`** variable (see `buildit.sh`:
+`PKGS="draw-lib web-repl"`). `install-base-pkgs` catalogs `./pkgs`
+(every directory there is a source package, via `pkg/dirs-catalog`),
+then runs `raco pkg install <REQUIRED_PKGS> <PKGS>` with
+`--deps search-auto`, so transitive deps come along.
+
+1. **Local package?** Put its source under `pkgs/<name>/` (a directory
+   with an `info.rkt`); it's auto-catalogued. **Catalog package**
+   (like `draw-lib`)? Skip this -- it resolves from the configured
+   catalog. Either way, check `info.rkt`'s `deps` for native-library
+   needs (see "FFI dependencies" below).
+2. Add `<name>` to `PKGS` in the build invocation.
+3. Rebuild (`make wasm` / `buildit.sh`). The install writes
+   `racket/share/pkgs/<name>` + its links entry; the link preloads the
+   tree. `(require <name>)` now works in the image.
+
+### A `web-repl` helper package
+
+`pkgs/web-repl/` is the in-tree home for the WASM browser-surface
+helpers, so REPL/playground users `(require ...)` instead of pasting
+`vm-eval` blobs. It's shipped by adding `web-repl` to `PKGS`. Modules:
+
+- `web-repl/display-bm` -- `(display-bm bm)` blits a racket/draw
+  `bitmap%` to the page (one inline `<canvas>` per call in the REPL).
+- `web-repl/canvas` -- raw `canvas-blit-{rgba,argb,bgra}` over the
+  three `wasm_canvas_blit*` channels.
+- `web-repl/dom` -- `(dom-eval js)`, the synchronous DOM RPC.
+- `web-repl/http` -- `(http-get url)` -> `(values status body)`.
+- `web-repl` (`main.rkt`) re-provides all four.
+
+Each wraps a `Sforeign_symbol`-registered primitive through
+`ffi/unsafe/vm` (`vm-eval` + `foreign-procedure`), the only FFI path
+that works without dlopen (see "Calling WASM-specific primitives from
+Racket"). The `vm-eval`s run at module *instantiation* -- inside the
+wasm image, where the symbols exist -- so the host/cross `raco setup`
+that only compiles these to `.zo` never trips on them. `deps` is just
+`base`: the primitives are reached by name and `display-bm` takes its
+`bitmap%` by argument, so the package doesn't pull in `draw-lib`
+itself (the user's drawing code requires `racket/draw`).
 
 ### FFI dependencies
 
@@ -1098,11 +1139,12 @@ Available primitives today (both reachable from Racket via the
   (`drawCanvas`, overwriting on each blit); the **REPL**
   (`browser-shell.js appendCanvas`) appends a *fresh* `<canvas>` into
   the `#output` transcript per blit, so a session that draws N bitmaps
-  reads back as N inline images. `wasm-shell/display-bm.rkt` is the
-  user-facing helper: `(display-bm bm)` reads a `bitmap%` with
-  `get-argb-pixels` and calls `wasm_canvas_blit_argb`, so each call
-  drops one image into the REPL output (paste its body, or preload it
-  as a collection).
+  reads back as N inline images. The `web-repl` package wraps this:
+  `(require web-repl/display-bm)` then `(display-bm bm)` reads a
+  `bitmap%` with `get-argb-pixels` and calls `wasm_canvas_blit_argb`,
+  dropping one image into the REPL output per call. (Companion helpers
+  in the same package: `web-repl/canvas`, `web-repl/dom`,
+  `web-repl/http` -- see "A `web-repl` helper package" below.)
 - `int wasm_dom_eval(const char *js_src, int src_len, char *out,
   int out_cap)` -- synchronous DOM RPC. See the next subsection.
 
@@ -1466,13 +1508,13 @@ below).
    `/collects`.
 2. (Stretch) Emscripten linear-memory prewarm snapshot — only if a
    sub-second cold start is needed; see the *Open* section.
-3. **Ship a `web-repl` (or similar) collection bundling the browser
-   surface helpers** so users `(require ...)` instead of pasting
-   `vm-eval` blobs each session. First inhabitant is
-   `display-bm` (currently `wasm-shell/display-bm.rkt`, paste-only);
-   natural companions are the `dom-eval` wrapper, `http-get`, and the
-   raw `wasm_canvas_blit*` bindings the playground/REPL examples
-   re-derive inline today. Preload it into `/share/pkgs` with a links
-   file per "Preloading additional Racket packages" so both surfaces
-   get it for free. This also gives the helpers one home to evolve as
-   the v0 `eval`-the-string DOM RPC migrates to the typed protocol.
+3. **Re-home the `web-repl` package once the surfaces stabilize.** The
+   package exists (`pkgs/web-repl/`, shipped via `PKGS`; see "A
+   `web-repl` helper package") but its packaging is provisional: it
+   rides the same in-tree `PKGS` install as `draw-lib`, which is the
+   pragmatic "works now" route, not necessarily where these helpers
+   should live long-term (a distributed package on the catalog? folded
+   into a `web`/`net` collection? co-located with the typed DOM
+   protocol when that lands?). Revisit when the browser surface API
+   firms up; until then `pkgs/web-repl/` is the one home for the
+   helpers to evolve in.
