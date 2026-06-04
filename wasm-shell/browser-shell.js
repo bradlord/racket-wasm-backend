@@ -68,6 +68,33 @@
     if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
   }
 
+  // Append a bitmap inline in the transcript. The runtime worker sends
+  // pixels through wasm_canvas_blit{,_argb,_bgra} (racket/src/cs/c/
+  // wasm_canvas.c), which postMessages { type:"canvas", w, h, pixels }
+  // straight to this page. Unlike the playground (one fixed <canvas>),
+  // the REPL drops a fresh <canvas> per blit so a session that draws N
+  // bitmaps reads back as N images interleaved with its text output.
+  function appendCanvas(w, h, pixels) {
+    if (!(w > 0 && h > 0)) return;
+    var atBottom =
+      outputPre.scrollTop + outputPre.clientHeight + 4 >= outputPre.scrollHeight;
+    var canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.style.cssText =
+      "display:block;margin:8px 0;max-width:100%;border-radius:8px;" +
+      "border:1px solid rgba(159,176,195,0.18);image-rendering:pixelated;";
+    // pixels arrived as a transferred ArrayBuffer (RGBA8888, top-down);
+    // wrap it without copying.
+    var image = new ImageData(new Uint8ClampedArray(pixels), w, h);
+    canvas.getContext("2d").putImageData(image, 0, 0);
+    outputPre.appendChild(canvas);
+    while (outputPre.childNodes.length > 600) {
+      outputPre.removeChild(outputPre.firstChild);
+    }
+    if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
+  }
+
   /* ---- bail out if not cross-origin isolated ---------------------- */
 
   if (typeof SharedArrayBuffer === "undefined" || typeof Atomics === "undefined") {
@@ -308,6 +335,10 @@
         setProgress(1, "Ready");
         requestAnimationFrame(pollLoop);
         inputTextarea.focus();
+        return;
+      }
+      case "canvas": {
+        appendCanvas(msg.w, msg.h, msg.pixels);
         return;
       }
       case "abort": {

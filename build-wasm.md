@@ -1089,7 +1089,20 @@ Available primitives today (both reachable from Racket via the
   via `putImageData`. Returns 0 in a Worker, -1 in node / wherever
   `self.postMessage` is unavailable. This is the Tier 1 pixel-output
   path for everything from manual byte-pushing to a future
-  `racket/draw` Cairo backend.
+  `racket/draw` Cairo backend. The `_argb` / `_bgra` variants accept
+  `racket/draw get-argb-pixels` output and Cairo `ARGB32` memory order
+  respectively, rotating channels to RGBA during the copy out.
+
+  Both browser surfaces render `{ type:"canvas" }` messages, but
+  differently: the **playground** blits to one fixed `<canvas>`
+  (`drawCanvas`, overwriting on each blit); the **REPL**
+  (`browser-shell.js appendCanvas`) appends a *fresh* `<canvas>` into
+  the `#output` transcript per blit, so a session that draws N bitmaps
+  reads back as N inline images. `wasm-shell/display-bm.rkt` is the
+  user-facing helper: `(display-bm bm)` reads a `bitmap%` with
+  `get-argb-pixels` and calls `wasm_canvas_blit_argb`, so each call
+  drops one image into the REPL output (paste its body, or preload it
+  as a collection).
 - `int wasm_dom_eval(const char *js_src, int src_len, char *out,
   int out_cap)` -- synchronous DOM RPC. See the next subsection.
 
@@ -1453,3 +1466,13 @@ below).
    `/collects`.
 2. (Stretch) Emscripten linear-memory prewarm snapshot — only if a
    sub-second cold start is needed; see the *Open* section.
+3. **Ship a `web-repl` (or similar) collection bundling the browser
+   surface helpers** so users `(require ...)` instead of pasting
+   `vm-eval` blobs each session. First inhabitant is
+   `display-bm` (currently `wasm-shell/display-bm.rkt`, paste-only);
+   natural companions are the `dom-eval` wrapper, `http-get`, and the
+   raw `wasm_canvas_blit*` bindings the playground/REPL examples
+   re-derive inline today. Preload it into `/share/pkgs` with a links
+   file per "Preloading additional Racket packages" so both surfaces
+   get it for free. This also gives the helpers one home to evolve as
+   the v0 `eval`-the-string DOM RPC migrates to the typed protocol.
