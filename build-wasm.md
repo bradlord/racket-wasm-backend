@@ -1027,11 +1027,16 @@ then runs `raco pkg install <REQUIRED_PKGS> <PKGS>` with
    `racket/share/pkgs/<name>` + its links entry; the link preloads the
    tree. `(require <name>)` now works in the image.
 
-### A `web-repl` helper package
+### A `web-repl` helper collection
 
-`pkgs/web-repl/` is the in-tree home for the WASM browser-surface
+`racket/collects/web-repl/` is the home for the WASM browser-surface
 helpers, so REPL/playground users `(require ...)` instead of pasting
-`vm-eval` blobs. It's shipped by adding `web-repl` to `PKGS`. Modules:
+`vm-eval` blobs. It is a plain **collection**, not a package: dropping
+it under `racket/collects` puts it on the default collection path and
+the wasm link preloads `/collects` wholesale, so it ships with **no
+`PKGS` / links / catalog machinery at all** (deliberately the simple
+route for now -- revisit if these helpers ever need their own
+versioned package). Modules:
 
 - `web-repl/display-bm` -- `(display-bm bm)` blits a racket/draw
   `bitmap%` to the page (one inline `<canvas>` per call in the REPL).
@@ -1046,10 +1051,10 @@ Each wraps a `Sforeign_symbol`-registered primitive through
 that works without dlopen (see "Calling WASM-specific primitives from
 Racket"). The `vm-eval`s run at module *instantiation* -- inside the
 wasm image, where the symbols exist -- so the host/cross `raco setup`
-that only compiles these to `.zo` never trips on them. `deps` is just
-`base`: the primitives are reached by name and `display-bm` takes its
-`bitmap%` by argument, so the package doesn't pull in `draw-lib`
-itself (the user's drawing code requires `racket/draw`).
+that only compiles these to `.zo` never trips on them. Nothing in the
+collection requires `racket/draw`: the primitives are reached by name
+and `display-bm` takes its `bitmap%` by argument (the user's drawing
+code is what requires `racket/draw`).
 
 ### FFI dependencies
 
@@ -1139,12 +1144,12 @@ Available primitives today (both reachable from Racket via the
   (`drawCanvas`, overwriting on each blit); the **REPL**
   (`browser-shell.js appendCanvas`) appends a *fresh* `<canvas>` into
   the `#output` transcript per blit, so a session that draws N bitmaps
-  reads back as N inline images. The `web-repl` package wraps this:
+  reads back as N inline images. The `web-repl` collection wraps this:
   `(require web-repl/display-bm)` then `(display-bm bm)` reads a
   `bitmap%` with `get-argb-pixels` and calls `wasm_canvas_blit_argb`,
   dropping one image into the REPL output per call. (Companion helpers
-  in the same package: `web-repl/canvas`, `web-repl/dom`,
-  `web-repl/http` -- see "A `web-repl` helper package" below.)
+  in the same collection: `web-repl/canvas`, `web-repl/dom`,
+  `web-repl/http` -- see "A `web-repl` helper collection" below.)
 - `int wasm_dom_eval(const char *js_src, int src_len, char *out,
   int out_cap)` -- synchronous DOM RPC. See the next subsection.
 
@@ -1508,13 +1513,13 @@ below).
    `/collects`.
 2. (Stretch) Emscripten linear-memory prewarm snapshot — only if a
    sub-second cold start is needed; see the *Open* section.
-3. **Re-home the `web-repl` package once the surfaces stabilize.** The
-   package exists (`pkgs/web-repl/`, shipped via `PKGS`; see "A
-   `web-repl` helper package") but its packaging is provisional: it
-   rides the same in-tree `PKGS` install as `draw-lib`, which is the
-   pragmatic "works now" route, not necessarily where these helpers
-   should live long-term (a distributed package on the catalog? folded
-   into a `web`/`net` collection? co-located with the typed DOM
-   protocol when that lands?). Revisit when the browser surface API
-   firms up; until then `pkgs/web-repl/` is the one home for the
-   helpers to evolve in.
+3. **Re-home the `web-repl` helpers once the surfaces stabilize.** They
+   exist as a collection (`racket/collects/web-repl/`, shipped by the
+   automatic `/collects` preload; see "A `web-repl` helper
+   collection") but that placement is provisional -- dropping helpers
+   straight into core `collects` is the "works now" route, not
+   necessarily where they belong long-term (a distributed package on
+   the catalog? folded into a `web`/`net` collection? co-located with
+   the typed DOM protocol when that lands?). Revisit when the browser
+   surface API firms up; until then `racket/collects/web-repl/` is the
+   one home for the helpers to evolve in.
