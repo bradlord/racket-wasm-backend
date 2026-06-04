@@ -791,6 +791,29 @@
                    (define out-dir (at-dir "wasm"))
                    (mkdir-p out-dir)
                    (define (preload src dest) (list "--preload-file" (~a src "@" dest)))
+                   ;; Installed packages (PKGS): preload share/pkgs and the
+                   ;; installation links file so the runtime finds them.
+                   ;; main_em.c sets config-dir=/etc, so the links file is
+                   ;; looked up at /share/links.rktd. The generated links
+                   ;; file also has `static-root` entries for the core
+                   ;; metapackages `base`/`racket-lib` that resolve to
+                   ;; /pkgs/<name> (from /share via `up up`); Racket errors
+                   ;; reading the links file if those dirs are absent, so
+                   ;; preload the (tiny) source metapackages too. Only when
+                   ;; share/pkgs is present.
+                   (define (preload-if-dir src dest)
+                     (if (directory-exists? src) (preload src dest) '()))
+                   (define share-preloads
+                     (let ([share-pkgs (at-source "../../../share/pkgs")]
+                           [links (at-source "../../../share/links.rktd")])
+                       (if (directory-exists? share-pkgs)
+                           (append (preload share-pkgs "/share/pkgs")
+                                   (if (file-exists? links)
+                                       (preload links "/share/links.rktd")
+                                       '())
+                                   (preload-if-dir (at-source "../../../../pkgs/base") "/pkgs/base")
+                                   (preload-if-dir (at-source "../../../../pkgs/racket-lib") "/pkgs/racket-lib"))
+                           '())))
                    (define args
                      (append
                       (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"
@@ -805,6 +828,7 @@
                       (preload racket-chunked.boot "racket.boot")
                       (preload (at-source "../../../collects") "/collects")
                       (preload (at-source "../../../etc") "/etc")
+                      share-preloads
                       (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
                             "-sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset"
                             "-sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction"

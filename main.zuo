@@ -303,6 +303,10 @@
     ;; link preloads them.
     (cond
       [wasm?
+       ;; Install PKGS into share/pkgs (sources) before the cross setup,
+       ;; so `wasm-setup`'s `raco setup` compiles them for tpb32l too.
+       (build/dep (find-target build-config.rktd the-targets) token)
+       (install-base-pkgs token (find-racket vm))
        (build (find-target "wasm-setup" targets) #f (build-options))
        (build (find-target "wasm" targets) #f (build-options))]
       [else
@@ -446,21 +450,28 @@
     (define jobs (get-jobs))
 
     (unless also?
-      (pkgs-catalog token vars)
-
-      (raco vars "pkg" "update"
-            "--all" "--auto" "--no-setup" "--scope" "installation"
-            (shell->strings (lookup 'PKG_UPDATE_OPTIONS)))
-      (raco vars "pkg" "install"
-            (if jobs (list "-j" (~a jobs)) '())
-            "--no-setup" "--pkgs" "--skip-installed" "--scope" "installation"
-            "--deps" "search-auto"
-            required-pkgs
-            (pkgs-to-install))
+      (install-base-pkgs token vars)
       (setup vm "--only-foreign-libs"))
 
     (setup vm (shell->strings setup-extra-args)
            (if also? "-D" '())))
+
+  ;; Install `PKGS` (plus required packages and their deps) into the
+  ;; installation's `share/pkgs` as sources, with `--no-setup` (a later
+  ;; `raco setup` compiles them). Shared by `in-place` and the wasm flow,
+  ;; where the cross `wasm-setup` does the compiling for tpb32l.
+  (define (install-base-pkgs token vars)
+    (define jobs (get-jobs))
+    (pkgs-catalog token vars)
+    (raco vars "pkg" "update"
+          "--all" "--auto" "--no-setup" "--scope" "installation"
+          (shell->strings (lookup 'PKG_UPDATE_OPTIONS)))
+    (raco vars "pkg" "install"
+          (if jobs (list "-j" (~a jobs)) '())
+          "--no-setup" "--pkgs" "--skip-installed" "--scope" "installation"
+          "--deps" "search-auto"
+          required-pkgs
+          (pkgs-to-install)))
 
   (define (pkgs-catalog token vars)
     (racket vars
