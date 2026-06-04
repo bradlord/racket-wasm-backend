@@ -947,7 +947,13 @@
                       ;; Recipe-dep -L/-l flags (libffi + any WASM_DEPS),
                       ;; in final link order.
                       dep-linkflags
-                      (list "--post-js" (build-path wasm-shell "node-tty.js"))
+                      ;; node-locate-file.js (extern-pre-js): resolve
+                      ;; scheme.data relative to the script dir, not the
+                      ;; process CWD, so `node path/to/scheme.js` works from
+                      ;; anywhere. Must be extern-pre-js -- the --preload-file
+                      ;; loader runs at parse time, before ordinary --pre-js.
+                      (list "--extern-pre-js" (build-path wasm-shell "node-locate-file.js")
+                            "--post-js"       (build-path wasm-shell "node-tty.js"))
                       preloads
                       (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
                             "-sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset"

@@ -628,6 +628,7 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      em-tpb32l/lz4/lib/liblz4.a \
      ../rktio/build-em/librktio.a \
      -L ../build-libffi-em/install/lib \
+     --extern-pre-js wasm-shell/node-locate-file.js \
      --post-js wasm-shell/node-tty.js \
      --preload-file ../build-cs-tpb32l/petite-pbchunk.boot@petite.boot \
      --preload-file ../build-cs-tpb32l/scheme-pbchunk.boot@scheme.boot \
@@ -647,6 +648,28 @@ on node's stdin and return `undefined` (EAGAIN) on a would-block rather
 than letting the default path leak EAGAIN out as EIO (errno 29). Without
 it, `node scheme.js` with a non-blocking stdin (e.g. `child_process.spawn`,
 or any non-piped invocation) loops on `error reading from stream port`.
+
+`wasm-shell/node-locate-file.js` fixes data-file resolution under node so
+that `node path/to/scheme.js` works from any directory, not just from
+inside the build dir. The trap: Emscripten's internal `locateFile(path)`
+resolves against `scriptDirectory` (the dir of `scheme.js`), which is why
+`scheme.wasm` always loads -- but the `--preload-file` data loader does
+**not** go through it. It reads `Module["locateFile"]` directly and, when
+that hook is unset, falls back to the bare relative string `"scheme.data"`,
+which `fs.readFileSync` resolves against the *process CWD*. So a plain
+`echo ... | node racket/src/build/cs/c/wasm/scheme.js` dies with
+`ENOENT: ... open 'scheme.data'`. The shim defines `Module["locateFile"]`
+to join relative names onto the script's `__dirname` under node.
+
+It must be linked with **`--extern-pre-js`, not `--pre-js`**: the
+data-package loader runs `loadPackage()` synchronously at parse time,
+*before* the point where emcc splices ordinary `--pre-js` content (the
+loader sits near the top of the file; `--pre-js` lands much later). Only
+`--extern-pre-js` is concatenated ahead of both the `var Module`
+declaration and the loader, so the hook is in place when the loader reads
+it. The shim relies on `var Module` being hoisted into the same top-level
+scope, which holds for the non-MODULARIZE node build. It is a no-op on the
+browser surface (no node `process`).
 
 ### 6. Run
 
