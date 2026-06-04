@@ -996,7 +996,7 @@
                                    (build-path out-dir name)))
                              (list "browser-shell.html" "browser-shell.js"
                                    "playground.html" "playground.js"
-                                   "shell-worker.js" "serve.py")))
+                                   "shell-worker.js" "serve.rkt")))
                 :recur]
 
        [:target ,racket.boot (,(find-target "racket.so" cs-targets))

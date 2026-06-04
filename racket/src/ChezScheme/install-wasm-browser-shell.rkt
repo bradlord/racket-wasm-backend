@@ -25,7 +25,7 @@
     "playground.html"
     "playground.js"
     "shell-worker.js"
-    "serve.py"))
+    "serve.rkt"))
 
 (make-directory* target-dir)
 

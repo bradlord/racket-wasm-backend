@@ -148,7 +148,7 @@ That link target emits **both** runtime surfaces into
   `idbfs-init.js`/`shell-tty.js` glue), plus the page assets copied next
   to it: `browser-shell.html`/`.js` (the REPL surface),
   `playground.html`/`.js` (the playground), `shell-worker.js`, and
-  `serve.py`. Serve them with `python3 serve.py 8123` (it sets the
+  `serve.rkt`. Serve them with `racket serve.rkt 8123` (it sets the
   COOP/COEP headers `SharedArrayBuffer` needs) and open
   `browser-shell.html` or `playground.html`.
 
@@ -178,7 +178,7 @@ deps" below.
 `wasm-shell/*.sh` scripts (and the `wasm-shell/build.zuo` orchestrator)
 have been removed; `wasm-shell/` retains only the browser runtime assets
 and glue it still serves (`browser-shell.*`, `playground.*`,
-`shell-worker.js`, `serve.py`, `idbfs-init.js`, `node-tty.js`,
+`shell-worker.js`, `serve.rkt`, `idbfs-init.js`, `node-tty.js`,
 `shell-tty.js`) plus the two WASM test files (`run-tests.sh`,
 `draw-stack-test.rkt`). The stage descriptions below document what
 `make wasm` does internally, stage by stage.
@@ -781,13 +781,15 @@ owning the worker ourselves, the FS and `main()` share a thread,
 CPU.
 
 Serve with **COOP/COEP headers** — `SharedArrayBuffer` is unavailable
-without cross-origin isolation, so a plain `python3 -m http.server`
-will not start the runtime. `wasm-shell/serve.py` sets the headers:
+without cross-origin isolation, so a plain static server will not start
+the runtime. `wasm-shell/serve.rkt` (staged next to the build output)
+sets the headers:
 
 ```sh
-cd racket/src/ChezScheme/em-tpb32l/bin/tpb32l
-python3 serve.py 8123
-# browse to http://127.0.0.1:8123/browser-shell.html
+cd racket/src/build/cs/c/wasm
+racket serve.rkt 8123
+# browse to http://127.0.0.1:8123/browser-shell.html (REPL)
+#        or http://127.0.0.1:8123/playground.html    (playground)
 ```
 
 Notes / status:

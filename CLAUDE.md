@@ -63,7 +63,7 @@ otherwise.
   scripts have been removed; `wasm-shell/` now holds only the browser
   runtime assets/glue and the two test files.)
 - The browser shell needs COOP/COEP headers for `SharedArrayBuffer`.
-  Serve via `racket/src/build/cs/c/wasm/serve.py`.
+  Serve via `racket racket/src/build/cs/c/wasm/serve.rkt`.
 
 ## What this tree is *not*
 

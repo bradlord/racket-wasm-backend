@@ -73,7 +73,7 @@
     appendOutput(
       "This page is not cross-origin isolated, so SharedArrayBuffer is\n" +
       "unavailable and the runtime cannot start.\n\n" +
-      "Serve this directory with COOP/COEP headers, e.g. python3 serve.py.\n"
+      "Serve this directory with COOP/COEP headers, e.g. racket serve.rkt.\n"
     );
     return;
   }

@@ -76,7 +76,7 @@
       "This page is not cross-origin isolated, so SharedArrayBuffer is\n" +
       "unavailable and the runtime cannot start.\n\n" +
       "Serve this directory with COOP/COEP headers, e.g.:\n" +
-      "  python3 serve.py   (see wasm-shell/serve.py)\n"
+      "  racket serve.rkt   (see wasm-shell/serve.rkt)\n"
     );
     return;
   }
