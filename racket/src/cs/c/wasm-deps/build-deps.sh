@@ -72,14 +72,8 @@ esac
 # meson links against fontconfig when present) and harfbuzz must precede
 # pango. libffi is the leaf everything else can rely on.
 ALL_DEPS=(libffi libpng pixman freetype pcre2 expat glib libjpeg-turbo fontconfig cairo harfbuzz pango)
-# Group aliases (expand to recipe sets; always built in ALL_DEPS order):
-#   draw  -- just the Cairo stack (cairo + its transitive deps): pixman +
-#            freetype/fontconfig/expat + libpng. Enough for racket/draw's
-#            drawing surfaces; no text shaping, no JPEG.
-#   htdcp -- the full stack: `draw` plus glib/pcre2, HarfBuzz + Pango (text
-#            shaping/layout), and libjpeg-turbo (JPEG bitmaps).
-DRAW_GROUP=(libpng pixman freetype expat fontconfig cairo)
-HTDCP_GROUP=(libpng pixman freetype pcre2 expat glib libjpeg-turbo fontconfig cairo harfbuzz pango)
+# The `draw` group: everything racket/draw's Cairo/Pango FFI stack needs.
+DRAW_GROUP=(libpng pixman freetype pcre2 expat glib libjpeg-turbo fontconfig cairo harfbuzz pango)
 
 # Collect the requested recipe names into a set, expanding group aliases.
 # libffi is always requested.
@@ -87,14 +81,13 @@ declare -A want=( [libffi]=1 )
 for tok in $deps_arg; do
   case "$tok" in
     ""|libffi) ;;
-    draw)  for d in "${DRAW_GROUP[@]}";  do want[$d]=1; done ;;
-    htdcp) for d in "${HTDCP_GROUP[@]}"; do want[$d]=1; done ;;
+    draw) for d in "${DRAW_GROUP[@]}"; do want[$d]=1; done ;;
     *)
       # Validate against the known recipe set.
       known=0
       for d in "${ALL_DEPS[@]}"; do [ "$d" = "$tok" ] && known=1 && break; done
       if [ "$known" = 0 ]; then
-        echo "build-deps.sh: unknown dep '$tok' (known: ${ALL_DEPS[*]}; groups: draw, htdcp)" >&2
+        echo "build-deps.sh: unknown dep '$tok' (known: ${ALL_DEPS[*]}; group: draw)" >&2
         exit 2
       fi
       want[$tok]=1 ;;

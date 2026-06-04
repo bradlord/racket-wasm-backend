@@ -74,9 +74,8 @@ CONFIGURE_WRAPPER =
 
 # WebAssembly: additional native C library dependencies to build and
 # link for `make wasm` (libffi is always built). Space-separated recipe
-# names from racket/src/cs/c/wasm-deps/deps/, or a group alias: `draw`
-# (the Cairo stack for racket/draw's drawing surfaces) or `htdcp` (the
-# full stack, adding HarfBuzz/Pango text + libjpeg). Empty = libffi only.
+# names from racket/src/cs/c/wasm-deps/deps/, or the group alias `draw`
+# (the full cairo/pango stack that racket/draw needs). Empty = libffi only.
 WASM_DEPS =
 
 # ------------------------------------------------------------
@@ -247,8 +246,7 @@ bc: $(ZUO)
 # a host Racket of the same version as the tree (RACKET=<racket>, used as
 # the --cross-server for `raco setup`):
 #   make wasm SCHEME=/path/to/scheme RACKET=/path/to/racket
-# Add the Cairo stack for racket/draw with WASM_DEPS="draw" (or the full
-# HarfBuzz/Pango/JPEG stack with WASM_DEPS="htdcp"):
+# Add the cairo/pango stack for racket/draw with WASM_DEPS="draw":
 #   make wasm WASM_DEPS="draw" SCHEME=... RACKET=...
 # Produces racket/src/build/cs/c/wasm/scheme.{js,wasm,data}. See
 # build-wasm.md.
