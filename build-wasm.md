@@ -915,6 +915,67 @@ error trace, which fails because we drive the harness through stdin;
 the latter exercises subprocess/network features that rktio does not
 implement on Emscripten and hangs.)
 
+## Performance vs. native Racket CS
+
+`wasm-shell/perf-bench.rktl` is a single-threaded, CPU-bound
+microbenchmark shared by both runtimes. It is timed *internally* with
+`current-process-milliseconds` / `current-inexact-milliseconds`, so the
+WASM runtime's large startup and `.data` mount cost is excluded -- the
+numbers below are steady-state compute only. Run it by piping the script
+through either runtime's stdin REPL:
+
+```sh
+# native host racket
+racket < wasm-shell/perf-bench.rktl | grep BENCH
+# WASM under node (from the build dir)
+node racket/src/build/cs/c/wasm/scheme.js < wasm-shell/perf-bench.rktl | grep BENCH
+```
+
+Measured on an Apple M3 Pro, node v22.16.0 (arm64). Native is
+`minimal-racket` v9.2.0.5 [cs], a 64-bit build; WASM is this tree's
+tpb32l target. Each figure is wall-clock ms averaged over two runs,
+with the per-kernel iteration count folded in (the script repeats cheap
+kernels so each does ~100 ms+ of native work):
+
+| kernel | what it stresses | native | WASM | WASM / native |
+|--------|------------------|-------:|-----:|--------------:|
+| `fib33`        | non-tail integer recursion / call overhead | 212 ms | 7,620 ms | ~36x |
+| `tak.24.16.8`  | deep recursion                              |  97 ms | 3,168 ms | ~33x |
+| `ack.3.9`      | recursion + branching                       | 173 ms | 6,126 ms | ~35x |
+| `sum-loop-50M` | tight counted loop, integer accumulate      | 268 ms | 19,801 ms | ~74x |
+| `fsum-20M`     | flonum divide/add in a loop                 | 648 ms | 12,772 ms | ~20x |
+| `sieve-10M`    | vector read/write, memory-bound             | 617 ms | 8,681 ms | ~14x |
+| `list-sort-1M` | cons allocation + `sort`                    | 372 ms | 12,669 ms | ~34x |
+| `string-1M`    | `number->string` + output-string port       | 458 ms | 3,973 ms | ~9x |
+
+Takeaways:
+
+- **Roughly an order of magnitude, kernel-dependent.** Call- and
+  allocation-heavy code lands around 30-36x; memory-bound and
+  port/string-bound code does markedly better (9-14x). The benchmark
+  forms are `eval`'d at the REPL, so they run as interpreted Chez `pb`
+  (portable bytecode) -- pb has no JIT, and the boot-image `pbchunk`
+  pass only covers precompiled runtime code, not freshly-eval'd user
+  code. The gap is therefore dominated by interpreter dispatch per
+  bytecode op: kernels that do more work per op (`sieve`, `string`)
+  amortize that better than kernels that are mostly calls (`fib`, `ack`).
+
+- **`sum-loop-50M`'s 74x is a 32-bit artifact, not a loop-speed result.**
+  tpb32l fixnums are 32-bit (~30-bit payload), so the accumulator
+  (reaches 1.25e15) spills into bignums almost immediately on WASM, while
+  the 64-bit native build keeps it a fixnum throughout. The kernel is
+  therefore measuring bignum add overhead on WASM vs. fixnum add on
+  native -- a real characteristic of the port (bignums appear far
+  sooner), but not an apples-to-apples loop comparison. Keep the 32-bit
+  fixnum boundary in mind when reading any integer-heavy figure; see also
+  the `number` PRNG large-range note in the test-suite section, which has
+  the same 32-bit root cause.
+
+These are interpreted-pb vs. native-compiled numbers. The realistic
+ceiling for the WASM side is whatever AOT-compiling user code (a
+`pbchunk` pass over the eval'd forms) or a Wasm-GC-targeted Chez backend
+would buy -- both out of scope for the current `pb`-interpreted port.
+
 ## Preloading additional Racket packages
 
 `/collects` (the core distribution) is preloaded automatically; everything
