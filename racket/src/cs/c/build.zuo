@@ -62,7 +62,8 @@
   (define emscripten? (equal? (lookup 'EMSCRIPTEN) "t"))
   ;; WASM native library deps. libffi is always built (the Chez kernel's
   ;; ffi.c needs its headers); `WASM_DEPS` selects additional libraries
-  ;; (recipe names, or the group alias `draw`). The `wasm-deps` target
+  ;; (recipe names, or a group alias: `draw` = Cairo stack, `htdcp` =
+  ;; the full HarfBuzz/Pango/JPEG stack). The `wasm-deps` target
   ;; runs the recipe driver, which writes three artifacts into
   ;; `wasm-deps-dir`: wasm_deps.inc (symbol registrations, #include'd by
   ;; wasm_extras.inc at the boot.o compile), wasm_deps_uflags.txt

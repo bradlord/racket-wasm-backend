@@ -244,8 +244,9 @@ What is **not** yet folded in (still needs `wasm-shell/` or new work):
    but are no longer a hardcode pending other work.
 3. ~~The **recipe deps**~~ **(done)** -- the recipe driver
    (`racket/src/cs/c/wasm-deps/`) is folded in as the `wasm-deps` zuo
-   target; `WASM_DEPS="<libs>"` selects which to build (or `draw` for the
-   full cairo/pango stack), `boot.o` is compiled with
+   target; `WASM_DEPS="<libs>"` selects which to build (or the group alias
+   `draw` for the Cairo stack / `htdcp` for the full Pango stack), `boot.o`
+   is compiled with
    `-DRACKET_EXTRA_FOREIGN_INC` so `wasm_deps.inc` registrations apply,
    and the `wasm` link splices `.wasm-deps-linkflags.txt` +
    `wasm_deps_uflags.txt`. See "Native library deps" below.
@@ -338,18 +339,25 @@ zuo target** (`cs/c/build.zuo`), which `main.zuo` runs before the kernel
 make:
 
 ```sh
-make wasm SCHEME=... RACKET=...                 # libffi only (default)
-make wasm WASM_DEPS="draw" SCHEME=... RACKET=... # + the cairo/pango stack
+make wasm SCHEME=... RACKET=...                  # libffi only (default)
+make wasm WASM_DEPS="draw" SCHEME=... RACKET=...  # + the Cairo stack
+make wasm WASM_DEPS="htdcp" SCHEME=... RACKET=... # + HarfBuzz/Pango/JPEG too
 ```
 
 `WASM_DEPS` is a space-separated list of recipe names from
-`wasm-deps/deps/`, plus the group alias **`draw`** which expands to the
-full `racket/draw` stack (`libpng pixman freetype pcre2 expat glib
-libjpeg-turbo fontconfig cairo harfbuzz pango`, in build-leaf→root order;
-fontconfig must precede cairo, harfbuzz must precede pango). **libffi is
-always built first**, regardless of `WASM_DEPS`. The make var threads
-through `main.zuo` (`build-base`'s `vars`) into `cs/c/build.zuo`'s
-`(lookup 'WASM_DEPS)`.
+`wasm-deps/deps/`, plus group aliases:
+
+- **`draw`** -- the Cairo stack: `libpng pixman freetype expat fontconfig
+  cairo` (cairo + its transitive deps). Enough for `racket/draw`'s drawing
+  surfaces; no text shaping, no JPEG.
+- **`htdcp`** -- the full stack: `draw` plus `pcre2 glib libjpeg-turbo
+  harfbuzz pango` -- HarfBuzz + Pango (text shaping/layout, on glib/pcre2)
+  and libjpeg-turbo (JPEG bitmaps).
+
+Groups expand in the canonical build-leaf→root order (`fontconfig` before
+`cairo`, `harfbuzz` before `pango`). **libffi is always built first**,
+regardless of `WASM_DEPS`. The make var threads through `main.zuo`
+(`build-base`'s `vars`) into `cs/c/build.zuo`'s `(lookup 'WASM_DEPS)`.
 
 Each `deps/<name>.sh` is a shell file that sets a handful of `DEP_*`
 variables (source URL + sha256, configure args, archive name, link

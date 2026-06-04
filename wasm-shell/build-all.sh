@@ -12,7 +12,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 ../racket/src/cs/c/wasm-deps/build-deps.sh \
   --src ../racket/src \
   --out ../racket/src/ChezScheme/em-tpb32l/boot/tpb32l \
-  --deps draw
+  --deps htdcp
 ./build-tpb32l-boot.sh
 ./build-racket-boot.sh
 ./build-em-kernel.sh
