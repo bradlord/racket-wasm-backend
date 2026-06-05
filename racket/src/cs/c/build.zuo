@@ -979,6 +979,12 @@
                       (list "--pre-js"  (build-path wasm-shell "idbfs-init.js")
                             "--post-js" (build-path wasm-shell "shell-tty.js"))
                       preloads
+                      ;; Cache the preloaded .data package in IndexedDB keyed by
+                      ;; package name + size so a returning browser reuses it
+                      ;; instead of re-downloading the (large) boot/collects/pkgs
+                      ;; payload on every load. Browser surface only -- the node
+                      ;; link has no persistent IDB to cache into.
+                      (list "--use-preload-cache")
                       (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
                             (~a "-sEXPORTED_FUNCTIONS="
                                 "_malloc,_free,_main,_setThrew,_memcpy,_memset,"
