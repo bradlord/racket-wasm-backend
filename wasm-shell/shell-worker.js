@@ -9,7 +9,8 @@
  *                 command-line arguments. `[]` (the default) runs the
  *                 interactive REPL; `["-u","/tmp/main.rkt"]` runs a
  *                 module and exits; `["-e","(form)"]` runs an
- *                 expression; the IDE uses `["-l","racket/enter","-i"]`.
+ *                 expression. The IDE uses `[]` (a plain REPL) and then
+ *                 requires racket/enter + `enter!`s the program itself.
  *   - `files`  -- { "/abs/path": "<text>" } seeded into MEMFS during
  *                 preRun (before main()). Used by the IDE to drop the
  *                 editor's source at /tmp/main.rkt before main() runs.

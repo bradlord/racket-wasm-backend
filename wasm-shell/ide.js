@@ -6,12 +6,13 @@
  * Run lifecycle (process-per-run, like the old playground):
  *   - Teardown any existing worker, clear the Interactions output.
  *   - Spawn a fresh shell-worker.js with
- *       { type:"init", argv:["-l","racket/enter","-i"],
+ *       { type:"init", argv:[],
  *         files:{"/tmp/main.rkt": <editor text>}, idbfs:false }
- *     i.e. an *interactive* REPL (argv has -i) that has first required
- *     racket/enter. The editor text lands at /tmp/main.rkt in MEMFS.
+ *     i.e. a plain interactive REPL (argv [] keeps the default
+ *     racket/init, so the namespace has the full `racket` bindings). The
+ *     editor text lands at /tmp/main.rkt in MEMFS.
  *   - On "ready", inject one line into the stdin ring (not echoed):
- *       (enter! (file "/tmp/main.rkt"))
+ *       (require racket/enter) (enter! (file "/tmp/main.rkt"))
  *     enter! instantiates the module (its body runs -- output streams in)
  *     and switches the REPL's current namespace to the module's, so every
  *     top-level definition is in scope. That is exactly DrRacket's Run:
@@ -220,12 +221,15 @@
     };
     worker.onmessage = onMessage;
 
-    // Interactive REPL that has required racket/enter; the editor text is
-    // dropped at /tmp/main.rkt before main() runs. We `enter!` it once the
-    // REPL is ready (see "ready" below).
+    // Plain interactive REPL (argv [] keeps the default racket/init, so
+    // the REPL namespace has the full `racket` bindings -- passing a
+    // startup action like `-l racket/enter` would suppress racket/init
+    // and leave the namespace bare). The editor text is dropped at
+    // /tmp/main.rkt before main() runs; we require racket/enter and
+    // `enter!` it once the REPL is ready (see "ready" below).
     worker.postMessage({
       type: "init",
-      argv: ["-l", "racket/enter", "-i"],
+      argv: [],
       files: { "/tmp/main.rkt": editor.value },
       idbfs: false,
     });
@@ -279,9 +283,11 @@
         domLastSeq = 0;
         ioReady  = true;
         pollHandle = requestAnimationFrame(pollLoop);
-        // Run the definitions and land the REPL in their namespace. Not
-        // echoed -- it's bootstrap, not something the user typed.
-        sendText('(enter! (file "/tmp/main.rkt"))\n');
+        // Run the definitions and land the REPL in their namespace. Two
+        // forms on one line: the require takes effect before the second
+        // form is read, so enter! is bound when it's expanded. Not echoed
+        // -- it's bootstrap, not something the user typed.
+        sendText('(require racket/enter) (enter! (file "/tmp/main.rkt"))\n');
         setControls(true, true);
         setStatus("Running", "run");
         inputArea.focus();

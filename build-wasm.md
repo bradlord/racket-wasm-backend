@@ -725,12 +725,15 @@ for an `init` message from the page, then sets `self.Module` and
 choose:
 
 - `argv` -- becomes `Module.arguments`, which Racket sees as its
-  command line. `[]` runs a bare interactive REPL;
-  `["-u","/tmp/main.rkt"]` runs a module and exits;
-  `["-e","(form)"]` evaluates an expression; the IDE uses
-  `["-l","racket/enter","-i"]` (an interactive REPL that has first
-  required `racket/enter`, so it can `enter!` the program -- see "IDE
-  page").
+  command line. `[]` runs a plain interactive REPL (and keeps the
+  default `racket/init`, so the REPL namespace has the full `racket`
+  bindings); `["-u","/tmp/main.rkt"]` runs a module and exits;
+  `["-e","(form)"]` evaluates an expression. The IDE uses `[]` and then
+  drives `enter!` over the input ring (see "IDE page"). **Don't** reach
+  for a startup action like `-l racket/enter` to preload the helper: any
+  of `-l`/`-t`/`-e`/`-u` *suppresses* `racket/init`, leaving the REPL
+  namespace bare (`#%top-interaction` unbound) -- require it from inside
+  the REPL instead.
 - `files` -- `{ "/abs/path": "<text>" }` written into MEMFS during
   `preRun` (before `main()`). The IDE uses this to drop the editor's
   source at `/tmp/main.rkt` before the runtime starts.
@@ -841,16 +844,19 @@ Lifecycle is **process-per-run**. The Interactions pane is inert until
 
 1. Tears down any existing worker and clears the output.
 2. Spawns a fresh worker with
-   `{argv:["-l","racket/enter","-i"], files:{"/tmp/main.rkt": <editor
-   text>}, idbfs:false}` -- an interactive REPL that has required
-   `racket/enter`, with the editor text dropped at `/tmp/main.rkt`.
+   `{argv:[], files:{"/tmp/main.rkt": <editor text>}, idbfs:false}` -- a
+   plain interactive REPL (argv `[]` keeps `racket/init`, so the
+   namespace has the full `racket` bindings), with the editor text
+   dropped at `/tmp/main.rkt`.
 3. On `ready`, injects one line into the stdin ring (not echoed):
-   `(enter! (file "/tmp/main.rkt"))`. `enter!` instantiates the module
-   (its body runs -- output streams in) **and** switches the REPL's
-   current namespace to the module's, so every top-level definition is
-   in scope. That is exactly DrRacket's Run: run the definitions, then
-   a REPL that sees them (not just the `provide`d names a plain
-   `-i -t` would expose).
+   `(require racket/enter) (enter! (file "/tmp/main.rkt"))`. Two forms
+   on one line: the `require` takes effect before the second form is
+   read, so `enter!` is bound when it expands. `enter!` instantiates
+   the module (its body runs -- output streams in) **and** switches the
+   REPL's current namespace to the module's, so every top-level
+   definition is in scope. That is exactly DrRacket's Run: run the
+   definitions, then a REPL that sees them (not just the `provide`d
+   names a plain `-i -t` would expose).
 
 The single Interactions input box is both the REPL (Cmd/Ctrl+Enter
 submits an expression) and the program's stdin (a submitted line
