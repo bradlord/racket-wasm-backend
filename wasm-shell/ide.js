@@ -12,7 +12,12 @@
  *     racket/init, so the namespace has the full `racket` bindings). The
  *     editor text lands at /tmp/main.rkt in MEMFS.
  *   - On "ready", inject one line into the stdin ring (not echoed):
- *       (require racket/enter) (enter! (file "/tmp/main.rkt"))
+ *       (require racket/enter)
+ *       (install the web-repl bitmap printer, guarded)
+ *       (enter! (file "/tmp/main.rkt"))
+ *     The printer is a current-print hook (web-repl/print) that renders
+ *     bitmap-valued top-level results via display-bm; installed before
+ *     enter! so the program's own top-level expressions get it too.
  *     enter! instantiates the module (its body runs -- output streams in)
  *     and switches the REPL's current namespace to the module's, so every
  *     top-level definition is in scope. That is exactly DrRacket's Run:
@@ -283,11 +288,22 @@
         domLastSeq = 0;
         ioReady  = true;
         pollHandle = requestAnimationFrame(pollLoop);
-        // Run the definitions and land the REPL in their namespace. Two
-        // forms on one line: the require takes effect before the second
-        // form is read, so enter! is bound when it's expanded. Not echoed
-        // -- it's bootstrap, not something the user typed.
-        sendText('(require racket/enter) (enter! (file "/tmp/main.rkt"))\n');
+        // Bootstrap, sent as separate top-level forms on one line (each
+        // require takes effect before the next form is read), not echoed:
+        //   1. require racket/enter (for enter!).
+        //   2. install the web-repl bitmap printer: a current-print hook
+        //      that renders bitmap-valued results via display-bm, so a
+        //      bare top-level bitmap (in the program body or at the REPL)
+        //      shows as an image. Set *before* enter! so the program's own
+        //      top-level expressions get it too; guarded so a missing
+        //      web-repl still lets the program run.
+        //   3. enter! the program -- runs its body and lands the REPL in
+        //      its namespace.
+        sendText(
+          '(require racket/enter) ' +
+          '(with-handlers ([(lambda (e) #t) void]) ' +
+            '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))) ' +
+          '(enter! (file "/tmp/main.rkt"))\n');
         setControls(true, true);
         setStatus("Running", "run");
         inputArea.focus();

@@ -848,23 +848,32 @@ Lifecycle is **process-per-run**. The Interactions pane is inert until
    plain interactive REPL (argv `[]` keeps `racket/init`, so the
    namespace has the full `racket` bindings), with the editor text
    dropped at `/tmp/main.rkt`.
-3. On `ready`, injects one line into the stdin ring (not echoed):
-   `(require racket/enter) (enter! (file "/tmp/main.rkt"))`. Two forms
-   on one line: the `require` takes effect before the second form is
-   read, so `enter!` is bound when it expands. `enter!` instantiates
-   the module (its body runs -- output streams in) **and** switches the
-   REPL's current namespace to the module's, so every top-level
-   definition is in scope. That is exactly DrRacket's Run: run the
-   definitions, then a REPL that sees them (not just the `provide`d
-   names a plain `-i -t` would expose).
+3. On `ready`, injects a one-line prelude into the stdin ring (not
+   echoed), as separate top-level forms -- each `require` takes effect
+   before the next form is read:
+   - `(require racket/enter)` -- for `enter!`.
+   - install the **bitmap printer** (`web-repl/print`'s
+     `install-bitmap-printer!`, via a guarded `dynamic-require` so a
+     missing `web-repl` still lets the program run): a `current-print`
+     hook that renders bitmap-valued results via `display-bm`, so a
+     bare top-level bitmap shows as an image rather than
+     `#<object:bitmap%>`. Installed *before* `enter!` so the program's
+     own top-level expressions get it too (`#lang racket` prints
+     module top-level expression results through `current-print`).
+   - `(enter! (file "/tmp/main.rkt"))` -- instantiates the module (its
+     body runs -- output streams in) **and** switches the REPL's
+     current namespace to the module's, so every top-level definition
+     is in scope. That is exactly DrRacket's Run: run the definitions,
+     then a REPL that sees them (not just the `provide`d names a plain
+     `-i -t` would expose).
 
 The single Interactions input box is both the REPL (Cmd/Ctrl+Enter
 submits an expression) and the program's stdin (a submitted line
 reaches a blocked `read-line`). A second Run spawns a brand-new
 process -- fresh namespace, like DrRacket. Bitmaps drawn via
-`web-repl/display-bm` and DOM pokes via `web-repl/dom` both land in
-this pane (inline `<canvas>` per blit; see the `wasm_canvas`/`wasm_dom`
-notes).
+`web-repl/display-bm` (or just evaluated bare, thanks to the printer)
+and DOM pokes via `web-repl/dom` both land in this pane (inline
+`<canvas>` per blit; see the `wasm_canvas`/`wasm_dom` notes).
 
 A "not started" placeholder in the Interactions pane carries its own
 Run button so the inert state isn't confusing. The persistent-worker
@@ -1075,7 +1084,11 @@ versioned package). Modules:
   three `wasm_canvas_blit*` channels.
 - `web-repl/dom` -- `(dom-eval js)`, the synchronous DOM RPC.
 - `web-repl/http` -- `(http-get url)` -> `(values status body)`.
-- `web-repl` (`main.rkt`) re-provides all four.
+- `web-repl/print` -- `install-bitmap-printer!`, a `current-print`
+  hook that renders bitmap-valued results via `display-bm` (the IDE
+  installs it as a prelude). Duck-typed on `get-argb-pixels`, so it
+  pulls in `racket/class` but not `racket/draw`.
+- `web-repl` (`main.rkt`) re-provides all five.
 
 Each wraps a `Sforeign_symbol`-registered primitive through
 `ffi/unsafe/vm` (`vm-eval` + `foreign-procedure`), the only FFI path
