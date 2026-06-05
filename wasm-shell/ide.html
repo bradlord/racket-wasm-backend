@@ -42,11 +42,11 @@
     }
     .hero h1 {
       margin: 0; font-size: clamp(32px, 5vw, 56px);
-      line-height: 0.96; letter-spacing: -0.04em; max-width: 14ch;
+      line-height: 0.96; letter-spacing: -0.04em;
     }
     .hero p {
       margin: 0; color: var(--muted); font-size: 16px; line-height: 1.5;
-      max-width: 64ch; font-family: var(--sans);
+      font-family: var(--sans);
     }
     .grid {
       display: grid; gap: 16px; align-items: stretch;
@@ -72,7 +72,7 @@
     }
     .panel-header h2 { margin: 0; font-size: 16px; }
     .panel-header .sub { color: var(--muted); font-size: 13px; }
-    .toolbar-group { display: flex; gap: 8px; align-items: center; }
+    .toolbar-group { display: flex; gap: 8px; align-items: center; min-width: 0; }
     .button {
       appearance: none;
       border: 1px solid rgba(159, 176, 195, 0.18);
@@ -81,6 +81,7 @@
       color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
       font-family: var(--sans);
       padding: 8px 14px;
+      white-space: nowrap; flex: none;
       transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
     }
     .button:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(56, 189, 248, 0.45); }
@@ -94,6 +95,25 @@
       border-color: rgba(248, 113, 113, 0.55);
     }
     .button--xl { font-size: 16px; padding: 12px 24px; }
+    .select {
+      appearance: none;
+      border: 1px solid rgba(159, 176, 195, 0.18);
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.10);
+      color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
+      font-family: var(--sans); font-size: 13px;
+      padding: 8px 30px 8px 14px;
+      flex: 1 1 auto; min-width: 7ch; max-width: 26ch;
+      text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+      background-image:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%239fb0c3' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      transition: border-color 160ms ease;
+    }
+    .select:hover { border-color: rgba(56, 189, 248, 0.45); }
+    .select:focus { outline: none; border-color: rgba(56, 189, 248, 0.55); }
+    .select option { background: var(--panel); color: var(--text); }
     .chip {
       display: inline-flex; align-items: center; gap: 8px;
       padding: 6px 10px; border-radius: 999px;
@@ -212,71 +232,15 @@
             <div class="sub">Saved to <code>/tmp/main.rkt</code>; run with a REPL in its namespace.</div>
           </div>
           <div class="toolbar-group">
+            <select class="select" id="example" aria-label="Load an example">
+              <!-- options injected by ide.js (single source of truth) -->
+            </select>
             <button class="button button--primary" id="run" type="button">▶ Run</button>
             <button class="button button--danger" id="stop" type="button" disabled>Stop</button>
           </div>
         </header>
         <textarea id="editor" spellcheck="false" autocapitalize="off"
-          autocorrect="off" autocomplete="off">#lang racket
-
-;; racket/draw bitmaps + DOM RPC, both through the web-repl collection
-;; (preloaded into the WASM image).
-;;
-;; - display-bm blits a racket/draw bitmap% to the page. In the
-;;   Interactions pane each call appends a fresh <canvas> to the output,
-;;   so drawing twice shows two images.
-;; - dom-eval is a synchronous JS-on-page primitive: it ships a JS
-;;   source string to the page, which runs eval() on its next animation
-;;   frame and returns the result. v0: arbitrary JS; a typed protocol is
-;;   the future direction (see build-wasm.md).
-;;
-;; After Run, the REPL on the right is in this module's namespace: try
-;; typing (display-bm bm) or (dom-eval "document.title") there.
-
-(require racket/draw
-         web-repl/display-bm
-         web-repl/dom)
-
-;; --- Draw something with racket/draw ---
-
-(define W 320) (define H 240)
-(define bm (make-bitmap W H))
-(define dc (send bm make-dc))
-(send dc set-smoothing 'aligned)
-(send dc set-brush (make-object color% 20 26 41) 'solid)
-(send dc set-pen "black" 0 'transparent)
-(send dc draw-rectangle 0 0 W H)
-(send dc set-brush (make-object color% 242 92 56 0.9) 'solid)
-(send dc draw-ellipse 50 50 120 120)
-(send dc set-brush (make-object color% 51 189 237 0.85) 'solid)
-(send dc draw-ellipse 130 70 140 140)
-(send dc set-brush (make-object color% 252 199 46 0.85) 'solid)
-(send dc draw-ellipse 120 20 80 80)
-
-(display-bm bm)
-
-;; --- Touch the DOM ---
-
-(displayln "DOM RPC round-trips through page eval:")
-(printf "  document.title before: ~s~n" (dom-eval "document.title"))
-(dom-eval "document.title = 'hello from Racket'")
-(printf "  document.title after:  ~s~n" (dom-eval "document.title"))
-
-(printf "  navigator.userAgent (truncated): ~s~n"
-        (substring (dom-eval "navigator.userAgent") 0 50))
-
-(define count
-  (dom-eval "document.querySelectorAll('button').length"))
-(printf "  buttons on this page: ~a~n" count)
-
-;; Drop a note right under the page's <h1> heading.
-(dom-eval (string-append
-           "var n = document.createElement('div');"
-           "n.textContent = 'racket touched me (' + new Date().toLocaleTimeString() + ')';"
-           "n.style.cssText = 'margin: 8px 0 0; color: #f59e0b; font-family: monospace;';"
-           "document.querySelector('h1').insertAdjacentElement('afterend', n);"
-           "'div appended'"))
-</textarea>
+          autocorrect="off" autocomplete="off"></textarea>
         <footer class="panel-footer">
           <span><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>
         </footer>

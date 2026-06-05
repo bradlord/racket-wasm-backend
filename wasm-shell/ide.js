@@ -34,9 +34,166 @@
 (function () {
   "use strict";
 
+  /* ---- example programs ------------------------------------------- */
+  /* The Definitions editor is seeded from here (no hardcoded markup in
+   * ide.html). Each entry is { name, code }; the first is the default.
+   * The racket/draw and DOM-RPC examples are the two halves of the old
+   * combined demo, split so each shows one capability. */
+
+  var EXAMPLES = [
+    {
+      name: "Hello world",
+      code:
+"#lang racket\n" +
+"\n" +
+";; Welcome to the Racket WASM IDE. Edit a program here, then press\n" +
+";; Run (or Cmd/Ctrl+Enter). The Interactions pane on the right runs\n" +
+";; these definitions and drops into a REPL in their namespace -- so\n" +
+";; every top-level definition below is in scope there, just like\n" +
+";; DrRacket.\n" +
+"\n" +
+"(displayln \"Hello, world!\")\n" +
+"\n" +
+"(define (greet who)\n" +
+"  (printf \"Hello, ~a!\\n\" who))\n" +
+"\n" +
+"(greet \"Racket on WASM\")\n" +
+"\n" +
+";; After Run, try typing (greet \"you\") at the REPL on the right.\n",
+    },
+    {
+      name: "Datalog (#lang datalog)",
+      code:
+"#lang datalog\n" +
+"\n" +
+"%% A different #lang entirely: Datalog, the deductive database\n" +
+"%% language, shipped in the WASM image. Facts end in `.`, rules use\n" +
+"%% `:-`, and lines ending in `?` are queries -- their answers print\n" +
+"%% when you Run.\n" +
+"\n" +
+"parent(john, douglas).\n" +
+"parent(bob, john).\n" +
+"parent(ebbon, bob).\n" +
+"\n" +
+"ancestor(A, B) :- parent(A, B).\n" +
+"ancestor(A, B) :- parent(A, C), ancestor(C, B).\n" +
+"\n" +
+"%% Who is an ancestor of whom?\n" +
+"ancestor(A, B)?\n" +
+"\n" +
+"%% Just ebbon's descendants:\n" +
+"ancestor(ebbon, B)?\n",
+    },
+    {
+      name: "racket/draw bitmaps",
+      code:
+"#lang racket\n" +
+"\n" +
+";; racket/draw renders into an offscreen bitmap%, and display-bm\n" +
+";; (from the preloaded web-repl collection) blits it to the page. In\n" +
+";; the Interactions pane each display-bm call appends a fresh\n" +
+";; <canvas>, so drawing twice shows two images.\n" +
+"\n" +
+"(require racket/draw\n" +
+"         web-repl/display-bm)\n" +
+"\n" +
+"(define W 320) (define H 240)\n" +
+"(define bm (make-bitmap W H))\n" +
+"(define dc (send bm make-dc))\n" +
+"(send dc set-smoothing 'aligned)\n" +
+"(send dc set-brush (make-object color% 20 26 41) 'solid)\n" +
+"(send dc set-pen \"black\" 0 'transparent)\n" +
+"(send dc draw-rectangle 0 0 W H)\n" +
+"(send dc set-brush (make-object color% 242 92 56 0.9) 'solid)\n" +
+"(send dc draw-ellipse 50 50 120 120)\n" +
+"(send dc set-brush (make-object color% 51 189 237 0.85) 'solid)\n" +
+"(send dc draw-ellipse 130 70 140 140)\n" +
+"(send dc set-brush (make-object color% 252 199 46 0.85) 'solid)\n" +
+"(send dc draw-ellipse 120 20 80 80)\n" +
+"\n" +
+"(display-bm bm)\n" +
+"\n" +
+";; A bare bitmap result also renders: after Run, try evaluating just\n" +
+";; bm at the REPL on the right.\n",
+    },
+    {
+      name: "DOM manipulation",
+      code:
+"#lang racket\n" +
+"\n" +
+";; dom-eval (from the preloaded web-repl collection) is a synchronous\n" +
+";; JS-on-page primitive: it ships a JS source string to the page,\n" +
+";; which runs eval() on its next animation frame and returns the\n" +
+";; result as a string. v0 is arbitrary JS; a typed protocol is the\n" +
+";; future direction (see build-wasm.md).\n" +
+"\n" +
+"(require web-repl/dom)\n" +
+"\n" +
+"(displayln \"DOM RPC round-trips through page eval:\")\n" +
+"(printf \"  document.title before: ~s~n\" (dom-eval \"document.title\"))\n" +
+"(dom-eval \"document.title = 'hello from Racket'\")\n" +
+"(printf \"  document.title after:  ~s~n\" (dom-eval \"document.title\"))\n" +
+"\n" +
+"(printf \"  navigator.userAgent (truncated): ~s~n\"\n" +
+"        (substring (dom-eval \"navigator.userAgent\") 0 50))\n" +
+"\n" +
+"(define count\n" +
+"  (dom-eval \"document.querySelectorAll('button').length\"))\n" +
+"(printf \"  buttons on this page: ~a~n\" count)\n" +
+"\n" +
+";; Drop a note right under the page's <h1> heading.\n" +
+"(dom-eval (string-append\n" +
+"           \"var n = document.createElement('div');\"\n" +
+"           \"n.textContent = 'racket touched me (' + new Date().toLocaleTimeString() + ')';\"\n" +
+"           \"n.style.cssText = 'margin: 8px 0 0; color: #f59e0b; font-family: monospace;';\"\n" +
+"           \"document.querySelector('h1').insertAdjacentElement('afterend', n);\"\n" +
+"           \"'div appended'\"))\n" +
+"\n" +
+";; After Run, try (dom-eval \"document.title\") at the REPL on the right.\n",
+    },
+    {
+      name: "Continuations",
+      code:
+"#lang racket\n" +
+"\n" +
+";; First-class continuations work in the WASM build -- both the\n" +
+";; escaping kind (call/cc) and the delimited kind that racket/generator\n" +
+";; is built on.\n" +
+"\n" +
+";; --- call/cc as an early escape from a loop ---\n" +
+"(define (first-even lst)\n" +
+"  (call/cc\n" +
+"   (lambda (return)\n" +
+"     (for ([x (in-list lst)])\n" +
+"       (when (even? x) (return x)))\n" +
+"     #f)))\n" +
+"\n" +
+"(printf \"first even of '(1 3 5 8 9 10): ~a~n\"\n" +
+"        (first-even '(1 3 5 8 9 10)))\n" +
+"\n" +
+";; --- a resumable generator (delimited continuations) ---\n" +
+"(require racket/generator)\n" +
+"\n" +
+";; Yields the Fibonacci numbers one at a time; each (fib) resumes the\n" +
+";; captured continuation where the last yield left off.\n" +
+"(define fib\n" +
+"  (generator ()\n" +
+"    (let loop ([a 0] [b 1])\n" +
+"      (yield a)\n" +
+"      (loop b (+ a b)))))\n" +
+"\n" +
+"(printf \"first 10 Fibonacci numbers: ~a~n\"\n" +
+"        (for/list ([_ (in-range 10)]) (fib)))\n" +
+"\n" +
+";; After Run, call (fib) at the REPL -- it picks up right where the\n" +
+";; sequence left off.\n",
+    },
+  ];
+
   /* ---- DOM hooks --------------------------------------------------- */
 
   var editor       = document.getElementById("editor");
+  var exampleSel   = document.getElementById("example");
   var runBtn       = document.getElementById("run");
   var stopBtn      = document.getElementById("stop");
   var runIdleBtn   = document.getElementById("run-idle");
@@ -399,6 +556,47 @@
       }
     }
   }
+
+  /* ---- examples dropdown ------------------------------------------ */
+  /* Seed the editor from EXAMPLES and let the dropdown swap programs.
+   * loadedCode tracks the unedited text of the current example so we can
+   * tell whether the user has touched it; if so, picking another example
+   * confirms before discarding their edits. */
+
+  var loadedCode = "";
+
+  function loadExample(idx) {
+    var ex = EXAMPLES[idx];
+    if (!ex) return;
+    editor.value = ex.code;
+    loadedCode = ex.code;
+    exampleSel.selectedIndex = idx;
+  }
+
+  EXAMPLES.forEach(function (ex, i) {
+    var opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = ex.name;
+    exampleSel.appendChild(opt);
+  });
+
+  exampleSel.addEventListener("change", function () {
+    var idx = parseInt(exampleSel.value, 10);
+    if (editor.value !== loadedCode &&
+        !window.confirm("Discard your edits and load “" +
+                        EXAMPLES[idx].name + "”?")) {
+      // Revert the <select> to the example that's still in the editor.
+      for (var i = 0; i < EXAMPLES.length; i++) {
+        if (EXAMPLES[i].code === loadedCode) { exampleSel.selectedIndex = i; break; }
+      }
+      return;
+    }
+    if (worker) stop();  // switching examples ends the current run
+    loadExample(idx);
+    editor.focus();
+  });
+
+  loadExample(0);  // default: hello world
 
   /* ---- wiring ----------------------------------------------------- */
 
