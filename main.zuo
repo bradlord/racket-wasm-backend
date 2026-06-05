@@ -319,7 +319,7 @@
        (build/dep (find-target build-config.rktd the-targets) token)
        ;; Run raco setup so raco pkg commands are available
        (build (find-target "wasm-setup" targets) #f (build-options))
-       (install-base-pkgs token (find-racket vm))
+       (install-base-pkgs token (find-racket vm) #t)
        (build (find-target "wasm-setup" targets) #f (build-options))
        (build (find-target "wasm" targets) #f (build-options))]
       [else
@@ -470,21 +470,48 @@
            (if also? "-D" '())))
 
   ;; Install `PKGS` (plus required packages and their deps) into the
-  ;; installation's `share/pkgs` as sources, with `--no-setup` (a later
-  ;; `raco setup` compiles them). Shared by `in-place` and the wasm flow,
-  ;; where the cross `wasm-setup` does the compiling for tpb32l.
-  (define (install-base-pkgs token vars)
+  ;; installation's `share/pkgs` with `--no-setup` (a later `raco setup`
+  ;; compiles them). Shared by `in-place` and the wasm flow, where the
+  ;; cross `wasm-setup` does the compiling for tpb32l. Normally installs
+  ;; sources; on the wasm flow, if a prebuilt binary-only catalog exists
+  ;; (`wasm? = #t`, see `wasm-binary-pkgs`), clean-installs the stripped
+  ;; .zo-only packages from it instead.
+  (define (install-base-pkgs token vars [wasm? #f])
     (define jobs (get-jobs))
-    (pkgs-catalog token vars)
-    (raco vars "pkg" "update"
-          "--all" "--auto" "--no-setup" "--scope" "installation"
-          (shell->strings (lookup 'PKG_UPDATE_OPTIONS)))
-    (raco vars "pkg" "install"
-          (if jobs (list "-j" (~a jobs)) '())
-          "--no-setup" "--pkgs" "--skip-installed" "--scope" "installation"
-          "--deps" "search-auto"
-          required-pkgs
-          (pkgs-to-install)))
+    (define bin-catalog (at-source "racket/src/.wasm-pkgs-cache/catalog"))
+    (cond
+      ;; WASM build with a prebuilt binary-only catalog present (from
+      ;; `make wasm-binary-pkgs`): clean-install PKGS from it as the sole
+      ;; catalog. The bootstrap source install left the full (source +
+      ;; build-only) tree under share/pkgs with its pkg db; clear that
+      ;; first so build-only packages don't linger and the binary versions
+      ;; install fresh (NOT `--skip-installed`). Each binary package has
+      ;; build-deps stripped from its info.rkt, so `--deps search-auto`
+      ;; walks only runtime deps -- build-deps pruned, image ships .zo-only.
+      ;; See build-wasm.md "Binary-only package preload".
+      [(and wasm? (directory-exists? bin-catalog))
+       (alert "wasm: installing packages from binary-only catalog")
+       (rm* (at-source "racket/share/pkgs"))           ; takes pkgs.rktd db
+       (rm* (at-source "racket/share/links.rktd"))     ; rebuilt by install
+       (rm* (at-source "racket/share/info-cache.rktd")) ; stale cache
+       (raco vars "pkg" "install"
+             (if jobs (list "-j" (~a jobs)) '())
+             "--no-setup" "--pkgs" "--scope" "installation"
+             "--catalog" bin-catalog
+             "--deps" "search-auto"
+             required-pkgs
+             (pkgs-to-install))]
+      [else
+       (pkgs-catalog token vars)
+       (raco vars "pkg" "update"
+             "--all" "--auto" "--no-setup" "--scope" "installation"
+             (shell->strings (lookup 'PKG_UPDATE_OPTIONS)))
+       (raco vars "pkg" "install"
+             (if jobs (list "-j" (~a jobs)) '())
+             "--no-setup" "--pkgs" "--skip-installed" "--scope" "installation"
+             "--deps" "search-auto"
+             required-pkgs
+             (pkgs-to-install))]))
 
   (define (pkgs-catalog token vars)
     (racket vars
@@ -903,6 +930,29 @@
   (define (wasm token)
     (build-base "cs/c" token (hash 'wasm? #t)))
 
+  ;; Standalone step (run manually after a bootstrap `make wasm`): strip the
+  ;; already-cross-compiled in-tree packages into a cached binary-only
+  ;; catalog under racket/src/.wasm-pkgs-cache, which the next `make wasm`
+  ;; consumes (see `install-base-pkgs`). Not a dependency of `wasm`. See
+  ;; build-wasm.md "Binary-only package preload".
+  ;;
+  ;; The script must run in the **cross-compiler** context, because
+  ;; `pkg/strip`'s `fixup-zo` reads each tpb32l ".zo" (compiled fasl is
+  ;; machine-specific, unreadable by a plain host racket). Supply the same
+  ;; cross flags `raco setup` uses: `--cross-compiler tpb32l <cs/c-build>`
+  ;; plus `-MCR <cs/c-build>/compiled:` and `-G <build/config>`. Use a bare
+  ;; vars hash (just the exe) so `find-racket`'s `-X racket/collects` /
+  ;; `-G racket/etc` don't shadow the host racket's own collects, which is
+  ;; where pkg/strip et al. resolve from.
+  (define (wasm-binary-pkgs token)
+    (define exe (hash-ref (find-racket vm) 'racket))
+    (define cross-build (at-source "racket/src/build/cs/c"))
+    (racket (hash 'racket exe)
+            "-G" (path-only build-config.rktd)
+            "-MCR" (~a (path->complete-path (build-path cross-build "compiled")) ":")
+            "--cross-compiler" "tpb32l" cross-build
+            (at-source "racket/src/build-wasm-binary-pkgs.rkt")))
+
   ;; ------------------------------------------------------------
   ;; Targets
 
@@ -936,6 +986,7 @@
        [:target pb-push () ,(lambda (token) (pb-manage 'push))]
 
        [:target wasm () ,(lambda (token) (wasm token))]
+       [:target wasm-binary-pkgs () ,(lambda (token) (wasm-binary-pkgs token))]
 
        [:target pkgs-catalog () ,(lambda (token) (pkgs-catalog token (find-racket vars vm)))]
 

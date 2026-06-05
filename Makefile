@@ -253,6 +253,15 @@ bc: $(ZUO)
 wasm: $(ZUO)
 	$(RUN_ZUO) wasm $(BUILD_VARS)
 
+# Build a cached binary-only package catalog (racket/src/.wasm-pkgs-cache)
+# for the WASM build: strip the already-cross-compiled in-tree packages to
+# .zo-only, build-deps removed. Run this AFTER a bootstrap `make wasm`; a
+# subsequent `make wasm` then clean-installs PKGS from the catalog so the
+# image ships .zo-only with build-deps pruned. RACKET must match the tree
+# version. See build-wasm.md "Binary-only package preload".
+wasm-binary-pkgs: $(ZUO)
+	$(RUN_ZUO) wasm-binary-pkgs $(BUILD_VARS)
+
 both: $(ZUO)
 	$(RUN_ZUO) both $(BUILD_VARS)
 

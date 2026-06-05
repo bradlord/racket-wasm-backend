@@ -1108,8 +1108,8 @@ Not all links entries live under `share/pkgs`: catalog packages are
 wholesale `share/pkgs` preload), but in-tree packages are *linked in
 place* and show up as `static-root` entries (the core
 metapackages/libraries -- `base`, `racket-lib`, `compiler-lib`, `zo-lib`,
-...) or named-collection entries (a local source package like the
-vendored `datalog`), all with a `(up up #"pkgs" #"name")` path that
+...) or named-collection entries (any in-tree local source package), all
+with a `(up up #"pkgs" #"name")` path that
 resolves -- relative to the links file's `/share` dir -- to
 `/pkgs/<name>`. Their source is the in-tree `<root>/pkgs/<name>`. Racket
 errors reading `links.rktd` if any referenced dir is absent, so
@@ -1151,34 +1151,112 @@ monolithic catalog package whose `build-deps` drag in a large tree (the
 classic offender is `racket-doc`), the only lever is the package
 *metadata*.
 
-The fix is to **vendor a trimmed copy** as a local package. Because
-`pkgs-config.rkt` puts the local dirs-catalog *first* in the catalog
-search list (`(cons catalog-relative-path-str ...)`), a `pkgs/<name>/`
-shadows the upstream catalog entry of the same name. In the copy's
-`info.rkt`, drop `build-deps` (and `scribblings`); also delete any
-`(module+ test (require rackunit) ...)` blocks in non-test source, since
-`raco setup` compiles test submodules by default and would then need
-`rackunit-lib`. Keep `deps` in sync with upstream.
+The general fix is the **binary-only package preload** (next section): a
+`binary-lib` strip drops `build-deps` from every package's `info.rkt`, so
+a clean install from the binary catalog resolves only runtime `deps` --
+no per-package work. **Use that, not a vendored trim.**
 
-Worked example -- **`datalog`** (`pkgs/datalog/`). Upstream's
-`deps` are clean `-lib` packages (`base`, `parser-tools-lib`,
-`syntax-color-lib`, all doc-free); the entire bloat was its `build-deps`
-(`racket-doc`, `scribble-lib`, `rackunit-lib`). The vendored copy ships
-runtime sources only -- no `scribblings/`, no `tests/`, `build-deps`
-removed, and the two `(module+ test ...)` blocks under `tool/` stripped
-(the only out-of-`tests/` rackunit reference). `tool/` is kept because
-`lang/reader.rkt` `dynamic-require`s it for the `#lang datalog` reader;
-those are runtime requires, so they don't add static deps. Re-vendor from
-`https://raw.githubusercontent.com/racket/datalog/master/` if upstream
-changes.
+Historically (before the binary preload existed) the only lever was to
+**vendor a hand-trimmed copy** as a local package: drop `build-deps` from
+the copy's `info.rkt` so it shadows the upstream catalog entry. The lone
+example was **`datalog`** (`pkgs/datalog/`), whose `build-deps`
+(`racket-doc`, `scribble-lib`, `rackunit-lib`) were the entire bloat. That
+vendored fork has been **removed** -- `datalog` now installs from the
+upstream catalog and the binary strip prunes its build-deps like any other
+package. Don't reintroduce per-package vendoring for build-dep trimming.
 
-**This `pkgs/datalog/` vendoring is temporary** and should be removed in
-the future: it pins a stale, hand-trimmed copy that has to be manually
-re-synced with upstream. The durable fix is to drop the vendored fork once
-either a real "install without build-deps" mechanism exists (today `raco
-pkg install` has no such knob -- see above) or upstream ships a doc-free
-`datalog-lib`. Treat the vendored tree as a stopgap, not the model for how
-packages should be added.
+### Binary-only package preload
+
+The default preload ships every package as **source**: each `.rkt` rides
+next to its `.zo`, and the source install pulls each package's
+**build-deps** (docs/tests) as well as its runtime deps. An opt-in
+two-step flow strips the shipped tree to `.zo`-only and prunes build-deps
+across all packages at once (replacing the per-package `datalog`
+hand-vendoring described above), shrinking `scheme*.data`. Measured on a
+`draw`-stack build, it cut
+`scheme*.data` from ~177 MB to ~62 MB (~65%).
+
+The mechanism reuses `pkg/strip`'s `generate-stripped-directory` in
+`'binary-lib` mode, which operates on an **already-compiled** package
+directory (it copies `compiled/`, never recompiles) and: drops a
+`.rkt`/`.ss` wherever a sibling `compiled/<name>.zo` exists; drops
+`tests`/`scribblings`/`doc`/`.scrbl`/`.dep`; strips `test`/`doc`/`srcdoc`
+submodules out of each `.zo`; and **drops `build-deps`** from the emitted
+`info.rkt`. Because the cross build writes the tpb32l `.zo` straight into
+`compiled/` (no machine subdir), strip's default `compiled-dir`
+(`(car (use-compiled-file-paths))` = `"compiled"`) matches and the source
+is dropped -- no `use-compiled-file-paths` parameterization needed.
+
+**The two steps:**
+
+1. **Bootstrap (normal `make wasm`).** Installs `PKGS`+required as source
+   into `share/pkgs` and cross-compiles them to `compiled/` (tpb32l). This
+   is the only run that pays the build-dep fetch/compile cost.
+2. **`make wasm-binary-pkgs`** (manual; runs
+   `racket/src/build-wasm-binary-pkgs.rkt` via the host `RACKET`). It
+   enumerates every installed package in the in-tree installation scope
+   (via `pkg/lib` with `current-pkg-scope` pointed at `share/pkgs`, so
+   both catalog-copied and linked-in-place packages are covered), strips
+   each into `racket/src/.wasm-pkgs-cache/pkgs/<name>`, builds a
+   dirs-catalog at `.wasm-pkgs-cache/catalog` (no `--link`: install must
+   *copy* into `share/pkgs` so the wholesale preload picks it up), and
+   writes a `manifest.rktd`. The cache lives outside `build/` (like
+   `.wasm-cache`), so `make clean` keeps it.
+
+   The script must run in the **cross-compiler** context: `pkg/strip`'s
+   `fixup-zo` reads each package `.zo` (to strip test/doc submodules), and
+   tpb32l compiled fasl is machine-specific -- a plain host racket can't
+   read it. `make wasm-binary-pkgs` supplies the same cross flags `raco
+   setup` uses; the equivalent manual invocation (from the repo root) is:
+
+   ```sh
+   <host-racket> -G build/config \
+                 -MCR racket/src/build/cs/c/compiled: \
+                 --cross-compiler tpb32l racket/src/build/cs/c \
+                 racket/src/build-wasm-binary-pkgs.rkt
+   ```
+
+   (The bare host racket -- not the tree's collects via `-X` -- supplies
+   `pkg/strip`/`pkg/lib`/`pkg/dirs-catalog`, so the make target passes the
+   exe with an otherwise-empty argument set.)
+
+Thereafter every `make wasm` **consumes** the cache: `install-base-pkgs`
+(`main.zuo`) sees `.wasm-pkgs-cache/catalog`, **clears** `share/pkgs`
+(taking the `pkgs.rktd` db), `share/links.rktd`, and
+`share/info-cache.rktd`, then clean-installs `PKGS`+required from the
+binary catalog as the **sole** `--catalog`, `--deps search-auto`,
+`--no-setup`, and **without** `--skip-installed`. This is a deliberate
+clean install, *not* an additive `--catalog` prepend: the bootstrap left
+the full source + build-only tree installed, and `--skip-installed` over
+it would skip everything and prune nothing. With the binary catalog as
+sole source and `build-deps` stripped from every entry's `info.rkt`,
+`search-auto` walks only runtime `deps` -- build-only packages are never
+fetched, and the resulting `share/pkgs` is `.zo`-only. When the cache is
+absent, `install-base-pkgs` falls back to the source install verbatim.
+
+**Traps / notes:**
+
+- `strip-binary-compile-info` defaults to `#t`, which makes strip
+  `managed-compile-zo` the rewritten `info.rkt` with the **host**
+  compiler -- that would inject a host-machine `info_rkt.zo` into a
+  tpb32l package. The script parameterizes it to `#f` and keeps
+  `info.rkt` as source; the cross `raco setup` in `wasm-setup` compiles
+  it for tpb32l (it is read only by setup/pkg tooling, never at program
+  runtime). The script also passes `generate-stripped-directory`
+  `#:check-status? #f` to skip the built/binary precondition, since these
+  are source installs we cross-compiled ourselves.
+- Dependency resolution reads `deps`/`build-deps` straight from the
+  staged package's `info.rkt` (`get-all-deps*` in `pkg/private/metadata`,
+  `package-dependencies` in `pkg/private/collects`), so pruning happens
+  **iff** the installed package is the stripped binary version -- which is
+  exactly why consumption must be a clean install, not a prepend.
+- Cache invalidation is manual: re-run `make wasm-binary-pkgs` when `PKGS`
+  or the tree version changes (the `manifest.rktd` records both). `make
+  wasm` does not auto-rebuild it.
+- This supersedes the `datalog` build-dep trimming: with binary install
+  as the path, the vendored `pkgs/datalog/` copy has been removed and
+  `datalog` installs from the upstream catalog like any other package, its
+  build-deps pruned by the strip.
 
 ### A `web-repl` helper collection
 

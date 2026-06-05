@@ -5,7 +5,10 @@
 # pb32l/tpb32l Racket-CS layers, optional cross-compiled deps (libffi
 # plus the Cairo/Pango/etc. stack, driven by cs/c/wasm-deps/deps/), and any
 # build-cs-* attempts at different machine-type configurations. Tarball
-# downloads cache in .wasm-cache/.
+# downloads cache in .wasm-cache/. The cached binary-only package catalog
+# (build-wasm-binary-pkgs.rkt -> "Binary-only package preload") lives in
+# .wasm-pkgs-cache/.
 /build-cs-*/
 /build-*-em/
 /.wasm-cache/
+/.wasm-pkgs-cache/

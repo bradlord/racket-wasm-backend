@@ -906,8 +906,8 @@
                    ;; preload above. But the links file also has entries that
                    ;; resolve to /pkgs/<name> -- `static-root`s for in-tree
                    ;; metapackages/libraries (base, racket-lib, compiler-lib,
-                   ;; zo-lib, ...) and named-collection links for local source
-                   ;; packages linked in place (e.g. our vendored datalog).
+                   ;; zo-lib, ...) and named-collection links for any
+                   ;; in-tree local source packages linked in place.
                    ;; These are linked, not copied, so their source is the
                    ;; in-tree <root>/pkgs/<name>; Racket errors reading the
                    ;; links file if any referenced dir is absent. Rather than
