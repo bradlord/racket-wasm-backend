@@ -1102,12 +1102,24 @@ wasm link (`cs/c/build.zuo`, `share-preloads`) then preloads them
 --preload-file racket/share/links.rktd@/share/links.rktd
 ```
 
-plus the two static metapackages `pkgs/base` and `pkgs/racket-lib` at
-`/pkgs/...` (the links file's `static-root` entries point there). So
-there are no per-package emcc flags: anything the install dropped under
-`racket/share/pkgs` with a links entry ships automatically. (The old
-`wasm-shell/share-links.rktd` + per-package `--preload-file` scheme is
-gone.)
+plus every in-tree package the links file points at under `/pkgs/<name>`.
+Not all links entries live under `share/pkgs`: catalog packages are
+*copied* there (a `(root (#"pkgs" #"name"))` entry, covered by the
+wholesale `share/pkgs` preload), but in-tree packages are *linked in
+place* and show up as `static-root` entries (the core
+metapackages/libraries -- `base`, `racket-lib`, `compiler-lib`, `zo-lib`,
+...) or named-collection entries (a local source package like the
+vendored `datalog`), all with a `(up up #"pkgs" #"name")` path that
+resolves -- relative to the links file's `/share` dir -- to
+`/pkgs/<name>`. Their source is the in-tree `<root>/pkgs/<name>`. Racket
+errors reading `links.rktd` if any referenced dir is absent, so
+`share-preloads` **parses `links.rktd`** and preloads each `/pkgs/<name>`
+it finds (`links-pkgs-roots` in `cs/c/build.zuo`) rather than hardcoding a
+list -- adding a package whose deps drag in new in-tree libraries needs no
+edit to the link step. So there are no per-package emcc flags: anything
+the install dropped under `racket/share/pkgs` or linked into `/pkgs` with a
+links entry ships automatically. (The old `wasm-shell/share-links.rktd` +
+per-package `--preload-file` scheme is gone.)
 
 ### Adding a new package
 
@@ -1126,6 +1138,47 @@ then runs `raco pkg install <REQUIRED_PKGS> <PKGS>` with
 3. Rebuild (`make wasm` / `buildit.sh`). The install writes
    `racket/share/pkgs/<name>` + its links entry; the link preloads the
    tree. `(require <name>)` now works in the image.
+
+### Trimming doc-only build-deps
+
+`raco pkg install --deps search-auto` resolves a package's `build-deps`
+(docs/tests) as well as its runtime `deps` -- `pkg/private/install.rkt`'s
+`get-all-deps` appends both unconditionally, and there is **no**
+`--no-build-deps` flag. `--no-docs`/`-D` only stops docs from *building*;
+the build-deps are still fetched and compiled. `--binary-lib` only strips
+files *after* staging; it doesn't change which deps get resolved. So for a
+monolithic catalog package whose `build-deps` drag in a large tree (the
+classic offender is `racket-doc`), the only lever is the package
+*metadata*.
+
+The fix is to **vendor a trimmed copy** as a local package. Because
+`pkgs-config.rkt` puts the local dirs-catalog *first* in the catalog
+search list (`(cons catalog-relative-path-str ...)`), a `pkgs/<name>/`
+shadows the upstream catalog entry of the same name. In the copy's
+`info.rkt`, drop `build-deps` (and `scribblings`); also delete any
+`(module+ test (require rackunit) ...)` blocks in non-test source, since
+`raco setup` compiles test submodules by default and would then need
+`rackunit-lib`. Keep `deps` in sync with upstream.
+
+Worked example -- **`datalog`** (`pkgs/datalog/`). Upstream's
+`deps` are clean `-lib` packages (`base`, `parser-tools-lib`,
+`syntax-color-lib`, all doc-free); the entire bloat was its `build-deps`
+(`racket-doc`, `scribble-lib`, `rackunit-lib`). The vendored copy ships
+runtime sources only -- no `scribblings/`, no `tests/`, `build-deps`
+removed, and the two `(module+ test ...)` blocks under `tool/` stripped
+(the only out-of-`tests/` rackunit reference). `tool/` is kept because
+`lang/reader.rkt` `dynamic-require`s it for the `#lang datalog` reader;
+those are runtime requires, so they don't add static deps. Re-vendor from
+`https://raw.githubusercontent.com/racket/datalog/master/` if upstream
+changes.
+
+**This `pkgs/datalog/` vendoring is temporary** and should be removed in
+the future: it pins a stale, hand-trimmed copy that has to be manually
+re-synced with upstream. The durable fix is to drop the vendored fork once
+either a real "install without build-deps" mechanism exists (today `raco
+pkg install` has no such knob -- see above) or upstream ships a doc-free
+`datalog-lib`. Treat the vendored tree as a stopgap, not the model for how
+packages should be added.
 
 ### A `web-repl` helper collection
 

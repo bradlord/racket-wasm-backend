@@ -896,28 +896,57 @@
                    (define dep-uflags
                      (read-flag-lines (build-path wasm-deps-dir "wasm_deps_uflags.txt")))
                    (define (preload src dest) (list "--preload-file" (~a src "@" dest)))
+                   (define (preload-if-dir src dest)
+                     (if (directory-exists? src) (preload src dest) '()))
                    ;; Installed packages (PKGS): preload share/pkgs and the
                    ;; installation links file so the runtime finds them.
                    ;; main_em.c sets config-dir=/etc, so the links file is
-                   ;; looked up at /share/links.rktd. The generated links
-                   ;; file also has `static-root` entries for the core
-                   ;; metapackages `base`/`racket-lib` that resolve to
-                   ;; /pkgs/<name> (from /share via `up up`); Racket errors
-                   ;; reading the links file if those dirs are absent, so
-                   ;; preload the (tiny) source metapackages too. Only when
-                   ;; share/pkgs is present.
-                   (define (preload-if-dir src dest)
-                     (if (directory-exists? src) (preload src dest) '()))
+                   ;; looked up at /share/links.rktd. Catalog packages copied
+                   ;; under share/pkgs are covered by the wholesale share/pkgs
+                   ;; preload above. But the links file also has entries that
+                   ;; resolve to /pkgs/<name> -- `static-root`s for in-tree
+                   ;; metapackages/libraries (base, racket-lib, compiler-lib,
+                   ;; zo-lib, ...) and named-collection links for local source
+                   ;; packages linked in place (e.g. our vendored datalog).
+                   ;; These are linked, not copied, so their source is the
+                   ;; in-tree <root>/pkgs/<name>; Racket errors reading the
+                   ;; links file if any referenced dir is absent. Rather than
+                   ;; maintain a hardcoded list, parse links.rktd and preload
+                   ;; every /pkgs/<name> it points at.
+                   ;;
+                   ;; Each entry is `(<tag> <path> [<version-regexp>])`; an
+                   ;; entry resolves to /pkgs/<name> when <path> (relative to
+                   ;; the links file's /share dir) is `(up up #"pkgs" #"name")`
+                   ;; -- up up escapes /share to /, then pkgs/name. zuo's
+                   ;; reader yields the bareword `up` as a symbol and the
+                   ;; byte-strings as plain strings.
+                   (define (links-pkgs-roots links-file)
+                     (filter
+                      (lambda (x) x)
+                      (map (lambda (e)
+                             (let ([path (and (pair? e) (pair? (cdr e)) (cadr e))])
+                               (and (list? path)
+                                    (= (length path) 4)
+                                    (eq? (car path) 'up)
+                                    (eq? (cadr path) 'up)
+                                    (equal? (list-ref path 2) "pkgs")
+                                    (list-ref path 3))))
+                           (car (string-read (file->string links-file))))))
                    (define share-preloads
                      (let ([share-pkgs (at-source "../../../share/pkgs")]
                            [links (at-source "../../../share/links.rktd")])
                        (if (directory-exists? share-pkgs)
                            (append (preload share-pkgs "/share/pkgs")
                                    (if (file-exists? links)
-                                       (preload links "/share/links.rktd")
-                                       '())
-                                   (preload-if-dir (at-source "../../../../pkgs/base") "/pkgs/base")
-                                   (preload-if-dir (at-source "../../../../pkgs/racket-lib") "/pkgs/racket-lib"))
+                                       (append
+                                        (preload links "/share/links.rktd")
+                                        (apply append
+                                               (map (lambda (name)
+                                                      (preload-if-dir
+                                                       (at-source (~a "../../../../pkgs/" name))
+                                                       (~a "/pkgs/" name)))
+                                                    (links-pkgs-roots links))))
+                                       '()))
                            '())))
                    ;; Inputs shared by both surfaces (node `scheme.*` and
                    ;; browser `scheme-web.*`). wasm_shell_io.o is NOT here --

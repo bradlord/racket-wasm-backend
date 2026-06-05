@@ -26,7 +26,7 @@ source ~/emsdk/emsdk_env.sh
 
 # Can experiment with PREFIX and DESTIR. We need to manually ready PREFIX in wasm task. It looks like build-deps gets confused by DESTDIR, so i have up for now.
 make wasm SCHEME=$HOME/oss/cz/bin/tarm64osx/scheme \
-    RACKET=$HOME/oss/minimal-racket/bin/racket PKGS=draw-lib WASM_DEPS="draw" \
+    RACKET=$HOME/oss/minimal-racket/bin/racket PKGS="draw-lib datalog" WASM_DEPS="draw" \
     SETUP_MACHINE_FLAGS="-MCR `pwd`/build/zo:" \
      && (cd racket/src/build/cs/c/wasm && echo ' (+ 4 5)' | node scheme.js)
 # make wasm SCHEME=$HOME/oss/cz/bin/tarm64osx/scheme \
