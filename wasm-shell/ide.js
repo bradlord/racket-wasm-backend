@@ -24,7 +24,8 @@
  *     run the definitions, then a REPL that sees them.
  *   - The Interactions input box is both the REPL (Cmd/Ctrl+Enter submits
  *     an expression) and the program's stdin (a submitted line reaches a
- *     blocked read-line). A second Run spawns a brand-new process.
+ *     blocked read-line). A second Run spawns a brand-new process;
+ *     Cmd/Ctrl+Enter in the editor re-runs too, stopping a live run first.
  *
  * Shares all of the worker/ring/canvas/DOM-RPC plumbing with the pages it
  * replaces; see shell-worker.js, shell-tty.js, wasm_shell_io.c,
@@ -287,6 +288,15 @@
     setStatus("Stopped", "error");
   }
 
+  // DrRacket's Run shortcut: re-run from scratch even mid-run. teardown()
+  // (via stop()) is synchronous, so the current process is gone before
+  // run() spawns the next; run()'s clearOutput() wipes the "[stopped]"
+  // line, so a restart looks like a clean Run.
+  function restart() {
+    if (worker) stop();
+    run();
+  }
+
   // Submit the Interactions input: a REPL expression and/or a line of the
   // program's stdin. Echoed into the transcript (Racket doesn't echo stdin).
   function evaluate() {
@@ -400,7 +410,7 @@
   editor.addEventListener("keydown", function (ev) {
     if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
       ev.preventDefault();
-      if (!runBtn.disabled) run();
+      restart();
     } else if (ev.key === "Tab") {
       ev.preventDefault();
       var s = editor.selectionStart, e = editor.selectionEnd;
