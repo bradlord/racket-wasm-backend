@@ -29,9 +29,6 @@
   var outputPre   = document.getElementById("output");
   var stdinBox    = document.getElementById("stdin");
   var statusEl    = document.getElementById("status");
-  var canvasWrap  = document.getElementById("canvas-wrap");
-  var canvasEl    = document.getElementById("canvas");
-  var canvasCtx   = canvasEl.getContext("2d");
 
   function setStatus(text, state) {
     statusEl.textContent = text;
@@ -50,22 +47,34 @@
     if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
   }
   function clearOutput() {
+    // textContent = "" also drops any <canvas> nodes appended inline.
     outputPre.textContent = "";
-    canvasWrap.dataset.active = "0";
-    canvasEl.width = 1;
-    canvasEl.height = 1;
   }
 
-  function drawCanvas(w, h, pixels) {
-    if (canvasEl.width !== w || canvasEl.height !== h) {
-      canvasEl.width = w;
-      canvasEl.height = h;
+  // Append a bitmap inline in the output, the same way the REPL does
+  // (browser-shell.js): each { type:"canvas" } message from the runtime
+  // worker (wasm_canvas_blit*) drops a fresh <canvas> into #output, so a
+  // program that draws N bitmaps shows N images interleaved with its
+  // text -- not one global canvas overwritten on each blit.
+  function appendCanvas(w, h, pixels) {
+    if (!(w > 0 && h > 0)) return;
+    var atBottom =
+      outputPre.scrollTop + outputPre.clientHeight + 4 >= outputPre.scrollHeight;
+    var canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.style.cssText =
+      "display:block;margin:8px 0;max-width:100%;border-radius:8px;" +
+      "border:1px solid rgba(159,176,195,0.18);image-rendering:pixelated;";
+    // pixels arrived as a transferred ArrayBuffer (RGBA8888, top-down);
+    // wrap it without copying.
+    var image = new ImageData(new Uint8ClampedArray(pixels), w, h);
+    canvas.getContext("2d").putImageData(image, 0, 0);
+    outputPre.appendChild(canvas);
+    while (outputPre.childNodes.length > 600) {
+      outputPre.removeChild(outputPre.firstChild);
     }
-    // pixels arrived as a transferred ArrayBuffer; wrap, no copy.
-    var clamped = new Uint8ClampedArray(pixels);
-    var image = new ImageData(clamped, w, h);
-    canvasCtx.putImageData(image, 0, 0);
-    canvasWrap.dataset.active = "1";
+    if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
   }
 
   if (typeof SharedArrayBuffer === "undefined" || typeof Atomics === "undefined") {
@@ -252,7 +261,7 @@
         return;
       }
       case "canvas": {
-        drawCanvas(msg.w, msg.h, msg.pixels);
+        appendCanvas(msg.w, msg.h, msg.pixels);
         return;
       }
       case "abort": {

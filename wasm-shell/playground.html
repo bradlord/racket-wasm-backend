@@ -128,21 +128,9 @@
       min-height: 56px;
       border-top: 1px solid rgba(159, 176, 195, 0.12);
     }
-    .canvas-wrap {
-      display: none;
-      padding: 12px 14px;
-      background: rgba(7, 14, 23, 0.85);
-      border-top: 1px solid rgba(159, 176, 195, 0.12);
-    }
-    .canvas-wrap[data-active="1"] { display: block; }
-    #canvas {
-      display: block;
-      max-width: 100%;
-      height: auto;
-      image-rendering: pixelated;
-      background: #000;
-      border-radius: 6px;
-    }
+    /* Bitmaps drawn via (display-bm) are appended inline into #output as
+       <canvas> nodes (see playground.js appendCanvas); they carry their
+       own inline styles, so there is no fixed canvas element here. */
     .panel-footer {
       padding: 10px 14px;
       display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -188,31 +176,23 @@
         <textarea id="editor" spellcheck="false" autocapitalize="off"
           autocorrect="off" autocomplete="off">#lang racket
 
-;; racket/draw to the canvas + DOM RPC to the page.
+;; racket/draw bitmaps + DOM RPC, both through the web-repl collection
+;; (preloaded into the WASM image).
 ;;
-;; `wasm_dom_eval` is a synchronous JS-on-page primitive: write a
-;; UTF-8 JS source string to a shared-memory command slot, then
-;; Atomics.wait until the page (which polls each animation frame)
-;; runs eval() and writes the reply back. Worker-only -- under node
-;; this hangs since there's no page to service the command.
+;; - display-bm blits a racket/draw bitmap% to the page. In the
+;;   playground each call appends a fresh <canvas> to the output, so
+;;   drawing twice shows two images.
+;; - dom-eval is a synchronous JS-on-page primitive: it ships a JS
+;;   source string to the page, which runs eval() on its next animation
+;;   frame and returns the result. v0: arbitrary JS; a typed protocol is
+;;   the future direction (see build-wasm.md).
 ;;
-;; This is v0: literally evals arbitrary JS. A typed protocol on top
-;; of the same transport is the future direction; see build-wasm.md.
+;; Both are worker-only -- under plain `racket`/node there is no page,
+;; so they do nothing useful there.
 
 (require racket/draw
-         ffi/unsafe
-         ffi/unsafe/vm)
-
-(define wasm-canvas-blit-argb
-  (vm-eval '(foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int)))
-(define wasm-dom-eval-raw
-  (vm-eval '(foreign-procedure "wasm_dom_eval" (u8* int u8* int) int)))
-
-(define (dom-eval js)
-  (define src (string->bytes/utf-8 js))
-  (define out (make-bytes 65536))
-  (define n (wasm-dom-eval-raw src (bytes-length src) out (bytes-length out)))
-  (bytes->string/utf-8 out #\? 0 n))
+         web-repl/display-bm
+         web-repl/dom)
 
 ;; --- Draw something with racket/draw ---
 
@@ -230,9 +210,7 @@
 (send dc set-brush (make-object color% 252 199 46 0.85) 'solid)
 (send dc draw-ellipse 120 20 80 80)
 
-(define pixels (make-bytes (* W H 4)))
-(send bm get-argb-pixels 0 0 W H pixels)
-(wasm-canvas-blit-argb W H pixels)
+(display-bm bm)
 
 ;; --- Touch the DOM ---
 
@@ -248,11 +226,12 @@
   (dom-eval "document.querySelectorAll('button').length"))
 (printf "  buttons on this page: ~a~n" count)
 
+;; Drop a note right under the page's <h1> heading.
 (dom-eval (string-append
            "var n = document.createElement('div');"
            "n.textContent = 'racket touched me (' + new Date().toLocaleTimeString() + ')';"
-           "n.style.cssText = 'margin: 8px 14px; color: #f59e0b; font-family: monospace;';"
-           "(document.querySelector('.canvas-wrap') || document.body).appendChild(n);"
+           "n.style.cssText = 'margin: 8px 0 0; color: #f59e0b; font-family: monospace;';"
+           "document.querySelector('h1').insertAdjacentElement('afterend', n);"
            "'div appended'"))
 </textarea>
         <footer class="panel-footer">
@@ -270,9 +249,6 @@
         </header>
         <pre id="output" tabindex="0" aria-label="Program output"></pre>
         <div>
-          <div class="canvas-wrap" id="canvas-wrap" aria-label="Canvas output">
-            <canvas id="canvas" width="1" height="1"></canvas>
-          </div>
           <textarea id="stdin" spellcheck="false" autocapitalize="off"
             autocorrect="off" autocomplete="off"
             placeholder="stdin: type a line and press Enter while a program is running"

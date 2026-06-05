@@ -1139,17 +1139,17 @@ Available primitives today (both reachable from Racket via the
   `racket/draw get-argb-pixels` output and Cairo `ARGB32` memory order
   respectively, rotating channels to RGBA during the copy out.
 
-  Both browser surfaces render `{ type:"canvas" }` messages, but
-  differently: the **playground** blits to one fixed `<canvas>`
-  (`drawCanvas`, overwriting on each blit); the **REPL**
-  (`browser-shell.js appendCanvas`) appends a *fresh* `<canvas>` into
-  the `#output` transcript per blit, so a session that draws N bitmaps
-  reads back as N inline images. The `web-repl` collection wraps this:
-  `(require web-repl/display-bm)` then `(display-bm bm)` reads a
-  `bitmap%` with `get-argb-pixels` and calls `wasm_canvas_blit_argb`,
-  dropping one image into the REPL output per call. (Companion helpers
-  in the same collection: `web-repl/canvas`, `web-repl/dom`,
-  `web-repl/http` -- see "A `web-repl` helper collection" below.)
+  Both browser surfaces render `{ type:"canvas" }` messages the same
+  way: an `appendCanvas` (in `browser-shell.js` and `playground.js`)
+  appends a *fresh* `<canvas>` into the `#output` pane per blit, so a
+  run that draws N bitmaps reads back as N images interleaved with its
+  text output -- no single global canvas. The `web-repl` collection
+  wraps this: `(require web-repl/display-bm)` then `(display-bm bm)`
+  reads a `bitmap%` with `get-argb-pixels` and calls
+  `wasm_canvas_blit_argb`, dropping one image into the output per call.
+  (Companion helpers in the same collection: `web-repl/canvas`,
+  `web-repl/dom`, `web-repl/http` -- see "A `web-repl` helper
+  collection" below.)
 - `int wasm_dom_eval(const char *js_src, int src_len, char *out,
   int out_cap)` -- synchronous DOM RPC. See the next subsection.
 
