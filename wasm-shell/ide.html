@@ -158,6 +158,17 @@
     }
     #input:focus { border-color: rgba(56, 189, 248, 0.55); }
     #input:disabled { opacity: 0.6; }
+    /* When the running process is blocked on stdin, highlight + ring the
+       input box; while it's busy computing, dim it. Driven by the
+       io-state flag the runtime sets (wasm_shell_io.c / shell-tty.js). */
+    .input-row.waiting #input {
+      border-color: rgba(245, 158, 11, 0.7);
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+    }
+    .input-row.busy #input { opacity: 0.65; }
+    .input-state { font-weight: 600; }
+    .input-row.waiting .input-state { color: var(--accent); }
+    .input-row.busy   .input-state { color: var(--muted); }
     .input-actions {
       display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
       font-family: var(--sans); font-size: 13px; color: var(--muted);
@@ -299,6 +310,7 @@
             disabled></textarea>
           <div class="input-actions">
             <button class="button button--primary" id="evaluate" type="button" disabled>Evaluate</button>
+            <span id="input-state" class="input-state"></span>
             <span><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> evaluates · <kbd>Enter</kbd> for a newline</span>
           </div>
         </div>

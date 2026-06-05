@@ -40,6 +40,7 @@
 
   var inBase = -1, inCap = 0;
   var outBase = -1, outCap = 0;
+  var stateBase = -1;
 
   function inReady() {
     if (inBase >= 0) return true;
@@ -65,6 +66,19 @@
     return true;
   }
 
+  // Resolve the io-state flag (wasm_shell_io.c). Set to 1 while we are
+  // parked in Atomics.wait below so the page can show a "waiting for
+  // input" affordance; back to 0 the moment input is available.
+  function setIoState(v) {
+    if (stateBase < 0) {
+      var fn = (typeof _shell_io_state_addr === "function") ? _shell_io_state_addr
+             : (Module && Module["_shell_io_state_addr"]);
+      if (typeof fn !== "function") return;
+      stateBase = fn() >> 2;
+    }
+    Atomics.store(HEAP32, stateBase, v);
+  }
+
   function streamRead(stream, buffer, offset, length /*, pos */) {
     if (length <= 0) return 0;
     if (!inReady()) return 0;
@@ -80,10 +94,12 @@
     // whatever is currently buffered and return -- the rktio read path
     // is happy to be called again for the remainder.
     while (head === tail) {
+      setIoState(1);   // blocked: the process is waiting for the user to type
       Atomics.wait(H, inBase + TAIL, tail);
       H = HEAP32;
       tail = Atomics.load(H, inBase + TAIL);
     }
+    setIoState(0);     // input available -- no longer waiting
 
     var n = 0;
     while (head !== tail && n < length) {

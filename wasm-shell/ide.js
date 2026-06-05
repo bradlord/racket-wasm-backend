@@ -42,6 +42,8 @@
   var outputPre    = document.getElementById("output");
   var inputArea    = document.getElementById("input");
   var evaluateBtn  = document.getElementById("evaluate");
+  var inputRow     = document.querySelector(".input-row");
+  var inputState   = document.getElementById("input-state");
   var statusEl     = document.getElementById("status");
   var interactions = document.getElementById("interactions");
 
@@ -115,6 +117,8 @@
   var inBase = 0, inCap = 0;
   var outBase = 0, outCap = 0;
   var outHead = 0;
+  var stateBase = 0;   // io-state flag index (set by shell-tty.js)
+  var ioWaiting = -1;  // last reflected flag value (-1 = not yet known)
   var pollHandle = 0;
   var encoder = new TextEncoder();
   var decoder = new TextDecoder("utf-8");
@@ -176,9 +180,42 @@
     Atomics.notify(HEAP32, domSlots.replySeqBase);
   }
 
+  // Reflect the runtime's io-state flag into the input UI. 1 = the
+  // process is blocked on stdin (a read-line, or the REPL prompt -- both
+  // are genuinely "waiting for you to type a line"); 0 = it's busy. We
+  // can't tell a program read apart from a REPL read at the fd level, so
+  // we present one honest affordance covering both. Only touches the DOM
+  // on a transition, and focuses the box once when input becomes wanted
+  // (but never steals focus from the editor on the left).
+  function reflectIoState() {
+    if (!ioReady || !stateBase) return;
+    var w = Atomics.load(HEAP32, stateBase);
+    if (w === ioWaiting) return;
+    ioWaiting = w;
+    if (w) {
+      inputRow.classList.add("waiting");
+      inputRow.classList.remove("busy");
+      inputState.textContent = "⌨ waiting for input";
+      if (document.activeElement !== editor && document.activeElement !== inputArea) {
+        inputArea.focus();
+      }
+    } else {
+      inputRow.classList.remove("waiting");
+      inputRow.classList.add("busy");
+      inputState.textContent = "running…";
+    }
+  }
+
+  function clearIoState() {
+    ioWaiting = -1;
+    inputRow.classList.remove("waiting", "busy");
+    inputState.textContent = "";
+  }
+
   function pollLoop() {
     drainOutput();
     serviceDom();
+    reflectIoState();
     if (worker) pollHandle = requestAnimationFrame(pollLoop);
   }
 
@@ -193,6 +230,8 @@
     ioReady = false;
     HEAP32 = null;
     domSlots = null;
+    stateBase = 0;
+    clearIoState();
   }
 
   // Reflect "a process is alive" in the controls.
@@ -283,23 +322,38 @@
         inCap    = msg.inCap;
         outBase  = msg.outBase;
         outCap   = msg.outCap;
+        stateBase = msg.stateBase || 0;
+        ioWaiting = -1;
         outHead  = Atomics.load(HEAP32, outBase + HEAD);
         domSlots = msg.dom || null;
         domLastSeq = 0;
         ioReady  = true;
         pollHandle = requestAnimationFrame(pollLoop);
-        // Bootstrap, sent as separate top-level forms on one line (each
-        // require takes effect before the next form is read), not echoed:
-        //   1. require racket/enter (for enter!).
-        //   2. install the web-repl bitmap printer: a current-print hook
+        // Bootstrap, sent as separate top-level forms (each require takes
+        // effect before the next form is read), not echoed:
+        //   1. install the submission-oriented REPL reader
+        //      (web-repl/ide-repl): from here on the REPL reads a whole
+        //      submission and parses ALL its forms before evaluating, so a
+        //      `read-line` mid-evaluation blocks for fresh input instead of
+        //      eating the rest of a submitted line (e.g. the 2nd of two
+        //      `(foo)`s). Read by the *default* per-datum reader; it then
+        //      installs itself, so the remaining forms below are read by it
+        //      as one submission. Guarded so a missing module still runs.
+        //   2. require racket/enter (for enter!).
+        //   3. install the web-repl bitmap printer: a current-print hook
         //      that renders bitmap-valued results via display-bm, so a
         //      bare top-level bitmap (in the program body or at the REPL)
         //      shows as an image. Set *before* enter! so the program's own
         //      top-level expressions get it too; guarded so a missing
         //      web-repl still lets the program run.
-        //   3. enter! the program -- runs its body and lands the REPL in
+        //   4. enter! the program -- runs its body and lands the REPL in
         //      its namespace.
+        // The trailing "\n" delimits the submission; the reader installed
+        // in step 1 consumes it as the line terminator, leaving the stdin
+        // buffer empty for the program's first real `read-line`.
         sendText(
+          '(with-handlers ([(lambda (e) #t) void]) ' +
+            '((dynamic-require (quote web-repl/ide-repl) (quote install-ide-prompt-read!)))) ' +
           '(require racket/enter) ' +
           '(with-handlers ([(lambda (e) #t) void]) ' +
             '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))) ' +

@@ -761,6 +761,9 @@ pthreads of its own):
   `get_char` blocks on the input ring with `Atomics.wait` (legal on
   the runtime worker), `put_char` pushes each byte into the output
   ring (no newline buffering, so the REPL prompt appears immediately).
+  While parked in that `Atomics.wait` it sets the `shell_io_state` flag
+  to `1` (and back to `0` once input arrives) so the page can show a
+  "waiting for input" affordance -- see "IDE page".
 - `wasm-shell/shell-worker.js` is the worker bootstrap: it sets up
   `self.Module`, `importScripts("./scheme-web.js")` synchronously,
   and on `onRuntimeInitialized` posts the shared `HEAPU8.buffer`
@@ -794,12 +797,23 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      --preload-file ../build-cs-tpb32l/racket-pbchunk.boot@racket.boot \
      --preload-file ../../collects@/collects \
      --preload-file ../../etc@/etc \
+     --use-preload-cache \
      -s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 \
-     -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap \
+     -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset,_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap,_shell_io_state_addr \
      -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,HEAPU8,HEAP32 \
      -sALLOW_TABLE_GROWTH=1 \
      -lffi
 ```
+
+`--use-preload-cache` is **browser-only** (it is in `browser-args`, not
+`node-args`, in `cs/c/build.zuo`). It makes the generated `.data` loader
+stash the preload package in IndexedDB keyed by package name + total
+size, so a returning browser reads the (large) boot/collects/etc/pkgs
+payload from IDB instead of re-fetching `scheme-web.data` over the
+network on every load. The cache self-invalidates when the package size
+changes, so a rebuild that alters the preload set transparently refreshes
+it. The node surface has no persistent IndexedDB to cache into, so the
+flag is omitted there.
 
 Notably absent: `-sPROXY_TO_PTHREAD` and the pthread-pool flags. The
 earlier design used `PROXY_TO_PTHREAD` so Emscripten itself spawned the
@@ -851,6 +865,11 @@ Lifecycle is **process-per-run**. The Interactions pane is inert until
 3. On `ready`, injects a one-line prelude into the stdin ring (not
    echoed), as separate top-level forms -- each `require` takes effect
    before the next form is read:
+   - install the **submission-oriented REPL reader** (`web-repl/ide-repl`'s
+     `install-ide-prompt-read!`, guarded `dynamic-require`) -- see
+     "Submission-oriented REPL reader" below. This is the *first* form, so
+     the default per-datum reader reads it; once it installs itself, the
+     remaining prelude forms are read by it as a single submission.
    - `(require racket/enter)` -- for `enter!`.
    - install the **bitmap printer** (`web-repl/print`'s
      `install-bitmap-printer!`, via a guarded `dynamic-require` so a
@@ -867,10 +886,51 @@ Lifecycle is **process-per-run**. The Interactions pane is inert until
      then a REPL that sees them (not just the `provide`d names a plain
      `-i -t` would expose).
 
+   The prelude ends with a trailing `"\n"` that delimits the submission;
+   the submission reader (installed in the first form) consumes it as the
+   line terminator, leaving the stdin ring empty for the program's first
+   real `read-line`.
+
 The single Interactions input box is both the REPL (Cmd/Ctrl+Enter
 submits an expression) and the program's stdin (a submitted line
-reaches a blocked `read-line`). A second Run spawns a brand-new
-process -- fresh namespace, like DrRacket. Bitmaps drawn via
+reaches a blocked `read-line`).
+
+**Submission-oriented REPL reader (`web-repl/ide-repl`).** The stock REPL
+reads *one* datum, then evaluates it. With the REPL's stdin doubling as
+the program's stdin (one shared byte stream), that interleaving leaks:
+submit `(foo)(foo)` where `foo` does `(read-line)`, and the first `foo`'s
+read-line eats the trailing `(foo)` as its input instead of it being
+evaluated. Two earlier symptoms had the same root cause -- the original
+"`read-line` returns `""`" bug was the prelude's own trailing newline
+leaking into the program the same way.
+
+The fix replaces only the REPL's *read* step (`current-prompt-read`; the
+stock loop still evals/prints/handles errors -- see `racket/repl`). The
+new reader consumes a whole **submission** -- one line, or several lines
+accumulated until the forms balance (`exn:fail:read:eof` => read more) --
+parses *all* its top-level forms up front via `current-read-interaction`,
+and hands them to the REPL one at a time from a `pending` queue (no extra
+`> ` between forms of one submission). Because the submission's bytes are
+fully drained before any form runs, a `read-line` during evaluation
+blocks for a *fresh* submission rather than eating the rest of the line.
+That is DrRacket's separation: submitted expressions and the input a
+running program reads are distinct streams in effect, even though they
+ride the same ring. `(foo)(foo)` now prompts twice, once per `foo`.
+
+**Waiting-for-input affordance.** Because the program's `read-line` and
+the REPL's own prompt-read are the same fd, they are indistinguishable
+at the I/O layer -- there is no way to label one block "stdin" and the
+other "REPL". Instead a single honest signal covers both: `shell-tty.js`
+flips the `shell_io_state` flag (`wasm_shell_io.c`, exported as
+`_shell_io_state_addr`, posted to the page as `stateBase`) to `1` while
+parked in `Atomics.wait` on the stdin ring, back to `0` once input is
+available. `ide.js` polls it each animation frame (`reflectIoState`) and,
+on a transition, highlights + focuses the input box with a "⌨ waiting for
+input" label (or dims it with "running…" while busy). The flag lives in
+the same shared linear memory as the rings, so no extra messaging is
+needed; the page never has to guess from ring head/tail. A second Run
+spawns a brand-new process -- fresh namespace, like DrRacket. Bitmaps
+drawn via
 `web-repl/display-bm` (or just evaluated bare, thanks to the printer)
 and DOM pokes via `web-repl/dom` both land in this pane (inline
 `<canvas>` per blit; see the `wasm_canvas`/`wasm_dom` notes).

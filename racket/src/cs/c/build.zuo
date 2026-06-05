@@ -982,7 +982,7 @@
                       (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
                             (~a "-sEXPORTED_FUNCTIONS="
                                 "_malloc,_free,_main,_setThrew,_memcpy,_memset,"
-                                "_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap,"
+                                "_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap,_shell_io_state_addr,"
                                 "_wasm_dom_cmd_seq_addr,_wasm_dom_cmd_len_addr,_wasm_dom_cmd_buf_addr,_wasm_dom_cmd_cap,"
                                 "_wasm_dom_reply_seq_addr,_wasm_dom_reply_len_addr,_wasm_dom_reply_buf_addr,_wasm_dom_reply_cap")
                             (~a "-sEXPORTED_RUNTIME_METHODS="

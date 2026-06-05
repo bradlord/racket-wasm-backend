@@ -44,7 +44,18 @@
 static volatile int shell_in_ring[2 + SHELL_IN_CAP];
 static volatile int shell_out_ring[2 + SHELL_OUT_CAP];
 
-EMSCRIPTEN_KEEPALIVE int *shell_in_addr(void)  { return (int *)shell_in_ring; }
-EMSCRIPTEN_KEEPALIVE int  shell_in_cap(void)   { return SHELL_IN_CAP; }
-EMSCRIPTEN_KEEPALIVE int *shell_out_addr(void) { return (int *)shell_out_ring; }
-EMSCRIPTEN_KEEPALIVE int  shell_out_cap(void)  { return SHELL_OUT_CAP; }
+/* A single int the runtime worker (shell-tty.js) flips while it is parked
+ * in `Atomics.wait` on the stdin ring -- i.e. while the process is blocked
+ * waiting for the user to type a line (a program's `read-line`, or the
+ * REPL prompt; the two are indistinguishable at the fd level). The page
+ * (ide.js) polls it each animation frame to show a "waiting for input"
+ * affordance and focus the input box. 0 = running/not blocked, 1 =
+ * blocked waiting for stdin. Lives in the same shared linear memory as
+ * the rings, so a plain Int32Array view on the page sees the writes. */
+static volatile int shell_io_state[1];
+
+EMSCRIPTEN_KEEPALIVE int *shell_in_addr(void)     { return (int *)shell_in_ring; }
+EMSCRIPTEN_KEEPALIVE int  shell_in_cap(void)      { return SHELL_IN_CAP; }
+EMSCRIPTEN_KEEPALIVE int *shell_out_addr(void)    { return (int *)shell_out_ring; }
+EMSCRIPTEN_KEEPALIVE int  shell_out_cap(void)     { return SHELL_OUT_CAP; }
+EMSCRIPTEN_KEEPALIVE int *shell_io_state_addr(void) { return (int *)shell_io_state; }

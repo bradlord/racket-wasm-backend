@@ -91,6 +91,10 @@ function buildModule(init) {
       var inCap   = M["_shell_in_cap"]();
       var outAddr = M["_shell_out_addr"]();
       var outCap  = M["_shell_out_cap"]();
+      /* io-state flag: 1 while the runtime is blocked on stdin (see
+         wasm_shell_io.c / shell-tty.js). The page polls it to show a
+         "waiting for input" affordance. */
+      var ioStateAddr = M["_shell_io_state_addr"] ? M["_shell_io_state_addr"]() : 0;
       /* DOM RPC slots (see racket/src/cs/c/wasm_dom.c). The page-
          side rAF poller in ide.js consumes commands from cmd_seq /
          cmd_buf and writes replies to reply_seq / reply_buf. */
@@ -109,6 +113,7 @@ function buildModule(init) {
         inCap:   inCap,
         outBase: outAddr >> 2,
         outCap:  outCap,
+        stateBase: ioStateAddr >> 2,
         dom: {
           cmdSeqBase:   domCmdSeq   >> 2,
           cmdLenBase:   domCmdLen   >> 2,
