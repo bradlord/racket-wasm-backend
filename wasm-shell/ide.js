@@ -1,39 +1,49 @@
-/* playground.js -- page driver for the Racket WASM playground.
+/* ide.js -- page driver for the combined Racket WASM IDE (DrRacket-like).
  *
- * Lifecycle: process-per-run.
- *   - User edits a program in the textarea.
- *   - Click Run -> spawn shell-worker.js, post
- *       { type:"init", argv:["-u","/tmp/main.rkt"],
+ * Layout: Definitions (editor) on the left, Interactions (output + REPL +
+ * stdin) on the right. The Interactions pane is inert until you Run.
+ *
+ * Run lifecycle (process-per-run, like the old playground):
+ *   - Teardown any existing worker, clear the Interactions output.
+ *   - Spawn a fresh shell-worker.js with
+ *       { type:"init", argv:["-l","racket/enter","-i"],
  *         files:{"/tmp/main.rkt": <editor text>}, idbfs:false }
- *     The worker loads scheme-web.js (same artifact the REPL uses),
- *     drops the file into MEMFS during preRun, and main() runs Racket
- *     with that argv, executing the user's module and exiting.
- *   - stdout/stderr stream into the output pane through the same
- *     SharedArrayBuffer ring the REPL uses (shell-tty.js inside the
- *     runtime worker pushes bytes; we poll them on rAF here).
- *   - On exit the worker posts {type:"exit", code}; we surface the
- *     code and terminate the worker. A fresh worker is spawned the
- *     next time the user clicks Run.
- *   - Stop just terminates the worker mid-run.
+ *     i.e. an *interactive* REPL (argv has -i) that has first required
+ *     racket/enter. The editor text lands at /tmp/main.rkt in MEMFS.
+ *   - On "ready", inject one line into the stdin ring (not echoed):
+ *       (enter! (file "/tmp/main.rkt"))
+ *     enter! instantiates the module (its body runs -- output streams in)
+ *     and switches the REPL's current namespace to the module's, so every
+ *     top-level definition is in scope. That is exactly DrRacket's Run:
+ *     run the definitions, then a REPL that sees them.
+ *   - The Interactions input box is both the REPL (Cmd/Ctrl+Enter submits
+ *     an expression) and the program's stdin (a submitted line reaches a
+ *     blocked read-line). A second Run spawns a brand-new process.
  *
- * stdin is supported: while the program is running, typing into the
- * stdin textarea and pressing Enter pushes a line into the input ring,
- * which shell-tty.js delivers to the Racket process.
+ * Shares all of the worker/ring/canvas/DOM-RPC plumbing with the pages it
+ * replaces; see shell-worker.js, shell-tty.js, wasm_shell_io.c,
+ * wasm_canvas.c, wasm_dom.c.
  */
 (function () {
   "use strict";
 
-  var editor      = document.getElementById("editor");
-  var runBtn      = document.getElementById("run");
-  var stopBtn     = document.getElementById("stop");
-  var outputPre   = document.getElementById("output");
-  var stdinBox    = document.getElementById("stdin");
-  var statusEl    = document.getElementById("status");
+  /* ---- DOM hooks --------------------------------------------------- */
+
+  var editor       = document.getElementById("editor");
+  var runBtn       = document.getElementById("run");
+  var stopBtn      = document.getElementById("stop");
+  var runIdleBtn   = document.getElementById("run-idle");
+  var outputPre    = document.getElementById("output");
+  var inputArea    = document.getElementById("input");
+  var evaluateBtn  = document.getElementById("evaluate");
+  var statusEl     = document.getElementById("status");
+  var interactions = document.getElementById("interactions");
 
   function setStatus(text, state) {
     statusEl.textContent = text;
     statusEl.dataset.state = state || "idle";
   }
+
   function appendOutput(text) {
     // Output pane is a plain <pre>, not a terminal; strip ANSI CSI.
     text = text.replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]/g, "");
@@ -46,16 +56,10 @@
     }
     if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
   }
-  function clearOutput() {
-    // textContent = "" also drops any <canvas> nodes appended inline.
-    outputPre.textContent = "";
-  }
 
-  // Append a bitmap inline in the output, the same way the REPL does
-  // (browser-shell.js): each { type:"canvas" } message from the runtime
+  // Append a bitmap inline: each { type:"canvas" } blit from the runtime
   // worker (wasm_canvas_blit*) drops a fresh <canvas> into #output, so a
-  // program that draws N bitmaps shows N images interleaved with its
-  // text -- not one global canvas overwritten on each blit.
+  // program that draws N bitmaps shows N images interleaved with text.
   function appendCanvas(w, h, pixels) {
     if (!(w > 0 && h > 0)) return;
     var atBottom =
@@ -66,8 +70,7 @@
     canvas.style.cssText =
       "display:block;margin:8px 0;max-width:100%;border-radius:8px;" +
       "border:1px solid rgba(159,176,195,0.18);image-rendering:pixelated;";
-    // pixels arrived as a transferred ArrayBuffer (RGBA8888, top-down);
-    // wrap it without copying.
+    // pixels arrived as a transferred ArrayBuffer (RGBA8888, top-down).
     var image = new ImageData(new Uint8ClampedArray(pixels), w, h);
     canvas.getContext("2d").putImageData(image, 0, 0);
     outputPre.appendChild(canvas);
@@ -77,17 +80,27 @@
     if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
   }
 
+  function clearOutput() {
+    // textContent = "" also drops any <canvas> nodes appended inline.
+    outputPre.textContent = "";
+  }
+
+  /* ---- bail out if not cross-origin isolated ---------------------- */
+
   if (typeof SharedArrayBuffer === "undefined" || typeof Atomics === "undefined") {
+    interactions.classList.remove("idle");
     setStatus("SAB unavailable", "error");
     appendOutput(
       "This page is not cross-origin isolated, so SharedArrayBuffer is\n" +
       "unavailable and the runtime cannot start.\n\n" +
       "Serve this directory with COOP/COEP headers, e.g. racket serve.rkt.\n"
     );
+    runBtn.disabled = true;
+    runIdleBtn.disabled = true;
     return;
   }
 
-  /* ---- per-run state ---- */
+  /* ---- shared-memory rings (filled in once the worker is ready) --- */
 
   var HEAD = 0, TAIL = 1, DATA = 2;
   var worker = null;
@@ -99,9 +112,7 @@
   var pollHandle = 0;
   var encoder = new TextEncoder();
   var decoder = new TextDecoder("utf-8");
-  /* DOM RPC slots forwarded from the runtime worker; see shell-worker.js
-     and racket/src/cs/c/wasm_dom.c. The poller below services commands
-     each animation frame. */
+  /* DOM RPC slots forwarded from the runtime worker; see wasm_dom.c. */
   var domSlots = null;
   var domLastSeq = 0;
 
@@ -143,8 +154,7 @@
     var src = decoder.decode(bytes);
     var result;
     try {
-      // v0 prototype: eval the JS string. Anything the page can do
-      // is reachable; a typed protocol will replace this.
+      // v0 prototype: eval the JS string. A typed protocol will replace this.
       result = eval(src);
       if (result === undefined) result = "";
       else if (typeof result !== "string") result = String(result);
@@ -166,7 +176,7 @@
     if (worker) pollHandle = requestAnimationFrame(pollLoop);
   }
 
-  /* ---- spawn / teardown ---- */
+  /* ---- run / stop / teardown ------------------------------------- */
 
   function teardown() {
     if (pollHandle) { cancelAnimationFrame(pollHandle); pollHandle = 0; }
@@ -176,19 +186,24 @@
     }
     ioReady = false;
     HEAP32 = null;
-    stdinBox.disabled = true;
-    stopBtn.disabled = true;
-    runBtn.disabled = false;
+    domSlots = null;
+  }
+
+  // Reflect "a process is alive" in the controls.
+  function setControls(running, inputEnabled) {
+    runBtn.disabled = running;
+    runIdleBtn.disabled = running;
+    stopBtn.disabled = !running;
+    inputArea.disabled = !inputEnabled;
+    evaluateBtn.disabled = !inputEnabled;
   }
 
   function run() {
     if (worker) return;
     clearOutput();
+    interactions.classList.remove("idle");
+    setControls(true, false);
     setStatus("Booting runtime…", "run");
-    runBtn.disabled = true;
-    stopBtn.disabled = false;
-    stdinBox.disabled = true;
-    stdinBox.value = "";
 
     try {
       worker = new Worker("./shell-worker.js");
@@ -196,6 +211,7 @@
       setStatus("Failed to spawn worker", "error");
       appendOutput("Failed to spawn runtime worker: " + String(err) + "\n");
       teardown();
+      setControls(false, false);
       return;
     }
     worker.onerror = function (ev) {
@@ -204,9 +220,12 @@
     };
     worker.onmessage = onMessage;
 
+    // Interactive REPL that has required racket/enter; the editor text is
+    // dropped at /tmp/main.rkt before main() runs. We `enter!` it once the
+    // REPL is ready (see "ready" below).
     worker.postMessage({
       type: "init",
-      argv: ["-u", "/tmp/main.rkt"],
+      argv: ["-l", "racket/enter", "-i"],
       files: { "/tmp/main.rkt": editor.value },
       idbfs: false,
     });
@@ -215,8 +234,22 @@
   function stop() {
     if (!worker) return;
     appendOutput("\n[stopped]\n");
-    setStatus("Stopped", "error");
     teardown();
+    setControls(false, false);
+    setStatus("Stopped", "error");
+  }
+
+  // Submit the Interactions input: a REPL expression and/or a line of the
+  // program's stdin. Echoed into the transcript (Racket doesn't echo stdin).
+  function evaluate() {
+    if (!ioReady) return;
+    var text = inputArea.value;
+    if (text.length === 0) return;
+    if (!text.endsWith("\n")) text += "\n";
+    appendOutput(text);
+    sendText(text);
+    inputArea.value = "";
+    inputArea.focus();
   }
 
   function onMessage(event) {
@@ -226,34 +259,32 @@
       case "status": {
         var text = msg.text || "";
         var m = /^(.*)\((\d+(?:\.\d+)?)\/(\d+)\)$/.exec(text);
-        if (m) {
-          setStatus("Downloading " + m[2] + "/" + m[3], "run");
-        } else if (text === "") {
-          setStatus("Assets loaded", "run");
-        } else {
-          setStatus(text, "run");
-        }
+        if (m) setStatus("Downloading " + m[2] + "/" + m[3], "run");
+        else if (text === "") setStatus("Assets loaded", "run");
+        else setStatus(text, "run");
         return;
       }
       case "deps": {
-        if (msg.remaining > 0) {
-          setStatus("Preparing (" + msg.remaining + ")", "run");
-        }
+        if (msg.remaining > 0) setStatus("Preparing (" + msg.remaining + ")", "run");
         return;
       }
       case "ready": {
-        HEAP32  = new Int32Array(msg.heap);
-        inBase  = msg.inBase;
-        inCap   = msg.inCap;
-        outBase = msg.outBase;
-        outCap  = msg.outCap;
-        outHead = Atomics.load(HEAP32, outBase + HEAD);
+        HEAP32   = new Int32Array(msg.heap);
+        inBase   = msg.inBase;
+        inCap    = msg.inCap;
+        outBase  = msg.outBase;
+        outCap   = msg.outCap;
+        outHead  = Atomics.load(HEAP32, outBase + HEAD);
         domSlots = msg.dom || null;
         domLastSeq = 0;
-        ioReady = true;
-        stdinBox.disabled = false;
-        setStatus("Running…", "run");
+        ioReady  = true;
         pollHandle = requestAnimationFrame(pollLoop);
+        // Run the definitions and land the REPL in their namespace. Not
+        // echoed -- it's bootstrap, not something the user typed.
+        sendText('(enter! (file "/tmp/main.rkt"))\n');
+        setControls(true, true);
+        setStatus("Running", "run");
+        inputArea.focus();
         return;
       }
       case "fs-error": {
@@ -266,33 +297,35 @@
       }
       case "abort": {
         appendOutput("\nRuntime aborted: " + msg.reason + "\n");
-        setStatus("Aborted", "error");
         teardown();
+        setControls(false, false);
+        setStatus("Aborted", "error");
         return;
       }
       case "exit": {
-        // Drain any output the runtime emitted just before exit.
-        drainOutput();
-        appendOutput("\n[exit " + msg.code + "]\n");
+        drainOutput();  // flush anything emitted just before exit
+        appendOutput("\n[exited " + msg.code + "]\n");
+        teardown();
+        setControls(false, false);
         setStatus(msg.code === 0 ? "Exited 0" : ("Exited " + msg.code),
                   msg.code === 0 ? "ok" : "error");
-        teardown();
         return;
       }
     }
   }
 
-  /* ---- wiring ---- */
+  /* ---- wiring ----------------------------------------------------- */
 
   runBtn.addEventListener("click", run);
+  runIdleBtn.addEventListener("click", run);
   stopBtn.addEventListener("click", stop);
+  evaluateBtn.addEventListener("click", evaluate);
 
   editor.addEventListener("keydown", function (ev) {
     if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
       ev.preventDefault();
       if (!runBtn.disabled) run();
     } else if (ev.key === "Tab") {
-      // Insert two spaces; the textarea would otherwise tab out.
       ev.preventDefault();
       var s = editor.selectionStart, e = editor.selectionEnd;
       editor.value = editor.value.slice(0, s) + "  " + editor.value.slice(e);
@@ -300,18 +333,13 @@
     }
   });
 
-  stdinBox.addEventListener("keydown", function (ev) {
-    if (ev.key === "Enter" && !ev.shiftKey) {
+  inputArea.addEventListener("keydown", function (ev) {
+    // Cmd/Ctrl+Enter submits; plain Enter inserts a newline.
+    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
       ev.preventDefault();
-      if (!ioReady) return;
-      var line = stdinBox.value + "\n";
-      // Echo into the output so the user can see what they typed.
-      appendOutput(line);
-      sendText(line);
-      stdinBox.value = "";
+      evaluate();
     }
   });
 
-  runBtn.disabled = false;
   setStatus("Idle", "idle");
 })();

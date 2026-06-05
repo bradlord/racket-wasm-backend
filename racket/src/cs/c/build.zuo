@@ -992,16 +992,15 @@
                       dep-uflags))
                    (shell/wait (map string->shell node-args))
                    (shell/wait (map string->shell browser-args))
-                   ;; Stage the playground + REPL page assets next to
-                   ;; scheme-web.*. Keep this list in sync with
+                   ;; Stage the IDE page assets next to scheme-web.*. Keep
+                   ;; this list in sync with
                    ;; racket/src/ChezScheme/install-wasm-browser-shell.rkt (the
                    ;; legacy build.sh path uses that script). shell-tty.js is
                    ;; intentionally absent -- it is baked in via --post-js above.
                    (for-each (lambda (name)
                                (cp (build-path wasm-shell name)
                                    (build-path out-dir name)))
-                             (list "browser-shell.html" "browser-shell.js"
-                                   "playground.html" "playground.js"
+                             (list "ide.html" "ide.js"
                                    "shell-worker.js" "serve.rkt")))
                 :recur]
 

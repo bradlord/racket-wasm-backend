@@ -3,7 +3,7 @@
  * Shared-memory console rings for the WASM browser shell.
  *
  * The browser build runs the runtime inside a dedicated Web Worker that
- * the page (browser-shell.js) spawns explicitly -- shell-worker.js
+ * the page (ide.js) spawns explicitly -- shell-worker.js
  * `importScripts`'s scheme-web.js and `main()` runs on that worker's
  * own thread, leaving the page's main thread free to drive xterm.js.
  * The two threads exchange console bytes through these ring buffers,

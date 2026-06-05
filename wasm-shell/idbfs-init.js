@@ -22,8 +22,8 @@
   if (typeof Module === "undefined") return;
   Module["preRun"] = Module["preRun"] || [];
   Module["preRun"].push(function () {
-    // Page can opt out (e.g. transient playground runs) by sending
-    // {idbfs:false} in shell-worker's init message.
+    // Page can opt out (e.g. the IDE's transient process-per-run) by
+    // sending {idbfs:false} in shell-worker's init message.
     if (Module["_idbfsEnabled"] === false) return;
     try { FS.mkdirTree("/home/web_user"); } catch (e) { /* exists */ }
     if (typeof IDBFS === "undefined") {

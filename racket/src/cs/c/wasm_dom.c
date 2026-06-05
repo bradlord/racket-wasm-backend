@@ -20,7 +20,7 @@
  * Read reply_data, return.
  *
  * Page side (a poller installed on requestAnimationFrame in
- * browser-shell.js / playground.js): each frame, check whether
+ * ide.js): each frame, check whether
  * cmd_seq advanced past the last value the page handled; if so,
  * decode the JS, `eval` it, encode the result, write into reply_data
  * + reply_len, store reply_seq (release), `Atomics.notify` the worker.

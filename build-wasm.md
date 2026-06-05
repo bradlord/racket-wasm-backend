@@ -146,11 +146,10 @@ That link target emits **both** runtime surfaces into
 - the **browser** runtime -- `scheme-web.{js,wasm,data}` (adds the
   browser-only `wasm_shell_io.o`, the SAB/DOM exports, IDBFS, and the
   `idbfs-init.js`/`shell-tty.js` glue), plus the page assets copied next
-  to it: `browser-shell.html`/`.js` (the REPL surface),
-  `playground.html`/`.js` (the playground), `shell-worker.js`, and
-  `serve.rkt`. Serve them with `racket serve.rkt 8123` (it sets the
-  COOP/COEP headers `SharedArrayBuffer` needs) and open
-  `browser-shell.html` or `playground.html`.
+  to it: `ide.html`/`.js` (the DrRacket-like IDE surface),
+  `shell-worker.js`, and `serve.rkt`. Serve them with
+  `racket serve.rkt 8123` (it sets the COOP/COEP headers
+  `SharedArrayBuffer` needs) and open `ide.html`.
 
 The browser-link flags live in the `wasm` target itself; the staged
 page-asset list mirrors
@@ -177,8 +176,8 @@ deps" below.
 `make wasm` is now the only build path. The earlier per-stage
 `wasm-shell/*.sh` scripts (and the `wasm-shell/build.zuo` orchestrator)
 have been removed; `wasm-shell/` retains only the browser runtime assets
-and glue it still serves (`browser-shell.*`, `playground.*`,
-`shell-worker.js`, `serve.rkt`, `idbfs-init.js`, `node-tty.js`,
+and glue it still serves (`ide.*`, `shell-worker.js`, `serve.rkt`,
+`idbfs-init.js`, `node-tty.js`, `node-locate-file.js`,
 `shell-tty.js`) plus the two WASM test files (`run-tests.sh`,
 `draw-stack-test.rkt`). The stage descriptions below document what
 `make wasm` does internally, stage by stage.
@@ -706,10 +705,12 @@ profiling is no longer needed.
 
 The browser shell in `wasm-shell/` is a
 **shared runtime + per-surface host** design: one
-`scheme-web.{js,wasm,data}` binary backs every browser surface (the
-REPL today; a playground POC; future doc widgets / embeds / canvas
-GUIs). Per-surface code is just an HTML+JS pair that drives the same
-worker with a different init payload.
+`scheme-web.{js,wasm,data}` binary backs every browser surface. Today
+there is one surface -- `ide.html`/`ide.js`, the DrRacket-like IDE (see
+"IDE page" below) -- but the architecture is deliberately surface-
+agnostic (future doc widgets / embeds / canvas GUIs are just another
+HTML+JS pair that drives the same worker with a different init
+payload).
 
 It needs a **separate, browser-specific build** of the runtime,
 because the node `scheme.js` runs `main()` on the calling thread: in a
@@ -724,16 +725,19 @@ for an `init` message from the page, then sets `self.Module` and
 choose:
 
 - `argv` -- becomes `Module.arguments`, which Racket sees as its
-  command line. `[]` runs the interactive REPL (the browser-shell
-  case); `["-u","/tmp/main.rkt"]` runs a module and exits (the
-  playground case); `["-e","(form)"]` evaluates an expression; etc.
+  command line. `[]` runs a bare interactive REPL;
+  `["-u","/tmp/main.rkt"]` runs a module and exits;
+  `["-e","(form)"]` evaluates an expression; the IDE uses
+  `["-l","racket/enter","-i"]` (an interactive REPL that has first
+  required `racket/enter`, so it can `enter!` the program -- see "IDE
+  page").
 - `files` -- `{ "/abs/path": "<text>" }` written into MEMFS during
-  `preRun` (before `main()`). The playground uses this to drop the
-  user's source at `/tmp/main.rkt` before the runtime starts.
-- `idbfs` -- whether to mount `/home/web_user` on IDBFS. The REPL
-  wants persistence (`true`); transient playground runs do not
-  (`false`). `idbfs-init.js` checks `Module._idbfsEnabled` and skips
-  the mount when off; `shell-worker`'s `onExit` likewise skips
+  `preRun` (before `main()`). The IDE uses this to drop the editor's
+  source at `/tmp/main.rkt` before the runtime starts.
+- `idbfs` -- whether to mount `/home/web_user` on IDBFS. A persistent
+  surface passes `true`; the IDE's transient process-per-run passes
+  `false`. `idbfs-init.js` checks `Module._idbfsEnabled` and skips the
+  mount when off; `shell-worker`'s `onExit` likewise skips
   `FS.syncfs(false)` when off.
 
 The rings (`wasm_shell_io.c`), `shell-tty.js`, and `idbfs-init.js`
@@ -758,7 +762,7 @@ pthreads of its own):
   `self.Module`, `importScripts("./scheme-web.js")` synchronously,
   and on `onRuntimeInitialized` posts the shared `HEAPU8.buffer`
   (a `SharedArrayBuffer`) plus the ring offsets back to the page.
-- `browser-shell.js` runs on the page: it spawns the worker via
+- `ide.js` runs on the page: it spawns the worker via
   `new Worker("./shell-worker.js")`, receives the buffer/offsets,
   polls the output ring each animation frame and writes typed lines
   into the input ring followed by `Atomics.notify`.
@@ -811,37 +815,58 @@ sets the headers:
 ```sh
 cd racket/src/build/cs/c/wasm
 racket serve.rkt 8123
-# browse to http://127.0.0.1:8123/browser-shell.html (REPL)
-#        or http://127.0.0.1:8123/playground.html    (playground)
+# browse to http://127.0.0.1:8123/ide.html
 ```
 
 Notes / status:
 
 - Output (stdout and stderr) is currently merged into one ring and
   rendered without color; the input ring is line-buffered on the page.
-- The shell loads xterm.js from cdnjs.
+- The page is a plain `<textarea>` + scrolling `<pre>`, not a terminal
+  emulator -- the browser handles all editing; `ide.js` strips the few
+  ANSI CSI sequences Racket emits.
 - This cannot be validated under node: a headless harness can't drive
   the page+worker handshake. Test in a browser.
 
-### Playground
+### IDE page
 
-`playground.html` + `playground.js` reuse the same `scheme-web.*`
-artifact as the REPL. Lifecycle is **process-per-run**: each click of
-*Run* spawns a fresh worker, posts
-`{argv:["-u","/tmp/main.rkt"], files:{"/tmp/main.rkt": <editor text>},
-idbfs:false}`, lets `main()` execute the user's module, and tears the
-worker down on `exit`. A second Run spawns another worker. Cold start
-is ~2 s (same as the REPL boot); program output streams through the
-existing stdout ring while it runs, and a stdin textarea pipes lines
-into the existing input ring for programs that `read-line`.
+`ide.html` + `ide.js` is a single DrRacket-like page: a **Definitions**
+editor on the left, an **Interactions** pane (output + REPL + the
+program's stdin) on the right. It replaces the earlier split
+`browser-shell` (bare REPL) and `playground` (run-a-module) pages --
+one surface now does both.
 
-The lifecycle alternative -- one persistent worker that does a
-custodian shutdown + fresh namespace per Run -- would get sub-second
-re-runs but is harder to keep clean; deferred. Process-per-run matches
-the latency users expect from comparable playgrounds (Rust, Go).
+Lifecycle is **process-per-run**. The Interactions pane is inert until
+*Run*; a Run click:
 
-Serve and visit `http://127.0.0.1:8123/playground.html` alongside the
-REPL.
+1. Tears down any existing worker and clears the output.
+2. Spawns a fresh worker with
+   `{argv:["-l","racket/enter","-i"], files:{"/tmp/main.rkt": <editor
+   text>}, idbfs:false}` -- an interactive REPL that has required
+   `racket/enter`, with the editor text dropped at `/tmp/main.rkt`.
+3. On `ready`, injects one line into the stdin ring (not echoed):
+   `(enter! (file "/tmp/main.rkt"))`. `enter!` instantiates the module
+   (its body runs -- output streams in) **and** switches the REPL's
+   current namespace to the module's, so every top-level definition is
+   in scope. That is exactly DrRacket's Run: run the definitions, then
+   a REPL that sees them (not just the `provide`d names a plain
+   `-i -t` would expose).
+
+The single Interactions input box is both the REPL (Cmd/Ctrl+Enter
+submits an expression) and the program's stdin (a submitted line
+reaches a blocked `read-line`). A second Run spawns a brand-new
+process -- fresh namespace, like DrRacket. Bitmaps drawn via
+`web-repl/display-bm` and DOM pokes via `web-repl/dom` both land in
+this pane (inline `<canvas>` per blit; see the `wasm_canvas`/`wasm_dom`
+notes).
+
+A "not started" placeholder in the Interactions pane carries its own
+Run button so the inert state isn't confusing. The persistent-worker
+alternative (custodian shutdown + fresh namespace per Run, for sub-
+second re-runs) is deferred; process-per-run matches the latency users
+expect from comparable in-browser IDEs.
+
+Serve and visit `http://127.0.0.1:8123/ide.html`.
 
 ### WIP: pre-generate `compiled/tpb32l`
 
@@ -1030,7 +1055,7 @@ then runs `raco pkg install <REQUIRED_PKGS> <PKGS>` with
 ### A `web-repl` helper collection
 
 `racket/collects/web-repl/` is the home for the WASM browser-surface
-helpers, so REPL/playground users `(require ...)` instead of pasting
+helpers, so IDE users `(require ...)` instead of pasting
 `vm-eval` blobs. It is a plain **collection**, not a package: dropping
 it under `racket/collects` puts it on the default collection path and
 the wasm link preloads `/collects` wholesale, so it ships with **no
@@ -1039,7 +1064,7 @@ route for now -- revisit if these helpers ever need their own
 versioned package). Modules:
 
 - `web-repl/display-bm` -- `(display-bm bm)` blits a racket/draw
-  `bitmap%` to the page (one inline `<canvas>` per call in the REPL).
+  `bitmap%` to the page (one inline `<canvas>` per call).
 - `web-repl/canvas` -- raw `canvas-blit-{rgba,argb,bgra}` over the
   three `wasm_canvas_blit*` channels.
 - `web-repl/dom` -- `(dom-eval js)`, the synchronous DOM RPC.
@@ -1131,7 +1156,7 @@ Available primitives today (both reachable from Racket via the
   followed by body bytes.
 - `int wasm_canvas_blit(int w, int h, const void *rgba)` -- copy a
   `w*h*4` RGBA8888 buffer out of the WASM heap and `postMessage` it
-  to the page; the canvas surface (playground.js today) renders it
+  to the page; the canvas surface (`ide.js` today) renders it
   via `putImageData`. Returns 0 in a Worker, -1 in node / wherever
   `self.postMessage` is unavailable. This is the Tier 1 pixel-output
   path for everything from manual byte-pushing to a future
@@ -1139,14 +1164,14 @@ Available primitives today (both reachable from Racket via the
   `racket/draw get-argb-pixels` output and Cairo `ARGB32` memory order
   respectively, rotating channels to RGBA during the copy out.
 
-  Both browser surfaces render `{ type:"canvas" }` messages the same
-  way: an `appendCanvas` (in `browser-shell.js` and `playground.js`)
-  appends a *fresh* `<canvas>` into the `#output` pane per blit, so a
-  run that draws N bitmaps reads back as N images interleaved with its
-  text output -- no single global canvas. The `web-repl` collection
-  wraps this: `(require web-repl/display-bm)` then `(display-bm bm)`
-  reads a `bitmap%` with `get-argb-pixels` and calls
-  `wasm_canvas_blit_argb`, dropping one image into the output per call.
+  The page renders `{ type:"canvas" }` messages by appending a *fresh*
+  `<canvas>` into the `#output` pane per blit (`ide.js`'s
+  `appendCanvas`), so a run that draws N bitmaps reads back as N images
+  interleaved with its text output -- no single global canvas. The
+  `web-repl` collection wraps this: `(require web-repl/display-bm)`
+  then `(display-bm bm)` reads a `bitmap%` with `get-argb-pixels` and
+  calls `wasm_canvas_blit_argb`, dropping one image into the output per
+  call.
   (Companion helpers in the same collection: `web-repl/canvas`,
   `web-repl/dom`, `web-repl/http` -- see "A `web-repl` helper
   collection" below.)
@@ -1175,7 +1200,7 @@ Worker side (the `wasm_dom_eval` EM_JS body in
    `reply_seq == cmd_seq`.
 4. Copy `reply_buf[0..reply_len]` into the caller's output buffer.
 
-Page side (an rAF loop in `browser-shell.js` and `playground.js`):
+Page side (an rAF loop in `ide.js`):
 
 1. Each frame, read `cmd_seq`; if it advanced past the last value
    the page handled, decode `cmd_buf[0..cmd_len]` as UTF-8.
@@ -1213,7 +1238,7 @@ the payload format and the page-side handler do. Event delivery
 (page -> Racket, e.g. button clicks) reuses the existing stdin
 ring with a typed framing, or adds a third dedicated ring.
 
-A Racket-side wrapper in the playground demo:
+A Racket-side wrapper (the `web-repl/dom` collection packages this):
 
 ```racket
 (define wasm-dom-eval-raw

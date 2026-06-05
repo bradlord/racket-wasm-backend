@@ -11,13 +11,12 @@
 ;;
 ;; A plain static server (`python3 -m http.server`, `raco static-files`, ...)
 ;; does not send these, so SharedArrayBuffer is unavailable and the runtime
-;; never starts. Run this from the directory that holds browser-shell.html /
-;; playground.html and the generated scheme-web.* assets:
+;; never starts. Run this from the directory that holds ide.html and the
+;; generated scheme-web.* assets:
 ;;
 ;;     racket serve.rkt [port]      # default port 8123
 ;;
-;; then open http://127.0.0.1:<port>/browser-shell.html (REPL) or
-;; http://127.0.0.1:<port>/playground.html (playground).
+;; then open http://127.0.0.1:<port>/ide.html (the IDE).
 
 (require racket/cmdline
          racket/tcp
@@ -73,8 +72,7 @@
   (string-append
    "<!doctype html><meta charset=utf-8><title>Racket WASM</title>"
    "<h1>Racket WASM</h1><ul>"
-   "<li><a href=\"browser-shell.html\">browser-shell.html</a> (REPL)</li>"
-   "<li><a href=\"playground.html\">playground.html</a> (playground)</li>"
+   "<li><a href=\"ide.html\">ide.html</a> (the IDE)</li>"
    "</ul>"))
 
 ;; Resolve a request target to a file under the serving root, or #f if it
@@ -131,8 +129,7 @@
   (define root (current-directory))
   (define listener (tcp-listen port 512 #t "127.0.0.1"))
   (printf "Serving cross-origin-isolated on http://127.0.0.1:~a/\n" port)
-  (printf "Open http://127.0.0.1:~a/browser-shell.html  (REPL)\n" port)
-  (printf "  or http://127.0.0.1:~a/playground.html     (playground)\n" port)
+  (printf "Open http://127.0.0.1:~a/ide.html\n" port)
   (flush-output)
   (let loop ()
     (define-values (in out) (tcp-accept listener))

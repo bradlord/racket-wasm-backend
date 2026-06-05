@@ -12,8 +12,9 @@ the WASM area; that's where the design context is. Notable sections:
 
 - §1-5: build sequence (rktio, libffi, tpb32l boot, Chez Emscripten,
   link).
-- "Browser shell" and "Playground": the shared-runtime + per-surface
-  host architecture.
+- "Browser shell" and "IDE page": the shared-runtime + per-surface
+  host architecture, and the DrRacket-like IDE (`ide.html`/`ide.js`)
+  built on it.
 - "Preloading additional Racket packages": how to ship a Racket
   package into the WASM `/share/pkgs` tree with a links file.
 - "Calling WASM-specific primitives from Racket": the rktio dll
@@ -58,7 +59,7 @@ otherwise.
   (emsdk sourced first). This runs the stock build system end to end and
   emits both runtime surfaces into `racket/src/build/cs/c/wasm/`:
   `scheme.{js,wasm,data}` (node) and `scheme-web.{js,wasm,data}` plus the
-  playground/REPL page assets. See `build-wasm.md` for the stage
+  IDE page assets (`ide.html`/`ide.js`). See `build-wasm.md` for the stage
   breakdown and prerequisites. (The legacy per-stage `wasm-shell/*.sh`
   scripts have been removed; `wasm-shell/` now holds only the browser
   runtime assets/glue and the two test files.)

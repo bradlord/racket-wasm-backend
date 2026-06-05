@@ -29,7 +29,7 @@
  *     page polls and renders it (no newline buffering, so the REPL
  *     prompt shows immediately).
  *
- * The page side (browser-shell.js) is the peer producer/consumer.
+ * The page side (ide.js) is the peer producer/consumer.
  */
 (function () {
   if (typeof TTY === "undefined") {

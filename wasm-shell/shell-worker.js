@@ -1,21 +1,21 @@
 /* shell-worker.js -- runs the Racket WASM runtime in a dedicated Web
  * Worker.
  *
- * The page (e.g. browser-shell.js, playground.js) spawns this script as
- * a worker. The worker waits for an `init` message from the page before
- * loading scheme-web.js, so that the page gets to choose:
+ * The page (ide.js) spawns this script as a worker. The worker waits
+ * for an `init` message from the page before loading scheme-web.js, so
+ * that the page gets to choose:
  *
  *   - `argv`   -- becomes Module.arguments. Racket sees these as its
  *                 command-line arguments. `[]` (the default) runs the
  *                 interactive REPL; `["-u","/tmp/main.rkt"]` runs a
  *                 module and exits; `["-e","(form)"]` runs an
- *                 expression; etc.
+ *                 expression; the IDE uses `["-l","racket/enter","-i"]`.
  *   - `files`  -- { "/abs/path": "<text>" } seeded into MEMFS during
- *                 preRun (before main()). Used by the playground to
- *                 drop the user's source in place for `-u`.
- *   - `idbfs`  -- whether to mount IDBFS at /home/web_user. The REPL
- *                 wants persistence (true); transient playground
- *                 programs do not (false).
+ *                 preRun (before main()). Used by the IDE to drop the
+ *                 editor's source at /tmp/main.rkt before main() runs.
+ *   - `idbfs`  -- whether to mount IDBFS at /home/web_user. A
+ *                 persistent surface passes true; the IDE's transient
+ *                 process-per-run passes false.
  *
  * After init, importScripts("./scheme-web.js") boots the runtime on
  * this worker's own thread. Once it is up, we hand the page:
@@ -91,9 +91,8 @@ function buildModule(init) {
       var outAddr = M["_shell_out_addr"]();
       var outCap  = M["_shell_out_cap"]();
       /* DOM RPC slots (see racket/src/cs/c/wasm_dom.c). The page-
-         side rAF poller in browser-shell.js / playground.js consumes
-         commands from cmd_seq / cmd_buf and writes replies to
-         reply_seq / reply_buf. */
+         side rAF poller in ide.js consumes commands from cmd_seq /
+         cmd_buf and writes replies to reply_seq / reply_buf. */
       var domCmdSeq   = M["_wasm_dom_cmd_seq_addr"]   ? M["_wasm_dom_cmd_seq_addr"]()   : 0;
       var domCmdLen   = M["_wasm_dom_cmd_len_addr"]   ? M["_wasm_dom_cmd_len_addr"]()   : 0;
       var domCmdBuf   = M["_wasm_dom_cmd_buf_addr"]   ? M["_wasm_dom_cmd_buf_addr"]()   : 0;

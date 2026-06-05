@@ -20,10 +20,8 @@
 ;; (shell-tty.js is NOT here: it is a build-time `emcc --post-js` input,
 ;; already baked into scheme-web.js, not a separately served file.)
 (define files
-  '("browser-shell.html"
-    "browser-shell.js"
-    "playground.html"
-    "playground.js"
+  '("ide.html"
+    "ide.js"
     "shell-worker.js"
     "serve.rkt"))
 

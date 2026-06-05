@@ -10,8 +10,8 @@
  * w*h*4 byte buffer in RGBA8888 order (one row at a time, top-down --
  * the same layout ImageData expects). The worker copies the buffer
  * out into a transferable ArrayBuffer and postMessages it to the page;
- * the page's canvas surface (canvas.js / playground.js) receives it
- * and putImageData's onto its <canvas>.
+ * the page's canvas surface (ide.js) receives it and putImageData's
+ * onto a fresh <canvas> appended to the output.
  *
  * Return value: 0 on success, -1 if not running inside a Worker that
  * can postMessage (e.g. the node CLI build, or any host that hasn't
