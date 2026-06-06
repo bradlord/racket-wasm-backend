@@ -13,7 +13,7 @@
     (define (digit n)
       (cond
         [(and (>= n (char "0")) (<= n (char "9"))) (- n (char "0"))]
-        [(and (>= n (char "a")) (<= n (char "f"))) (- n (char "a"))]
+        [(and (>= n (char "a")) (<= n (char "f"))) (+ (- n (char "a")) 10)]
         [else (+ (- n (char "A")) 10)]))
     (let ([hex (lambda (offset)
                  (+ (* 16 (digit (string-ref r offset)))

@@ -3,3 +3,6 @@
 /demo.obj
 /demo.pdb
 /test1
+
+# WASM port (see ../../../build-wasm.md): rktio cross-built for Emscripten.
+/build-em*/

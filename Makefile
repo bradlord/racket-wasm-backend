@@ -67,6 +67,17 @@ CONFIGURE_ARGS =
 # replaced with the build subdirectory where `configure` is run
 CONFIGURE_ARGS_qq =
 
+# Command to wrap each `configure` invocation, e.g. `emconfigure` for
+# a WebAssembly/Emscripten cross build. Empty means run `configure`
+# directly.
+CONFIGURE_WRAPPER =
+
+# WebAssembly: additional native C library dependencies to build and
+# link for `make wasm` (libffi is always built). Space-separated recipe
+# names from racket/src/cs/c/wasm-deps/deps/, or the group alias `draw`
+# (the full cairo/pango stack that racket/draw needs). Empty = libffi only.
+WASM_DEPS =
+
 # ------------------------------------------------------------
 # Cross-build support
 
@@ -185,6 +196,8 @@ BUILD_VARS = MAKE=$(MAKE) \
              CPUS="$(CPUS)" \
              CONFIGURE_ARGS_qq='$(CONFIGURE_ARGS_qq)' \
              CONFIGURE_ARGS="$(CONFIGURE_ARGS)" \
+             CONFIGURE_WRAPPER="$(CONFIGURE_WRAPPER)" \
+             WASM_DEPS="$(WASM_DEPS)" \
              CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
              RACKET="$(RACKET)" \
              PLAIN_RACKET="$(PLAIN_RACKET)" \
@@ -222,6 +235,32 @@ cs: $(ZUO)
 
 bc: $(ZUO)
 	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
+
+# WebAssembly (Emscripten) cross build of Racket CS, driven through the
+# stock build system: build the native deps (libffi + any WASM_DEPS),
+# configure + cross-build the tpb32l CS runtime, run the cross `raco
+# setup` (compiling collections to compiled/tpb32l), and emcc-link it
+# (the `wasm-deps` + `wasm-setup` + `wasm` targets in
+# racket/src/cs/c/build.zuo). Requires an active emsdk (source
+# emsdk_env.sh first), a native threaded host Chez (SCHEME=<scheme>), and
+# a host Racket of the same version as the tree (RACKET=<racket>, used as
+# the --cross-server for `raco setup`):
+#   make wasm SCHEME=/path/to/scheme RACKET=/path/to/racket
+# Add the cairo/pango stack for racket/draw with WASM_DEPS="draw":
+#   make wasm WASM_DEPS="draw" SCHEME=... RACKET=...
+# Produces racket/src/build/cs/c/wasm/scheme.{js,wasm,data}. See
+# build-wasm.md.
+wasm: $(ZUO)
+	$(RUN_ZUO) wasm $(BUILD_VARS)
+
+# Build a cached binary-only package catalog (racket/src/.wasm-pkgs-cache)
+# for the WASM build: strip the already-cross-compiled in-tree packages to
+# .zo-only, build-deps removed. Run this AFTER a bootstrap `make wasm`; a
+# subsequent `make wasm` then clean-installs PKGS from the catalog so the
+# image ships .zo-only with build-deps pruned. RACKET must match the tree
+# version. See build-wasm.md "Binary-only package preload".
+wasm-binary-pkgs: $(ZUO)
+	$(RUN_ZUO) wasm-binary-pkgs $(BUILD_VARS)
 
 both: $(ZUO)
 	$(RUN_ZUO) both $(BUILD_VARS)

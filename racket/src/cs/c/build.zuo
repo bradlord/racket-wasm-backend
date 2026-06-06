@@ -54,6 +54,24 @@
   (define boot-files (list petite-chunked.boot scheme-chunked.boot racket-chunked.boot))
 
   (define cross? (equal? (lookup 'CROSS_MODE) "cross"))
+  ;; A WebAssembly/Emscripten target: the native `racketcs` executable
+  ;; and the `embed-boot` step are not meaningful (boot images are
+  ;; preloaded into MEMFS at the emcc link, not embedded). The CS build
+  ;; stops at the (pbchunk) boot images; the `wasm` link target consumes
+  ;; them together with the in-tree kernel/rktio objects.
+  (define emscripten? (equal? (lookup 'EMSCRIPTEN) "t"))
+  ;; WASM native library deps. libffi is always built (the Chez kernel's
+  ;; ffi.c needs its headers); `WASM_DEPS` selects additional libraries
+  ;; (recipe names, or the group alias `draw`). The `wasm-deps` target
+  ;; runs the recipe driver, which writes three artifacts into
+  ;; `wasm-deps-dir`: wasm_deps.inc (symbol registrations, #include'd by
+  ;; wasm_extras.inc at the boot.o compile), wasm_deps_uflags.txt
+  ;; (-Wl,-u force-link flags), and .wasm-deps-linkflags.txt (the -L/-l
+  ;; flags), both consumed by the `wasm` link below.
+  (define wasm-deps-spec (lookup 'WASM_DEPS ""))
+  (define wasm-deps-dir (at-dir "wasm-deps"))
+  (define wasm-deps-driver (at-source "wasm-deps" "build-deps.sh"))
+  (define wasm-deps.inc (build-path wasm-deps-dir "wasm_deps.inc"))
 
   (define scheme.exe+args
     (cond
@@ -115,7 +133,26 @@
                'enablelibffi (lookup 'SCHEME_LIBFFI "no")
                'disablecurses (lookup 'DISABLE_CURSES "no")
                'disableiconv (lookup 'DISABLE_ICONV "no")
-               'exePostStep (lookup 'POST_LINKER)))
+               'exePostStep (lookup 'POST_LINKER)
+               ;; The Chez kernel compile (c/ffi.c) needs ffi.h, and the
+               ;; scheme-exe link needs libffi (ffi.o references
+               ;; ffi_prep_cif / ffi_type_*). The wasm libffi isn't in a
+               ;; system include/lib dir, so point at the headers and
+               ;; archive built by the `wasm-deps` target (the recipe
+               ;; driver always builds libffi first, before the kernel).
+               ;; `-lffi` goes in LIBS so it follows libkernel.a on the
+               ;; link line.
+               'CPPFLAGS (if emscripten?
+                             (build-shell
+                              (hash-ref config 'CPPFLAGS "")
+                              (~a "-I" (at-source "../../build-libffi-em/install/include")))
+                             (hash-ref config 'CPPFLAGS ""))
+               'LIBS (if emscripten?
+                         (build-shell
+                          (hash-ref config 'LIBS "")
+                          (~a "-L" (at-source "../../build-libffi-em/install/lib"))
+                          "-lffi")
+                         (hash-ref config 'LIBS ""))))
 
   (define (add-scheme-boot-config config)
     (if (equal? (lookup 'ENABLE_EXTRA_CHECKS "no") "yes")
@@ -174,6 +211,25 @@
     (map .c->.o pbchunk-srcs))
 
   (define boot.o (at-dir (.c->.o "boot.c")))
+  ;; WASM/Emscripten link inputs (see the `wasm` target): Racket's
+  ;; Emscripten entry point and the rktio-init object, compiled with emcc.
+  (define main_em.o (at-dir "main_em.o"))
+  (define init_rktio.o (at-dir "init_rktio.o"))
+  ;; WASM-specific C primitives: the http/canvas/dom entry points that
+  ;; wasm_extras.inc registers via Sforeign_symbol (so boot.o references
+  ;; them), plus wasm_stubs.c, which stubs the libc functions the recipe
+  ;; deps reference but Emscripten lacks (getprogname, copy_file_range,
+  ;; res_query, pthread_setname_np, ...). All four are linked into the
+  ;; `wasm` target. Standard-header-only, so they compile with the base
+  ;; config + the PORTABLE_BYTECODE/zlib defines.
+  (define wasm-prim-names (list "wasm_http" "wasm_canvas" "wasm_dom" "wasm_stubs"))
+  (define wasm-prim-srcs (map (lambda (n) (at-source (~a n ".c"))) wasm-prim-names))
+  (define wasm-prim-objs (map (lambda (n) (at-dir (~a n ".o"))) wasm-prim-names))
+  ;; Browser-only primitive: wasm_shell_io.c backs the SAB-based stdin/stdout
+  ;; the browser shell worker drives. It is linked into the browser surface
+  ;; (`scheme-web.*`) only, never the node surface (`scheme.*`).
+  (define wasm_shell_io.src (at-source "wasm_shell_io.c"))
+  (define wasm_shell_io.o (at-dir "wasm_shell_io.o"))
   (define boot-objs
     (append (list boot.o)
             (list (at-dir CS m "boot" m (.a "kernel")))
@@ -407,10 +463,14 @@
      `([:target build ()
                 ,(lambda (token)
                    (build/dep (find-target "build-racketcs" the-targets) token)
-                   (build/dep (find-target gracketcs the-targets) token)
-                   (build/dep (find-target "starter" starter-targets) token)
-                   (when (and mac? (not mac-fw?))
-                     (build/dep (find-target framework the-targets) token)))
+                   ;; For a WASM target there is no native gracket/starter
+                   ;; executable and no Mac framework -- the build stops at
+                   ;; the boot images produced by `build-racketcs`.
+                   (unless emscripten?
+                     (build/dep (find-target gracketcs the-targets) token)
+                     (build/dep (find-target "starter" starter-targets) token)
+                     (when (and mac? (not mac-fw?))
+                       (build/dep (find-target framework the-targets) token))))
                 :recur]
 
        [:target build-and-prepare ()
@@ -447,7 +507,13 @@
                    (build/dep (find-target "scheme" the-targets) token)
                    (unless cross?
                      (build/dep (find-target racket.boot the-targets) token))
-                   (build/dep (find-target racketcs the-targets) token))
+                   (if emscripten?
+                       ;; Stop at the (pbchunk) boot images; building
+                       ;; `racket-chunked.boot` transitively builds
+                       ;; `racket.boot` and the pbchunk C sources. The
+                       ;; native `racketcs`/embed-boot step is skipped.
+                       (build/dep (find-target racket-chunked.boot the-targets) token)
+                       (build/dep (find-target racketcs the-targets) token)))
                 :recur]
 
        ,(if windows?
@@ -672,12 +738,30 @@
                          ,(at-source "../../ChezScheme/c/self-exe.c")
                          ,(at-source "path_replace.inc")
                          ,(at-source "boot.h")
-                         ,rktio_config.h)
+                         ,rktio_config.h
+                         ;; For Emscripten, boot.c includes wasm_extras.inc
+                         ;; (which #includes the generated wasm_deps.inc),
+                         ;; so rebuild when the registered symbol set changes.
+                         ,@(if emscripten?
+                               (list (at-source "wasm_extras.inc") wasm-deps.inc)
+                               '()))
                 ,(lambda (boot.o token)
                    (c-compile boot.o
                               (at-source "boot.c")
                               (let* ([config (if pbchunk?
                                                  (config-merge config 'CPPFLAGS "-DPBCHUNK_REGISTER")
+                                                 config)]
+                                     ;; Register the wasm dep / libm foreign
+                                     ;; symbols: compile boot.c's init_foreign
+                                     ;; with the extra-foreign include, and put
+                                     ;; wasm_extras.inc (here) + wasm_deps.inc
+                                     ;; (the deps dir) on the include path.
+                                     [config (if emscripten?
+                                                 (config-include
+                                                  (config-merge config 'CPPFLAGS
+                                                                "-DRACKET_EXTRA_FOREIGN_INC='\"wasm_extras.inc\"'")
+                                                  (at-source ".")
+                                                  wasm-deps-dir)
                                                  config)]
                                      [config (config-include config
                                                              (at-dir CS m "boot" m)
@@ -690,6 +774,270 @@
                    (c-compile MemoryModule.o
                               (at-source "../../start/MemoryModule.c")
                               config))]
+
+       ;; --- WASM/Emscripten link (the `wasm` target below) ---------------
+       ;; Racket's Emscripten entry point, compiled with emcc (CC).
+       [:target ,main_em.o (,(at-source "main_em.c")
+                            ,(at-source "boot.h")
+                            ,(at-dir CS m "boot" m "scheme.h"))
+                ,(lambda (path token)
+                   (c-compile main_em.o
+                              (at-source "main_em.c")
+                              (config-merge
+                               (config-include config
+                                               (at-dir CS m "boot" m)
+                                               (at-dir CS m "c")
+                                               (at-source "../../ChezScheme/c"))
+                               'CPPFLAGS "-DPORTABLE_BYTECODE -sUSE_ZLIB=1")))]
+
+       ;; The rktio-init object (registers rktio's foreign symbols).
+       [:target ,init_rktio.o (,(at-source "../../ChezScheme/c/init_rktio.c")
+                               ,(at-source "../../ChezScheme/c/init_rktio.h")
+                               ,rktio_config.h)
+                ,(lambda (path token)
+                   (c-compile init_rktio.o
+                              (at-source "../../ChezScheme/c/init_rktio.c")
+                              (config-merge
+                               (config-include config
+                                               (at-source "../../rktio")
+                                               rktio-dir
+                                               (at-dir CS m "boot" m)
+                                               (at-dir CS m "c"))
+                               'CPPFLAGS "-DPORTABLE_BYTECODE -sUSE_ZLIB=1")))]
+
+       ;; WASM C primitives (wasm_http/canvas/dom/stubs.o). One target per
+       ;; source; standard headers only, so the base config plus the
+       ;; PORTABLE_BYTECODE/zlib defines suffices (CC=emcc and -pthread come
+       ;; from the emscripten configure).
+       ,@(map (lambda (src obj)
+                `[:target ,obj (,src)
+                  ,(lambda (path token)
+                     (c-compile obj src
+                                (config-merge config 'CPPFLAGS
+                                              "-DPORTABLE_BYTECODE -sUSE_ZLIB=1")))])
+              wasm-prim-srcs wasm-prim-objs)
+
+       ;; Browser-only primitive object (see wasm_shell_io.o above). Same
+       ;; compile rule as the wasm-prim objects; linked only into scheme-web.
+       [:target ,wasm_shell_io.o (,wasm_shell_io.src)
+                ,(lambda (path token)
+                   (c-compile wasm_shell_io.o wasm_shell_io.src
+                              (config-merge config 'CPPFLAGS
+                                            "-DPORTABLE_BYTECODE -sUSE_ZLIB=1")))]
+
+       ;; Build the recipe-driven native library deps (libffi always;
+       ;; more via WASM_DEPS). Writes wasm_deps.inc / wasm_deps_uflags.txt
+       ;; / .wasm-deps-linkflags.txt into wasm-deps-dir, consumed by the
+       ;; boot.o compile and the `wasm` link. The driver is incremental
+       ;; (per-dep state cache), so re-running is cheap. main.zuo builds
+       ;; this before the kernel `build`, since ffi.c needs libffi's headers.
+       [:target wasm-deps ()
+                ,(lambda (token)
+                   (unless emscripten?
+                     (error "wasm-deps target requires an Emscripten cross build (configure with --host=...-emscripten)"))
+                   (mkdir-p wasm-deps-dir)
+                   (shell/wait
+                    (map string->shell
+                         (list wasm-deps-driver
+                               "--src" (at-source "../..")
+                               "--out" wasm-deps-dir
+                               "--deps" wasm-deps-spec))))
+                :recur]
+
+       ;; Final emcc link: Racket-on-WASM for node. Consumes the in-tree
+       ;; kernel/rktio/boot/pbchunk artifacts produced by `bin/zuo . build`
+       ;; plus the recipe deps from the `wasm-deps` target (libffi + any
+       ;; WASM_DEPS): their -L/-l flags and -Wl,-u force-link flags.
+       ;; Run from the build dir: `bin/zuo . wasm`.
+       [:target wasm ()
+                ,(lambda (token)
+                   (unless emscripten?
+                     (error "wasm target requires an Emscripten cross build (configure with --host=...-emscripten)"))
+                   (unless pbchunk?
+                     (error "wasm target expects PBCHUNK_MODE=pbchunk (configure with --enable-pb)"))
+                   ;; Build the recipe deps (libffi + WASM_DEPS) and the
+                   ;; cheap/wasm-specific link inputs.
+                   (build/dep (find-target "wasm-deps" the-targets) token)
+                   (build/dep (find-target main_em.o the-targets) token)
+                   (build/dep (find-target init_rktio.o the-targets) token)
+                   (for-each (lambda (o) (build/dep (find-target o the-targets) token)) wasm-prim-objs)
+                   ;; Browser-only object (linked into scheme-web only).
+                   (build/dep (find-target wasm_shell_io.o the-targets) token)
+                   (build/dep (find-target boot.o the-targets) token)
+                   (build/dep librktio.a token)
+                   (for-each (lambda (o) (build/dep (find-target o the-targets) token)) pbchunk-objs)
+                   (for-each (lambda (b) (build/dep (find-target b the-targets) token)) boot-files)
+                   ;; The kernel + lz4 come from `bin/zuo . build`; require them.
+                   (define libkernel.a (at-dir CS m "boot" m (.a "kernel")))
+                   (define liblz4.a (at-dir CS m "lz4/lib/liblz4.a"))
+                   (for-each (lambda (f)
+                               (unless (file-exists? f)
+                                 (error (~a "missing prerequisite: " f
+                                            " -- run `bin/zuo . build` first"))))
+                             (list libkernel.a liblz4.a))
+                   (define emcc (lookup 'CC))
+                   (define out-dir (at-dir "wasm"))
+                   (mkdir-p out-dir)
+                   ;; Recipe-dep artifacts from the `wasm-deps` target.
+                   ;; Each file has one flag/path token per line; split on
+                   ;; newlines (not whitespace -- `-Wl,-u,sym` tokens must
+                   ;; stay intact, and zuo's no-separator `string-split`
+                   ;; returns the whole string as one token anyway) and drop
+                   ;; blank lines. The linkflags are in final -L-then-reverse-l
+                   ;; order (libffi included); uflags is empty unless a recipe
+                   ;; registers symbols (the draw stack does; libffi-only doesn't).
+                   (define (read-flag-lines f)
+                     (if (file-exists? f)
+                         (filter (lambda (s) (not (equal? s "")))
+                                 (map string-trim (string-split (file->string f) "\n")))
+                         '()))
+                   (define dep-linkflags
+                     (read-flag-lines (build-path wasm-deps-dir ".wasm-deps-linkflags.txt")))
+                   (define dep-uflags
+                     (read-flag-lines (build-path wasm-deps-dir "wasm_deps_uflags.txt")))
+                   (define (preload src dest) (list "--preload-file" (~a src "@" dest)))
+                   (define (preload-if-dir src dest)
+                     (if (directory-exists? src) (preload src dest) '()))
+                   ;; Installed packages (PKGS): preload share/pkgs and the
+                   ;; installation links file so the runtime finds them.
+                   ;; main_em.c sets config-dir=/etc, so the links file is
+                   ;; looked up at /share/links.rktd. Catalog packages copied
+                   ;; under share/pkgs are covered by the wholesale share/pkgs
+                   ;; preload above. But the links file also has entries that
+                   ;; resolve to /pkgs/<name> -- `static-root`s for in-tree
+                   ;; metapackages/libraries (base, racket-lib, compiler-lib,
+                   ;; zo-lib, ...) and named-collection links for any
+                   ;; in-tree local source packages linked in place.
+                   ;; These are linked, not copied, so their source is the
+                   ;; in-tree <root>/pkgs/<name>; Racket errors reading the
+                   ;; links file if any referenced dir is absent. Rather than
+                   ;; maintain a hardcoded list, parse links.rktd and preload
+                   ;; every /pkgs/<name> it points at.
+                   ;;
+                   ;; Each entry is `(<tag> <path> [<version-regexp>])`; an
+                   ;; entry resolves to /pkgs/<name> when <path> (relative to
+                   ;; the links file's /share dir) is `(up up #"pkgs" #"name")`
+                   ;; -- up up escapes /share to /, then pkgs/name. zuo's
+                   ;; reader yields the bareword `up` as a symbol and the
+                   ;; byte-strings as plain strings.
+                   (define (links-pkgs-roots links-file)
+                     (filter
+                      (lambda (x) x)
+                      (map (lambda (e)
+                             (let ([path (and (pair? e) (pair? (cdr e)) (cadr e))])
+                               (and (list? path)
+                                    (= (length path) 4)
+                                    (eq? (car path) 'up)
+                                    (eq? (cadr path) 'up)
+                                    (equal? (list-ref path 2) "pkgs")
+                                    (list-ref path 3))))
+                           (car (string-read (file->string links-file))))))
+                   (define share-preloads
+                     (let ([share-pkgs (at-source "../../../share/pkgs")]
+                           [links (at-source "../../../share/links.rktd")])
+                       (if (directory-exists? share-pkgs)
+                           (append (preload share-pkgs "/share/pkgs")
+                                   (if (file-exists? links)
+                                       (append
+                                        (preload links "/share/links.rktd")
+                                        (apply append
+                                               (map (lambda (name)
+                                                      (preload-if-dir
+                                                       (at-source (~a "../../../../pkgs/" name))
+                                                       (~a "/pkgs/" name)))
+                                                    (links-pkgs-roots links))))
+                                       '()))
+                           '())))
+                   ;; Inputs shared by both surfaces (node `scheme.*` and
+                   ;; browser `scheme-web.*`). wasm_shell_io.o is NOT here --
+                   ;; it is browser-only and appended in the browser link.
+                   (define common-objs
+                     (append (list main_em.o boot.o init_rktio.o)
+                             ;; WASM C primitives referenced by wasm_extras.inc
+                             ;; (http/canvas/dom) + the libc stubs the deps need.
+                             wasm-prim-objs
+                             pbchunk-objs
+                             (list libkernel.a liblz4.a (target->path librktio.a))))
+                   ;; Boot images + collects/etc/share, preloaded into the MEMFS.
+                   (define preloads
+                     (append (preload petite-chunked.boot "petite.boot")
+                             (preload scheme-chunked.boot "scheme.boot")
+                             (preload racket-chunked.boot "racket.boot")
+                             (preload (at-source "../../../collects") "/collects")
+                             (preload (at-source "../../../etc") "/etc")
+                             share-preloads))
+                   (define wasm-shell (at-source "../../../../wasm-shell"))
+                   ;; The node (`scheme.*`) link: REPL over Node's stdio.
+                   (define node-args
+                     (append
+                      (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"
+                            "-o" (build-path out-dir "scheme.html"))
+                      common-objs
+                      ;; Recipe-dep -L/-l flags (libffi + any WASM_DEPS),
+                      ;; in final link order.
+                      dep-linkflags
+                      ;; node-locate-file.js (extern-pre-js): resolve
+                      ;; scheme.data relative to the script dir, not the
+                      ;; process CWD, so `node path/to/scheme.js` works from
+                      ;; anywhere. Must be extern-pre-js -- the --preload-file
+                      ;; loader runs at parse time, before ordinary --pre-js.
+                      (list "--extern-pre-js" (build-path wasm-shell "node-locate-file.js")
+                            "--post-js"       (build-path wasm-shell "node-tty.js"))
+                      preloads
+                      (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
+                            "-sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset"
+                            "-sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction")
+                      ;; Force-link the symbols the deps manifest registers
+                      ;; via Sforeign_symbol (wasm-ld would otherwise strip
+                      ;; them before init_foreign takes their address).
+                      ;; Empty for the libffi-only default.
+                      dep-uflags))
+                   ;; The browser (`scheme-web.*`) link: drives stdin/stdout and
+                   ;; the DOM over SharedArrayBuffers from a worker, with IDBFS
+                   ;; persistence. Adds wasm_shell_io.o, the idbfs/shell-tty JS,
+                   ;; the SAB/DOM exports, and FORCE_FILESYSTEM + idbfs.js. The
+                   ;; EXPORTED_FUNCTIONS list must match the addresses
+                   ;; shell-worker.js / shell-tty.js read out of the module.
+                   (define browser-args
+                     (append
+                      (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"
+                            "-o" (build-path out-dir "scheme-web.html"))
+                      common-objs
+                      (list wasm_shell_io.o)
+                      dep-linkflags
+                      (list "--pre-js"  (build-path wasm-shell "idbfs-init.js")
+                            "--post-js" (build-path wasm-shell "shell-tty.js"))
+                      preloads
+                      ;; Cache the preloaded .data package in IndexedDB keyed by
+                      ;; package name + size so a returning browser reuses it
+                      ;; instead of re-downloading the (large) boot/collects/pkgs
+                      ;; payload on every load. Browser surface only -- the node
+                      ;; link has no persistent IDB to cache into.
+                      (list "--use-preload-cache")
+                      (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
+                            (~a "-sEXPORTED_FUNCTIONS="
+                                "_malloc,_free,_main,_setThrew,_memcpy,_memset,"
+                                "_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap,_shell_io_state_addr,"
+                                "_wasm_dom_cmd_seq_addr,_wasm_dom_cmd_len_addr,_wasm_dom_cmd_buf_addr,_wasm_dom_cmd_cap,"
+                                "_wasm_dom_reply_seq_addr,_wasm_dom_reply_len_addr,_wasm_dom_reply_buf_addr,_wasm_dom_reply_cap")
+                            (~a "-sEXPORTED_RUNTIME_METHODS="
+                                "getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,"
+                                "HEAPU8,HEAP32,FS,addRunDependency,removeRunDependency")
+                            "-sFORCE_FILESYSTEM=1" "-lidbfs.js")
+                      dep-uflags))
+                   (shell/wait (map string->shell node-args))
+                   (shell/wait (map string->shell browser-args))
+                   ;; Stage the IDE page assets next to scheme-web.*. Keep
+                   ;; this list in sync with
+                   ;; racket/src/ChezScheme/install-wasm-browser-shell.rkt (the
+                   ;; legacy build.sh path uses that script). shell-tty.js is
+                   ;; intentionally absent -- it is baked in via --post-js above.
+                   (for-each (lambda (name)
+                               (cp (build-path wasm-shell name)
+                                   (build-path out-dir name)))
+                             (list "ide.html" "ide.js"
+                                   "shell-worker.js" "serve.rkt")))
+                :recur]
 
        [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                 ,(lambda (path token)
@@ -765,7 +1113,11 @@
                                  token))])]
            [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                 (not (equal? (lookup 'RACKET) "")))
-            ;; use `BOOTFILE_RACKET` or `RACKET` to build boot files
+            ;; use `BOOTFILE_RACKET` or `RACKET` to build boot files.
+            ;; `rktboot` produces target boot files but not the cross-compiler
+            ;; xpatch, so a real cross build (target machine != host) must use
+            ;; the `--enable-scheme`/`--enable-racket=auto` route, which runs
+            ;; `bootquick --xpatch`.
             (when xpatch?
               (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
             `([:target bootfiles ()
@@ -878,7 +1230,19 @@
                 ,(lambda (token)
                    (install #f)
                    (setup))]
-       
+
+       ;; WASM cross setup: assemble the cross-compiler xpatch and run the
+       ;; cross `raco pkg install` + `raco setup` (via the host RACKET as
+       ;; --cross-server), compiling collections to compiled/<m>. Unlike
+       ;; `install-again`, this does not run the native `install` (which
+       ;; would try to copy the absent `racketcs`).
+       [:target wasm-setup ()
+                ,(lambda (token)
+                   (unless emscripten?
+                     (error "wasm-setup requires an Emscripten cross build"))
+                   (assemble-cross-xpatch)
+                   (wasm-setup))]
+
        [:target plain-install ()
                 ,(lambda (token)
                    (install #f))]
@@ -1092,32 +1456,39 @@
                  (list petite-v.boot scheme-v.boot racket-v.boot)
                  (list "petite.boot" "scheme.boot" "racket.boot")))])
 
-       (when xpatch?
-         ;; These two files don't get installed anywhere, because they're
-         ;; not part of a distribution, but a distro build expects them
-         ;; to be created in the directory where Racket was cross-built
-         (define compile-xpatch (at-dir (~a "compile-xpatch." m)))
-         (define library-xpatch (at-dir (~a "library-xpatch." m)))
-         (scheme/options (hash 'dir (at-dir "."))
-                         (list "--script"
-                               (find-relative-path (at-dir ".") (at-source "mk-cross-serve.ss"))
-                               (find-relative-path (at-dir ".") (at-source "."))
-                               "cross-serve.ss"
-                               (find-relative-path (at-dir ".") (at-source "../expander/env.ss"))))
-         (display-to-file (~a (file->string (at-dir "cross-serve.so"))
-                              (file->string xpatch))
-                          compile-xpatch
-                          :truncate)
-         (display-to-file (apply ~a
-                                 (map (lambda (name)
-                                        (file->string (at-dir (~a name "." host-m))))
-                                      library-xpatch-names))
-                          library-xpatch
-                          :truncate))
+       (assemble-cross-xpatch)
 
        (install-license-files sharepltdir))))
 
-  (define (setup)
+  ;; Assemble the cross-compiler xpatch files that `--cross-compiler`
+  ;; consumes: `cross-serve.so` plus `compile-xpatch.<m>` and
+  ;; `library-xpatch.<m>` in the build dir. Used by the native `install`
+  ;; and by the `wasm-setup` target (no `racketcs` needed).
+  (define (assemble-cross-xpatch)
+    (when xpatch?
+      ;; These two files don't get installed anywhere, because they're
+      ;; not part of a distribution, but a distro build expects them
+      ;; to be created in the directory where Racket was cross-built
+      (define compile-xpatch (at-dir (~a "compile-xpatch." m)))
+      (define library-xpatch (at-dir (~a "library-xpatch." m)))
+      (scheme/options (hash 'dir (at-dir "."))
+                      (list "--script"
+                            (find-relative-path (at-dir ".") (at-source "mk-cross-serve.ss"))
+                            (find-relative-path (at-dir ".") (at-source "."))
+                            "cross-serve.ss"
+                            (find-relative-path (at-dir ".") (at-source "../expander/env.ss"))))
+      (display-to-file (~a (file->string (at-dir "cross-serve.so"))
+                           (file->string xpatch))
+                       compile-xpatch
+                       :truncate)
+      (display-to-file (apply ~a
+                              (map (lambda (name)
+                                     (file->string (at-dir (~a name "." host-m))))
+                                   library-xpatch-names))
+                       library-xpatch
+                       :truncate)))
+
+  (define (cross-setup cross-compiler-args)
     (call-with-dest-racket
      (lambda (bindir dest-racket)
        (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
@@ -1125,13 +1496,37 @@
                                    (hash-set config 'copytree-prepared-setup-files #t)
                                    config))
        (maybe-copytree copytree-config dest-racket copytree-racket at-dir)
-       (run-raco-setup config dest-racket copytree-racket
-                       ;; this can be redundant if it's also supplied via `SETUP_MACHINE_FLAGS`,
-                       ;; but redundant should be ok:
-                       (list "-MCR" (~a (path->complete-path (at-dir "compiled")) ":")
-                             "--cross-compiler" m (at-dir ".")))
+       (run-raco-setup config dest-racket copytree-racket cross-compiler-args)
        (maybe-libzo-move config dest-racket copytree-racket at-dir)
        (maybe-destdir-fix config dest-racket copytree-racket at-dir)
        (maybe-set-install-scope config dest-racket copytree-racket at-dir))))
+
+  (define (setup)
+    ;; `-MCR` = `-M -C -R`: machine-INDEPENDENT (`-M`) cross output, the
+    ;; standard portable cross-distribution form.
+    (cross-setup (list "-MCR" (~a (path->complete-path (at-dir "compiled")) ":")
+                       "--cross-compiler" m (at-dir "."))))
+
+  ;; Machine-SPECIFIC cross setup for the WASM build. Producing
+  ;; `compiled/<m>/*.zo` (target form, in place under `collects`) needs the
+  ;; cross-multi-compile mode -- i.e. `-M` + multiple `-R` roots (what the
+  ;; `setup` function's `-MCR` already does), *not* `--compile-machine`
+  ;; (which sets a non-#f compile-target-machine and disables cross-multi).
+  ;; The target form is only emitted when `cross-system-type` reports the
+  ;; target machine, which comes from the installed `system.rktd`; the
+  ;; surgical path skips the native install, so generate that file here
+  ;; (as `install` does via `gen-system.rkt`). Without it the cross-multi
+  ;; mode produces only the portable machine-independent `compiled/*.zo`.
+  (define (wasm-setup)
+    (define libpltdir (at-destdir config (shell-subst (lookup 'libpltdir) config)))
+    (mkdir-p libpltdir)
+    (install-racket (at-source "gen-system.rkt")
+                    (build-path libpltdir (~a (cs-suffix "system") ".rktd"))
+                    m (lookup 'KERNEL_TARGET_MACH m)
+                    (lookup 'CROSS_COMPILE_TARGET_KIND "machine")
+                    (at-source ".")
+                    (lookup 'PLT_CS_SLSP_SUFFIX)
+                    (if mac? "macosx" "other"))
+    (setup))
 
   the-targets)

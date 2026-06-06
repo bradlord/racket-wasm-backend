@@ -1863,7 +1863,7 @@ int rktio_close_fds_len()
      a fork: */
 # ifdef USE_ULIMIT
   i = ulimit(4, 0);
-# elif defined(__ANDROID__)
+# elif defined(__ANDROID__) || defined(RKTIO_USE_SYSCONF_FOR_FD_LIMIT)
   i = sysconf(_SC_OPEN_MAX);
 # else
   i = getdtablesize();

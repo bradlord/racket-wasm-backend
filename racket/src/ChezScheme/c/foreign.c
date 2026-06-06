@@ -309,6 +309,17 @@ static ptr lookup_foreign_entry(const char *s) {
   return lookup(s);
 }
 
+/* Public C-side lookup of a Sforeign_symbol-registered name. Returns
+   the registered C address, or NULL if the name isn't present.
+   Used by the Emscripten/WASM build's rktio dll shim (cs/c/boot.c) to
+   route ffi-lib / get-ffi-obj through the static foreign-symbol table
+   in lieu of dlopen/dlsym, which Emscripten doesn't support. */
+void *Sforeign_lookup(const char *s) {
+  ptr p = lookup_static(s);
+  if (p == addr_to_ptr(0)) return NULL;
+  return ptr_to_addr(p);
+}
+
 static ptr foreign_entries(void) {
     iptr b; ptr p, entries;
 

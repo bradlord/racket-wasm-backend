@@ -201,6 +201,19 @@
 
 #endif
 
+  /************ Emscripten / WebAssembly ************/
+
+#if defined(__EMSCRIPTEN__)
+
+# define USE_TM_GMTOFF_FIELD
+# define USE_TM_ZONE_FIELD
+
+/* Emscripten musl libc does not provide getdtablesize();
+   fall back to sysconf(_SC_OPEN_MAX) via the Android branch. */
+# define RKTIO_USE_SYSCONF_FOR_FD_LIMIT
+
+#endif
+
   /***************************************************/
 
 /***** CONFIGURATION FLAG DESCRPTIONS ******/

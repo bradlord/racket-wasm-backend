@@ -1,0 +1,53 @@
+# Meson cross-compilation file for the Emscripten/wasm32 WASM build.
+#
+# Used by deps.sh's meson dispatcher when a recipe sets
+# DEP_BUILD_SYSTEM=meson. Tells Meson to invoke Emscripten's wrappers
+# instead of the host toolchain and to treat the target as wasm32.
+#
+# Notes:
+#  - `system = 'emscripten'` is Meson's recognized identifier for
+#    Emscripten-target builds; projects can branch on it via
+#    host_machine.system().
+#  - We match the -pthread + USE_ZLIB flags the rest of the WASM build
+#    uses so dep object files are ABI-compatible with the final link.
+#  - The Emscripten ports system bundles zlib (USE_ZLIB=1); recipes
+#    that need it inherit it through these c_args / c_link_args.
+
+[binaries]
+c       = 'emcc'
+cpp     = 'em++'
+ar      = 'emar'
+ranlib  = 'emranlib'
+strip   = 'emstrip'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system     = 'emscripten'
+cpu_family = 'wasm32'
+cpu        = 'wasm32'
+endian     = 'little'
+
+[built-in options]
+# clang 18+ promoted incompatible-(function-)pointer-types from warning
+# to error. GLib (gsize vs size_t) and some Cairo helpers trip this even
+# though the underlying widths match on wasm32; demote back to warning.
+c_args        = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-Wno-error=incompatible-pointer-types',
+                 '-Wno-error=incompatible-function-pointer-types',
+                 '-Wno-error=implicit-function-declaration',
+                 '-Wno-error=int-conversion']
+cpp_args      = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-Wno-error=incompatible-pointer-types',
+                 '-Wno-error=incompatible-function-pointer-types']
+# Some libraries we build (GLib) include CLI tool executables that
+# reference symbols the wasm32-emscripten sysroot doesn't provide
+# (res_query, posix_spawnp, ...). We only care about the static
+# archives that ship alongside; ignore link-time misses for the
+# tool binaries so meson compile/install can complete. The final
+# scheme-web link uses build.sh and is not affected.
+c_link_args   = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-sERROR_ON_UNDEFINED_SYMBOLS=0',
+                 '-Wl,--unresolved-symbols=ignore-all']
+cpp_link_args = ['-pthread', '-s', 'USE_ZLIB=1',
+                 '-sERROR_ON_UNDEFINED_SYMBOLS=0',
+                 '-Wl,--unresolved-symbols=ignore-all']

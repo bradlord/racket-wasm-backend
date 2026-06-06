@@ -342,6 +342,8 @@ static rktio_poll_set_t *alloc_fdset_arrays(rktio_t *rktio)
   if (!dynamic_fd_size) {
 # ifdef USE_ULIMIT
     dynamic_fd_size = ulimit(4, 0);
+# elif defined(RKTIO_USE_SYSCONF_FOR_FD_LIMIT)
+    dynamic_fd_size = sysconf(_SC_OPEN_MAX);
 # else
     dynamic_fd_size = getdtablesize();
 # endif
@@ -1039,6 +1041,8 @@ int rktio_get_fd_limit(rktio_poll_set_t *fds)
   actual_limit = ulimit(4, 0);
 #elif defined(FIXED_FD_LIMIT)
   actual_limit = FIXED_FD_LIMIT;
+#elif defined(RKTIO_USE_SYSCONF_FOR_FD_LIMIT)
+  actual_limit = sysconf(_SC_OPEN_MAX);
 #else
   actual_limit = getdtablesize();
 # endif

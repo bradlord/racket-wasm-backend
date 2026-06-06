@@ -245,6 +245,11 @@
   (define who 'configured-targets-at)
   (define configure (hash-ref options 'configure))
   (define configure-args (hash-ref options 'configure-args '()))
+  ;; A non-empty wrapper (e.g. "emconfigure") is prepended to the configure
+  ;; command, so the configure runs as `emconfigure ./configure ...`. This is
+  ;; how the WASM cross build gets `CC=emcc`/`AR=emar` recorded in the
+  ;; generated Makefile, which then drives all downstream `c-compile`/`c-link`.
+  (define configure-wrapper (hash-ref options 'configure-wrapper ""))
   (define inputs (hash-ref options 'inputs '()))
   (unless (list? inputs) (arg-error who "list" inputs))
   (define outputs (hash-ref options 'outputs))
@@ -276,7 +281,11 @@
 					   (cdr cmd)
 					   (hash 'dir dir))]
 			    [else
-                             (shell/wait (map string->shell cmd)
+                             (shell/wait (if (equal? configure-wrapper "")
+                                             (map string->shell cmd)
+                                             (build-shell
+                                              (map string->shell (shell->strings configure-wrapper))
+                                              (map string->shell cmd)))
 					 (hash 'dir dir))]))))
                  (hash 'quiet? #t
                        'co-outputs (cdr outputs))))
@@ -335,6 +344,7 @@
                                'outputs (list (build-path rktio-dir "Makefile")
                                               rktio_config.h)
                                'script (build-path rktio-src-dir "build.zuo")
+                               'configure-wrapper (hash-ref config 'CONFIGURE_WRAPPER "")
                                'vars config))]))
   (define librktio.a (find-target (~a "librktio." (if msvc? "lib" (hash-ref config 'LTA "a"))) rktio-targets))
 

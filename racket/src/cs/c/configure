@@ -652,6 +652,7 @@ Z_LIB
 MINGW
 SIGNED_EXE
 OSX
+EMSCRIPTEN
 SETUP_BOOT_MODE
 CROSS_MODE
 KERNEL_TARGET_MACH
@@ -3392,6 +3393,7 @@ use_flag_pthread=yes
 use_flag_posix_pthread=no
 
 OSX="f"
+EMSCRIPTEN="f"
 SIGNED_EXE="f"
 MINGW="f"
 CONFIGURE_RACKET_SO_COMPILE=""
@@ -4801,6 +4803,24 @@ case "$host_os" in
     MACH_OS=qnx
     use_flag_pthread=no
     ;;
+  *emscripten*)
+    # WebAssembly via Emscripten. The machine type comes from
+    # `--enable-mach`/`--enable-target` (a pb variant such as tpb32l),
+    # so we only flag the target here; the final emcc link is driven by
+    # the build system's wasm target rather than the native executable
+    # embed path.
+    EMSCRIPTEN="t"
+    # The cross sizeof bisection can't run a wasm test binary; preset
+    # the pointer size (wasm32 / tpb32l are 32-bit) so AC_CHECK_SIZEOF
+    # takes its cached path instead of computing 0.
+    ac_cv_sizeof_void_p=4
+    # Emscripten needs -pthread at *compile* time (not just link) for the
+    # threaded tpb32l build: it enables atomics/bulk-memory/TLS. Mixing
+    # -pthread and non-pthread objects yields runtime "null function or
+    # function signature mismatch" crashes. Put it in CFLAGS so every
+    # translation unit (kernel, boot.o, pbchunk, main_em.o, ...) gets it.
+    CFLAGS="${CFLAGS} -pthread"
+    ;;
   *)
     ;;
 esac
@@ -6102,15 +6122,39 @@ if test "${enable_pb}" = "yes" ; then
   enable_libffi=yes
   enable_foreign=yes
   SCHEME_LIBFFI=yes
+  # If the cross target was given explicitly as a pb machine
+  # (e.g. `--enable-target=tpb32l`), honor it instead of the
+  # host-derived `pb_machine_name`. Without this, an explicit pb
+  # target with a different word size than the host (tpb32l on a
+  # 64-bit host) is silently overwritten by the assignment below --
+  # the reason the WASM build previously passed `--enable-mach=tpb32l`
+  # and then sed-rewrote `MACH` back to the host in the Makefile.
+  case "${enable_target}" in
+    pb* | tpb* )
+      pb_machine_name="${enable_target}"
+      ;;
+  esac
   TARGET_MACH=${pb_machine_name}
   if test "${CROSS_MODE}" != "cross" ; then
     MACH=${pb_machine_name}
   fi
-  CONFIGURE_RACKET_SO_COMPILE="${CONFIGURE_RACKET_SO_COMPILE} PLT_CS_MACHINE_TYPE=${KERNEL_TARGET_MACH}"
   if test "${enable_pbchunk}" != "no" ; then
     PBCHUNK_MODE=pbchunk
   fi
 fi
+
+# A pb/tpb target compiles `(machine-type)` to a constant read from
+# PLT_CS_MACHINE_TYPE at compile time (see rumble/system.ss), so the
+# target machine name must be in the compile environment for the Racket
+# layers. This must fire whether the pb target was selected via
+# `--enable-pb` or via `--enable-mach=<tpb...>` with a cross `--host`,
+# so it is gated on the target being a pb machine rather than on
+# `enable_pb`.
+case "${KERNEL_TARGET_MACH}" in
+  *pb*)
+    CONFIGURE_RACKET_SO_COMPILE="${CONFIGURE_RACKET_SO_COMPILE} PLT_CS_MACHINE_TYPE=${KERNEL_TARGET_MACH}"
+    ;;
+esac
 
 libffi_unavailable_message="did not find working configuration"
 complain_if_libffi_fails=yes
@@ -6146,6 +6190,17 @@ $as_echo_n "checking for libffi... " >&6; }
   OLD_LIBS="${LIBS}"
   CFLAGS="${CFLAGS} ${libffi_config_preflags} ${libffi_config_cflags}"
   LIBS="${LIBS} ${libffi_config_libs}"
+  if test "${EMSCRIPTEN}" = "t" ; then
+    # Cross-compiling for WebAssembly: an AC_TRY_LINK can't run, and
+    # libffi is provided out-of-band (the `wasm-deps` build target,
+    # cs/c/wasm-deps/build-deps.sh, builds it; it is linked at the emcc
+    # step). Assume it is available, but drop
+    # -lffi from LIBS: there is no wasm libffi for configure's own test
+    # links, and leaving it in breaks the rktio sub-configure's
+    # "C compiler works" check (wasm-ld: unable to find library -lffi).
+    have_libffi=yes
+    LIBS="${OLD_LIBS}"
+  else
   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 #include <ffi.h>
@@ -6165,6 +6220,7 @@ else
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
+  fi
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: $have_libffi" >&5
 $as_echo "$have_libffi" >&6; }
   if test "${have_libffi}" = "no" ; then

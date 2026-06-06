@@ -30,6 +30,27 @@
 #include "../../start/self_exe.inc"
 #include "path_replace.inc"
 
+#include <time.h>
+
+/* Lightweight boot-phase timing, enabled by setting the
+   RACKET_BOOT_TIMING environment variable. Used to split the long
+   pb-interpreter boot (notably under the WebAssembly/Emscripten build)
+   into measurable phases. Prints cumulative seconds and the delta
+   since the previous checkpoint to stderr. */
+static void boot_timing(const char *label) {
+  static int on = -1;
+  static double prev = 0.0;
+  double now;
+  if (on < 0)
+    on = (getenv("RACKET_BOOT_TIMING") != NULL);
+  if (!on)
+    return;
+  now = (double)clock() / CLOCKS_PER_SEC;
+  fprintf(stderr, "[boot-timing] %-24s t=%8.2fs (+%.2fs)\n",
+          label, now, (prev == 0.0) ? 0.0 : now - prev);
+  prev = now;
+}
+
 #ifdef PBCHUNK_REGISTER
 static void register_pbchunks();
 #endif
@@ -126,7 +147,38 @@ static void run_cross_server(char **argv)
 static void init_foreign(void)
 {
 # include "rktio.inc"
+# ifdef RACKET_EXTRA_FOREIGN_INC
+   /* Build-time hook for registering extra foreign symbols alongside
+      rktio's. Defined to a filename via -DRACKET_EXTRA_FOREIGN_INC=...
+      Used by the Emscripten/WASM build (see racket/src/cs/c/wasm_http.c
+      and build-wasm.md) so symbols like `wasm_http_get` are visible to
+      Racket FFI in the same way rktio symbols are. Behavior is
+      unchanged on every other build. */
+#  include RACKET_EXTRA_FOREIGN_INC
+# endif
 }
+
+#ifdef __EMSCRIPTEN__
+/* See racket_boot for context. The "handle" we hand back is a
+   non-NULL sentinel; the find_object hook ignores it and looks up
+   `name` in Chez's static foreign-symbol table via Sforeign_lookup
+   (ChezScheme/c/foreign.c). All ffi-lib invocations succeed with
+   this sentinel; the actual gate is whether the symbol was
+   registered, which keeps the static-link world coherent. */
+extern void *Sforeign_lookup(const char *);
+
+static void *em_dll_open(rktio_const_string_t name, rktio_bool_t as_global) {
+  (void)name; (void)as_global;
+  return (void *)(uintptr_t)1;
+}
+static void *em_dll_find_object(void *h, rktio_const_string_t name) {
+  (void)h;
+  return Sforeign_lookup((const char *)name);
+}
+static void em_dll_close(void *h) {
+  (void)h;
+}
+#endif
 
 void racket_boot(racket_boot_arguments_t *ba)
 {
@@ -137,6 +189,18 @@ void racket_boot(racket_boot_arguments_t *ba)
     rktio_set_dll_path((wchar_t *)ba->dll_dir);
   if (ba->dll_open)
     rktio_set_dll_procs(ba->dll_open, ba->dll_find_object, ba->dll_close);
+#endif
+
+#ifdef __EMSCRIPTEN__
+  /* Emscripten has no dlopen/dlsym in the static-linked WASM build.
+     Install hooks so (ffi-lib ...) succeeds with a sentinel handle
+     and get-ffi-obj resolves names through Chez's static foreign-
+     symbol table (Sforeign_symbol-registered names: rktio, wasm_*
+     primitives, and every dep symbol the wasm_deps.inc manifest
+     declared). With this, racket/draw and similar packages that
+     reach native libraries via ffi-lib Just Work without source
+     changes. */
+  rktio_set_dll_procs(em_dll_open, em_dll_find_object, em_dll_close);
 #endif
 
   Sscheme_register_signal_registerer(rktio_will_modify_os_signal_handler);
@@ -212,7 +276,9 @@ void racket_boot(racket_boot_arguments_t *ba)
 # endif
   }
 
+  boot_timing("start heap build");
   Sbuild_heap(NULL, init_foreign);
+  boot_timing("heap built");
 
   if (cross_server) {
     /* Don't run Racket as usual. Instead, load the patch
@@ -250,10 +316,12 @@ void racket_boot(racket_boot_arguments_t *ba)
 #ifdef RACKET_AS_BOOT
     {
       ptr c, start, apply;
+      boot_timing("racket startup begin");
       c = Stop_level_value(Sstring_to_symbol("scheme-start"));
       start = Scall0(c);
       apply = Stop_level_value(Sstring_to_symbol("apply"));
       Scall2(apply, start, l);
+      boot_timing("racket startup end");
     }
 #else
     Sset_top_level_value(Sstring_to_symbol("bytes-command-line-arguments"), l);
