@@ -1481,17 +1481,7 @@
               gc-after-each-sequential?))
 
   (define (make-docs-step)
-    (setup-printf #f (add-time "--- building documentation ---"))
-    (set-doc:verbose)
-    (with-handlers ([exn:fail?
-                     (lambda (exn)
-                       (set! exit-code 1)
-                       (setup-printf #f "docs failure: ~a" (exn->string exn)))])
-      (define auto-start-doc?
-        (or (and (not (null? (archives)))
-                 (archive-implies-reindex))
-            (make-doc-index)))
-      (doc:setup-scribblings '() auto-start-doc?)))
+    #f)
 
   (define (doc-with-temp-step label tmp-prefix dest-path kind after-build)
     (setup-printf #f (add-time label))

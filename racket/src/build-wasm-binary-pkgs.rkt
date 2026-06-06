@@ -31,11 +31,17 @@
 ;; IMPORTANT: run this in the **cross-compiler** context, not a plain host
 ;; racket. `pkg/strip`'s `fixup-zo` reads each package ".zo" (to strip
 ;; test/doc submodules), and tpb32l compiled fasl is machine-specific --
-;; unreadable without the cross compiler loaded. Supply the same flags
-;; `raco setup` uses, e.g.:
+;; unreadable without the cross compiler loaded. Two compiled-file roots
+;; are needed: `racket/src/build/cs/c/compiled` for the cross compiler's
+;; own modules, and `build/zo` for the host-loadable machine-independent
+;; package "info_rkt.zo" -- `generate-stripped-directory` EXECUTES each
+;; package's "info.rkt" via `get-info/full`, and the per-package tpb32l
+;; "info_rkt.zo" under share/pkgs can't load on the host. `build/zo` must
+;; precede the trailing ":" ('same = the tpb32l tree). Supply the same
+;; flags `raco setup` uses, e.g.:
 ;;
 ;;   racket -G build/config \
-;;          -MCR racket/src/build/cs/c/compiled: \
+;;          -MCR racket/src/build/cs/c/compiled:build/zo: \
 ;;          --cross-compiler tpb32l racket/src/build/cs/c \
 ;;          racket/src/build-wasm-binary-pkgs.rkt
 ;;
@@ -50,6 +56,7 @@
 (require racket/cmdline
          racket/runtime-path
          racket/file
+         racket/path
          setup/getinfo
          pkg/lib
          pkg/strip
@@ -92,6 +99,47 @@
 (printf "Stripping ~a packages to binary-lib into ~a\n"
         (length names) cache-pkgs-dir)
 
+;; Scrub file-relocation directives from a stripped package tree.
+;;
+;; `generate-stripped-directory` rewrites `copy-man-pages`/
+;; `copy-shared-files` to `move-man-pages`/`move-shared-files` (a binary
+;; package is expected to relocate those files into the central man/share
+;; dirs at install time). But an *in-place* `raco setup` -- which is what
+;; the bootstrap ran -- already MOVED those files out of `share/pkgs` into
+;; the installation's man/share dirs, and strip's `unmove-files` only
+;; restores from the *user* dirs (`find-user-man-dir` etc.), not the
+;; installation dirs. So the stripped package keeps a `move-man-pages`
+;; directive with no file, and the consume's cross `raco setup` dies with
+;; `copy-directory/files: encountered path that is neither file nor
+;; directory` on e.g. `gui-lib/mred/mred.1`.
+;;
+;; A browser WASM image has no use for man pages or other relocated
+;; shared files, so drop these directives from every emitted "info.rkt".
+;; The files strip rewrote are module datums (`(module info
+;; setup/infotab (#%module-begin (define ...) ...))`), readable with
+;; `read`; only those carry the `move-*` tags, so a textual prefilter
+;; keeps us from trying to `read` `#lang info` sources strip left as-is.
+(define scrub-tags '(move-man-pages move-shared-files))
+
+(define (scrub-relocation-directives! dest)
+  (for ([info-path (in-directory dest)]
+        #:when (and (file-exists? info-path)
+                    (equal? (file-name-from-path info-path)
+                            (string->path "info.rkt"))
+                    (regexp-match? #rx"move-(man-pages|shared-files)"
+                                   (file->string info-path))))
+    (define form (call-with-input-file* info-path read))
+    (define (drop? f)
+      (and (pair? f) (eq? (car f) 'define)
+           (pair? (cdr f)) (memq (cadr f) scrub-tags)))
+    (define scrubbed
+      (let loop ([f form])
+        (if (list? f)
+            (map loop (filter (lambda (x) (not (drop? x))) f))
+            f)))
+    (call-with-output-file* info-path #:exists 'truncate/replace
+      (lambda (o) (write scrubbed o) (newline o)))))
+
 (define stripped
   (for/list ([name (in-list names)])
     (define src
@@ -110,6 +158,10 @@
        (parameterize ([strip-binary-compile-info #f])
          (generate-stripped-directory 'binary-lib src dest
                                       #:check-status? #f))
+       ;; Drop `move-man-pages`/`move-shared-files` directives whose files
+       ;; an in-place bootstrap setup already relocated away (see
+       ;; `scrub-relocation-directives!`).
+       (scrub-relocation-directives! dest)
        (printf "  ~a\n" name)
        name]
       [else

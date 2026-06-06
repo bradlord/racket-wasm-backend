@@ -12,6 +12,8 @@
 ;; whole draw library into the REPL namespace.
 
 (require racket/class
+         pict/convert
+         (only-in pict pict->bitmap)
          "display-bm.rkt")
 
 (provide bitmap-like? install-bitmap-printer!)
@@ -27,7 +29,9 @@
 (define (install-bitmap-printer!)
   (define base (current-print))
   (current-print
-   (lambda (v)
-     (if (bitmap-like? v)
-         (display-bm v)
-         (base v)))))
+    (lambda (v)
+      (cond
+        [(bitmap-like? v) (display-bm v)]
+        ; We do depend on pict (and draw-lib) for picts. Maybe we could dynamically require these.
+        [(pict-convertible? v) (display-bm (pict->bitmap (pict-convert v)))]
+        [else (base v)]))))

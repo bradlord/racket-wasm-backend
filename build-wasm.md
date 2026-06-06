@@ -1211,10 +1211,20 @@ is dropped -- no `use-compiled-file-paths` parameterization needed.
 
    ```sh
    <host-racket> -G build/config \
-                 -MCR racket/src/build/cs/c/compiled: \
+                 -MCR racket/src/build/cs/c/compiled:build/zo: \
                  --cross-compiler tpb32l racket/src/build/cs/c \
                  racket/src/build-wasm-binary-pkgs.rkt
    ```
+
+   The `build/zo` root is load-bearing: `generate-stripped-directory`
+   loads each package's `info.rkt` via `get-info/full` (it *executes* it
+   on the host), and the per-package `compiled/info_rkt.zo` under
+   `share/pkgs` is tpb32l -- unloadable on the host. `build/zo` holds the
+   machine-independent copy and must precede the trailing `:` (= `'same`,
+   the tpb32l tree). Without it the strip dies with `fasl-read:
+   incompatible fasl-object machine-type 'tpb32l` (the exact package that
+   trips it depends on which `info_rkt.zo` are present, so it can appear
+   to "work" for one package set and fail for another).
 
    (The bare host racket -- not the tree's collects via `-X` -- supplies
    `pkg/strip`/`pkg/lib`/`pkg/dirs-catalog`, so the make target passes the
@@ -1250,9 +1260,57 @@ absent, `install-base-pkgs` falls back to the source install verbatim.
   `package-dependencies` in `pkg/private/collects`), so pruning happens
   **iff** the installed package is the stripped binary version -- which is
   exactly why consumption must be a clean install, not a prepend.
+- **`undeclared dependency detected … for build: rackunit-lib` is
+  expected noise, not a failure.** The cross `raco setup` redirects
+  compiled output to `build/zo` (`-MCR`, `get-mcr-args` in `main.zuo`),
+  keyed by absolute source path. The bootstrap compiled each package
+  *from source* into `build/zo`, so its `.dep` records build-only imports
+  from `(module+ test (require rackunit))`-style submodules. The consumed
+  binary `info.rkt` has `build-deps` stripped, so setup's dependency check
+  finds those imports undeclared and prints a `--- summary of package
+  problems ---` listing them. These are **warnings**: setup does not fail
+  on undeclared deps (no `--check-pkg-deps`), the build completes, and the
+  shipped `share/pkgs` (stripped, no test submodules) is correct. Leave
+  them be.
+- **Do NOT delete the `build/zo` package mirrors to silence those
+  warnings.** It looks tempting, but that machine-independent bytecode is
+  the *only host-loadable* copy of each package: `raco setup` runs
+  collection installers on the host via `dynamic-require`
+  (`do-install-part`, `setup-core.rkt`). The installed `share/pkgs/.../
+  compiled/*.zo` is tpb32l (target-only) -- loading it on the host throws
+  `fasl-read: incompatible fasl-object machine-type 'tpb32l`, a *fatal*
+  setup error. The bootstrap's `build/zo` must survive into the consume
+  step. (If it is gone -- e.g. someone cleared it -- redo a source
+  bootstrap `make wasm` to regenerate it, then re-run
+  `make wasm-binary-pkgs` and consume.)
 - Cache invalidation is manual: re-run `make wasm-binary-pkgs` when `PKGS`
   or the tree version changes (the `manifest.rktd` records both). `make
   wasm` does not auto-rebuild it.
+- **List `-lib` packages in `PKGS`, not metapackages.** A metapackage
+  like `pict` (vs `pict-lib`) or `draw` (vs `draw-lib`) is a catalog-only
+  entry that just `implies` an implementation package plus a `-doc`
+  package; it has no directory of its own. The strip catalogs
+  directory-bearing packages, so the metapackage name never enters the
+  binary catalog and the consume fails with `raco pkg install: cannot
+  find package on catalogs / package: pict`. Worse, the metapackage drags
+  its `-doc` sibling and that doc's entire build-dep closure into the
+  source bootstrap (e.g. `pict` pulls in ~88 packages: typed-racket,
+  drracket-tool, web-server, htdp-lib, …) -- all stripped back out, but
+  slow and pointless. Use the `-lib` implementation package, matching the
+  existing `draw-lib` choice.
+- **Changing `PKGS` is a four-stage clean rebuild**, because the catalog
+  must be stripped from a fresh *source* tree: (1) clear
+  `racket/src/.wasm-pkgs-cache` and `racket/share/{pkgs,links.rktd,
+  info-cache.rktd}`; (2) source bootstrap (`make wasm`, catalog absent);
+  (3) `make wasm-binary-pkgs`; (4) binary consume (`make wasm`, catalog
+  present). The clearing in (1) is load-bearing -- with the catalog
+  present the bootstrap takes the binary branch, and with the old tree
+  still installed `--skip-installed` keeps it, so either way the source
+  tree the strip needs never gets built. The repo-root
+  `rebuild-binary-catalog.sh` runs all four stages in order, reading
+  `PKGS`/`SCHEME`/`RACKET`/`WASM_DEPS` from `buildit.sh`'s active `make
+  wasm` line (override via the environment; `-n`/`--dry-run` prints the
+  plan without building).
 - This supersedes the `datalog` build-dep trimming: with binary install
   as the path, the vendored `pkgs/datalog/` copy has been removed and
   `datalog` installs from the upstream catalog like any other package, its

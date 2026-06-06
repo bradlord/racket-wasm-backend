@@ -466,6 +466,7 @@
                      self-root-config-flags
                      pre-raco-args
                      args
+                     "--no-docs"
                      options)]
       [else
        (racket (hash 'racket cross-bootstrap-racket)

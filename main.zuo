@@ -263,7 +263,22 @@
                                       'PLT_SETUP_OPTIONS (build-shell
                                                           (if also? "-D" "")
                                                           (setup-options)
-                                                          (get-recompile-cache-options))
+                                                          (get-recompile-cache-options)
+                                                          ;; The wasm cross `raco setup` builds an
+                                                          ;; image, not a validated package release;
+                                                          ;; skip the package-dependency check. It
+                                                          ;; otherwise fails fatally on the binary
+                                                          ;; consume: each stripped `info.rkt` drops
+                                                          ;; `build-deps`, but the `build/zo` `.dep`
+                                                          ;; from the source bootstrap still records
+                                                          ;; build-only imports (a `(module+ test
+                                                          ;; (require rackunit))` submodule), so the
+                                                          ;; check reports dozens of "undeclared
+                                                          ;; dependency ... for build: rackunit-lib"
+                                                          ;; and sets a non-zero exit. See
+                                                          ;; build-wasm.md "Binary-only package
+                                                          ;; preload".
+                                                          (if wasm? "--no-pkg-deps" ""))
                                       'DESTDIR (if prefix
                                                    (lookup 'DESTDIR "")
                                                    "")
@@ -947,9 +962,23 @@
   (define (wasm-binary-pkgs token)
     (define exe (hash-ref (find-racket vm) 'racket))
     (define cross-build (at-source "racket/src/build/cs/c"))
+    ;; compiled-file-roots, searched in order:
+    ;;   1. <cross-build>/compiled -- the cross compiler's own modules
+    ;;      (cross-serve etc.), needed by `--cross-compiler`.
+    ;;   2. build/zo -- the machine-INDEPENDENT cross output (`-MCR`,
+    ;;      get-mcr-args). `generate-stripped-directory` loads each
+    ;;      package's `info.rkt` via `get-info/full`, which EXECUTES it on
+    ;;      the host; the per-package `compiled/info_rkt.zo` under
+    ;;      `share/pkgs` is tpb32l (target) and unloadable on the host
+    ;;      (`fasl-read: incompatible ... 'tpb32l`). build/zo holds the
+    ;;      host-loadable machine-independent copy, so it MUST precede the
+    ;;      trailing "" ('same = `share/pkgs/.../compiled`, tpb32l) below.
+    ;;      (`fixup-zo` reads the tpb32l package `.zo` by direct path, not
+    ;;      via module resolution, so the shipped bytecode stays tpb32l.)
     (racket (hash 'racket exe)
             "-G" (path-only build-config.rktd)
-            "-MCR" (~a (path->complete-path (build-path cross-build "compiled")) ":")
+            "-MCR" (~a (path->complete-path (build-path cross-build "compiled")) ":"
+                       (path->complete-path (at-source "build/zo")) ":")
             "--cross-compiler" "tpb32l" cross-build
             (at-source "racket/src/build-wasm-binary-pkgs.rkt")))
 

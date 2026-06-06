@@ -117,6 +117,37 @@
 ";; bm at the REPL on the right.\n",
     },
     {
+      name: "pict diagrams",
+      code:
+"#lang racket\n" +
+"\n" +
+";; pict builds pictures compositionally -- shapes and text are values\n" +
+";; you combine with operators like hc-append (horizontal) and\n" +
+";; vc-append (vertical) rather than drawing imperatively. Any pict\n" +
+";; returned to the Interactions pane is rendered inline.\n" +
+"\n" +
+"(require pict)\n" +
+"\n" +
+";; A row of coloured shapes.\n" +
+"(define shapes\n" +
+"  (hc-append 20\n" +
+"             (colorize (filled-rectangle 80 80) \"crimson\")\n" +
+"             (colorize (disk 80) \"steelblue\")\n" +
+"             (colorize (filled-ellipse 110 80) \"goldenrod\")))\n" +
+"\n" +
+";; Stack a caption under the shapes.\n" +
+"(define diagram\n" +
+"  (vc-append 12\n" +
+"             (text \"pict on Racket WASM\" 'roman 22)\n" +
+"             shapes))\n" +
+"\n" +
+";; A bare pict result renders, so just evaluating it displays it.\n" +
+"(frame (inset diagram 20))\n" +
+"\n" +
+";; After Run, try evaluating shapes -- or (scale diagram 1.5) -- at the\n" +
+";; REPL on the right.\n",
+    },
+    {
       name: "DOM manipulation",
       code:
 "#lang racket\n" +
