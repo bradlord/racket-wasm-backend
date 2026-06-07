@@ -5,6 +5,9 @@
 # Collected build outputs.
 /dist/
 
+# Transient build log.
+/build.log
+
 # Editor / OS noise.
 *.sw?
 .DS_Store
