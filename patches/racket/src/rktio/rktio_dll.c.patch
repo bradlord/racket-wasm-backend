@@ -1,0 +1,111 @@
+diff --git a/racket/src/rktio/rktio_dll.c b/racket/src/rktio/rktio_dll.c
+index 0d0b53efb7..e4d0043fc2 100644
+--- a/racket/src/rktio/rktio_dll.c
++++ b/racket/src/rktio/rktio_dll.c
+@@ -27,6 +27,16 @@ static dll_close_proc FreeLibraryHook;
+ static dll_find_object_proc GetProcAddressHook;
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++/* Emscripten has no dlopen/dlsym in the static-link configuration the
++   WASM build uses. cs/c/boot.c installs hooks here so ffi-lib /
++   get-ffi-obj resolve through Chez's static foreign-symbol table
++   (see Sforeign_lookup in ChezScheme/c/foreign.c). */
++static dll_open_proc EmDllOpenHook;
++static dll_find_object_proc EmDllFindHook;
++static dll_close_proc EmDllCloseHook;
++#endif
++
+ struct rktio_dll_t {
+   void *handle;
+   int refcount;
+@@ -77,13 +87,28 @@ rktio_dll_t *rktio_dll_open(rktio_t *rktio, rktio_const_string_t name, rktio_boo
+   }
+ 
+ #ifdef RKTIO_SYSTEM_UNIX
+-# if defined(__CYGWIN32__) || defined(__ANDROID__)
++# ifdef __EMSCRIPTEN__
++  /* Static-linked WASM build: route through the hook installed by
++     boot.c, which looks names up in Chez's foreign-symbol table.
++     Any name (including NULL for "the executable") resolves to a
++     sentinel handle; symbol lookup is name-only and ignores the
++     handle. Without the hook, ffi-lib silently fails as it did
++     before this shim was added. */
++  if (EmDllOpenHook) {
++    handle = EmDllOpenHook(name, as_global);
++    null_ok = 1;
++  } else {
++    handle = NULL;
++  }
++# else
++#  if defined(__CYGWIN32__) || defined(__ANDROID__)
+   if (!name) { handle = RTLD_DEFAULT; null_ok = 1; } else
+-# endif
++#  endif
+     handle = dlopen(name, RTLD_NOW | (as_global ? RTLD_GLOBAL : RTLD_LOCAL));
+ 
+   if (!handle && !null_ok)
+     get_dl_error(rktio);
++# endif
+ #endif
+   
+ #ifdef RKTIO_SYSTEM_WINDOWS
+@@ -301,9 +326,24 @@ void *rktio_dll_find_object(rktio_t *rktio, rktio_dll_t *dll, rktio_const_string
+     return obj->address;
+ 
+ #ifdef RKTIO_SYSTEM_UNIX
++# ifdef __EMSCRIPTEN__
++  /* See the comment in rktio_dll_open. The hook ignores dll->handle
++     and looks `name` up in the Chez foreign-symbol table. NULL
++     return means symbol not registered; caller treats that as
++     "not in this library". */
++  if (EmDllFindHook)
++    address = EmDllFindHook(dll->handle, name);
++  else
++    address = NULL;
++  if (!address) {
++    get_dl_error(rktio);
++    return NULL;
++  }
++  return address;
++# else
+   address = dlsym(dll->handle, name);
+ 
+-# ifdef __ANDROID__
++#  ifdef __ANDROID__
+   if (address && (dll->handle == RTLD_DEFAULT)) {
+     /* Compensate for a bug in dlsym() that gets the address wrong by
+        an offset (incorrect use of `link_bias'?): */
+@@ -314,8 +354,8 @@ void *rktio_dll_find_object(rktio_t *rktio, rktio_dll_t *dll, rktio_const_string
+     }
+     address = (char *)address + adjustment;
+   }
+-# endif
+-  
++#  endif
++
+   if (!address && dll->search_exe) {
+     /* Try every handle in the table of opened libraries. */
+     for (dll = rktio->all_dlls; dll; dll = dll->all_next) {
+@@ -328,7 +368,8 @@ void *rktio_dll_find_object(rktio_t *rktio, rktio_dll_t *dll, rktio_const_string
+     get_dl_error(rktio);
+     return NULL;
+   }
+-#endif
++# endif /* __EMSCRIPTEN__ */
++#endif /* RKTIO_SYSTEM_UNIX */
+   
+ #ifdef RKTIO_SYSTEM_WINDOWS
+   if (dll->handle) {
+@@ -435,6 +476,11 @@ void rktio_set_dll_procs(dll_open_proc dll_open,
+   GetProcAddressHook = dll_find_object;
+   FreeLibraryHook = dll_close;
+ #endif
++#ifdef __EMSCRIPTEN__
++  EmDllOpenHook = dll_open;
++  EmDllFindHook = dll_find_object;
++  EmDllCloseHook = dll_close;
++#endif
+ }
+ 
+ #ifdef RKTIO_SYSTEM_WINDOWS

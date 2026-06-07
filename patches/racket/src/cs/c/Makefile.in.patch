@@ -1,0 +1,13 @@
+diff --git a/racket/src/cs/c/Makefile.in b/racket/src/cs/c/Makefile.in
+index bcc8a029af..a227276a94 100644
+--- a/racket/src/cs/c/Makefile.in
++++ b/racket/src/cs/c/Makefile.in
+@@ -113,6 +113,8 @@ INSTALL_LIBS_ENABLE = @INSTALL_LIBS_ENABLE@
+ 
+ # Whether building for Mac OS ("t" or "f")
+ OSX=@OSX@
++# Whether building for WebAssembly via Emscripten ("t" or "f")
++EMSCRIPTEN=@EMSCRIPTEN@
+ # Link executable to framework ("fw") or everything in the
+ # executable ("static")
+ MACLIBRKT_LINK_MODE = @MACLIBRKT_LINK_MODE@

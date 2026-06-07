@@ -1,0 +1,11 @@
+diff --git a/racket/src/rktio/.gitignore b/racket/src/rktio/.gitignore
+index d1153d751d..06fa0c9c3e 100644
+--- a/racket/src/rktio/.gitignore
++++ b/racket/src/rktio/.gitignore
+@@ -3,3 +3,6 @@
+ /demo.obj
+ /demo.pdb
+ /test1
++
++# WASM port (see ../../../build-wasm.md): rktio cross-built for Emscripten.
++/build-em*/

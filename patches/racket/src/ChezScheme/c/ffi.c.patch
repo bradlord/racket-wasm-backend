@@ -1,0 +1,146 @@
+diff --git a/racket/src/ChezScheme/c/ffi.c b/racket/src/ChezScheme/c/ffi.c
+index c2aa7e79d0..39030595ce 100644
+--- a/racket/src/ChezScheme/c/ffi.c
++++ b/racket/src/ChezScheme/c/ffi.c
+@@ -408,6 +408,21 @@ void S_ffi_call(ptr types, ptr proc, ptr *arena) {
+   for (i = 0; i < n_args; i++) {
+     ptr type = Svector_ref(types, i + ARG_TYPE_START_INDEX);
+     if (Sfixnump(type)) {
++      /* Pad arena to 8 bytes for 8-byte argument types, mirroring the
++         compile-time layout in do-types/arena (s/pb.ss). On 32-bit pb
++         the per-slot ptr advance leaves arena 4-byte-aligned after an
++         int/ptr arg; libffi's wasm port reads doubles via HEAPF64 and
++         silently corrupts them when not 8-aligned. No-op on 64-bit pb. */
++      if ((uptr)TO_PTR(arena) & 7) {
++        switch (UNFIX(type)) {
++        case ffi_typerep_double:
++        case ffi_typerep_float:
++        case ffi_typerep_uint64:
++        case ffi_typerep_sint64:
++          arena++;
++          break;
++        }
++      }
+       args[i] = arena;
+       /* adjust arguments that are not ptr-sized or not encoded as doubles/iptrs */
+       switch(UNFIX(type)) {
+@@ -573,26 +588,41 @@ void S_ffi_call(ptr types, ptr proc, ptr *arena) {
+ ptr S_ffi_closure(ptr types, ptr proc) {
+   ffi_cif *cif = make_cif(types);
+   ffi_closure *closure;
+-  ptr vec;
++  ptr vec, code_obj, closure_obj;
+   void *code;
+ 
+   closure = ffi_closure_alloc(sizeof(ffi_closure), &code);
+ 
++#ifdef __EMSCRIPTEN__
++  /* On WebAssembly, libffi's `code` is a function table index (a small
++     integer like 5, 12, 100), not a memory address. Wrap the integer
++     in a Scheme box so the encoding is self-describing on the read
++     side -- `foreign-callable-entry-point` (prims.ss) and
++     `find_callable_code_object` below dispatch on `box?` / `Sboxp`
++     rather than relying on a machine-type gate to know we're under
++     Emscripten. Bare aligned-pointer-as-fixnum representation is
++     still used on every other pb host. */
++  code_obj = Sbox(Sunsigned((uptr)code));
++  closure_obj = Sbox(Sunsigned((uptr)closure));
++#else
+   if (!Sfixnump(TO_PTR(closure)) || !Sfixnump(TO_PTR(code)))
+     S_error("foreign-callable", "libffi code allocation not sufficiently aligned");
++  code_obj = TO_PTR(code);
++  closure_obj = TO_PTR(closure);
++#endif
+ 
+   vec = S_vector_in(get_thread_context(), space_immobile_impure, 0, 3);
+   S_immobilize_object(vec);
+ 
+   Svector_set(vec, 0, proc);
+   Svector_set(vec, 1, types);
+-  Svector_set(vec, 2, TO_PTR(code));
+-  
++  Svector_set(vec, 2, code_obj);
++
+   ffi_prep_closure_loc(closure, cif, closure_callback, TO_VOIDP(vec), code);
+ 
+   tc_mutex_acquire();
+-  S_G.foreign_callables = Scons(S_weak_cons(vec, Scons(TO_PTR(closure),
+-                                                       TO_PTR(code))),
++  S_G.foreign_callables = Scons(S_weak_cons(vec, Scons(closure_obj,
++                                                       code_obj)),
+                                 S_G.foreign_callables);
+   check_prune_callables();
+   tc_mutex_release();
+@@ -635,6 +665,19 @@ static void closure_callback(UNUSED ffi_cif *cif, void *ret, void **args, void *
+   for (i = 0; i < n_args; i++) {
+     type = Svector_ref(types, i + ARG_TYPE_START_INDEX);
+     if (Sfixnump(type)) {
++      /* Match the compile-time alignment from do-types/arena: 8-byte
++         args (double, float, int64) start at 8-aligned offsets. See
++         the S_ffi_call note above. */
++      if ((uptr)TO_PTR(arena) & 7) {
++        switch (UNFIX(type)) {
++        case ffi_typerep_double:
++        case ffi_typerep_float:
++        case ffi_typerep_uint64:
++        case ffi_typerep_sint64:
++          arena++;
++          break;
++        }
++      }
+       switch(UNFIX(type)) {
+       case ffi_typerep_uint8:
+         *arena = (ptr)*(U8 *)args[i];
+@@ -799,6 +842,11 @@ static void closure_callback(UNUSED ffi_cif *cif, void *ret, void **args, void *
+ 
+ ptr Sforeign_callable_code_object(void *addr) {
+   ptr p, result = Sfalse;
++#ifdef __EMSCRIPTEN__
++  /* `code` was stored via Sunsigned (see S_ffi_closure), so compare
++     by extracting the integer value, not by pointer equality. */
++  uptr addr_uval = (uptr)addr;
++#endif
+ 
+   tc_mutex_acquire();
+ 
+@@ -806,10 +854,22 @@ ptr Sforeign_callable_code_object(void *addr) {
+ 
+   while (p != Snil) {
+     ptr a = Scar(p);
++#ifdef __EMSCRIPTEN__
++    /* Stored value is a box wrapping the integer table index; see the
++       Sbox call in S_ffi_closure. */
++    ptr stored = Scdr(Scdr(a));
++    if (Sboxp(stored)) stored = Sunbox(stored);
++    if ((Sfixnump(stored) || Sbignump(stored))
++        && Sunsigned_value(stored) == addr_uval) {
++      result = Scar(a);
++      break;
++    }
++#else
+     if (Scdr(Scdr(a)) == TO_PTR(addr)) {
+       result = Scar(a);
+       break;
+     }
++#endif
+     p = Scdr(p);
+   }
+ 
+@@ -829,7 +889,17 @@ void check_prune_callables() {
+     while (p != Snil) {
+       ptr a = Scar(p);
+       if (Scar(a) == Sbwp_object) {
++#ifdef __EMSCRIPTEN__
++        /* Stored value is a box wrapping the integer closure pointer;
++           see the Sbox call in S_ffi_closure. */
++        {
++          ptr stored = Scar(Scdr(a));
++          if (Sboxp(stored)) stored = Sunbox(stored);
++          ffi_closure_free((void *)(uptr)Sunsigned_value(stored));
++        }
++#else
+         ffi_closure_free(TO_VOIDP(Scar(Scdr(a))));
++#endif
+         p = Scdr(p);
+         if (prev == (ptr)0)
+           S_G.foreign_callables = p;

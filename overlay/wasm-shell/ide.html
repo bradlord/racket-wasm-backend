@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Racket WASM IDE</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #2f3b4f;
+      --text: #e6edf3;
+      --muted: #9fb0c3;
+      --accent: #f59e0b;
+      --accent-2: #38bdf8;
+      --danger: #f87171;
+      --ok: #34d399;
+      --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      --sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), transparent 34%),
+        radial-gradient(circle at top right, rgba(245, 158, 11, 0.18), transparent 28%),
+        linear-gradient(180deg, #0b1220 0%, var(--bg) 48%, #081018 100%);
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
+    }
+    .page {
+      width: min(1280px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 24px 0 32px;
+    }
+    .hero { display: grid; gap: 10px; margin-bottom: 20px; }
+    .eyebrow {
+      margin: 0; color: var(--accent); font-size: 12px; font-weight: 700;
+      letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--sans);
+    }
+    .hero h1 {
+      margin: 0; font-size: clamp(32px, 5vw, 56px);
+      line-height: 0.96; letter-spacing: -0.04em;
+    }
+    .hero p {
+      margin: 0; color: var(--muted); font-size: 16px; line-height: 1.5;
+      font-family: var(--sans);
+    }
+    .grid {
+      display: grid; gap: 16px; align-items: stretch;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    .panel {
+      background: rgba(22, 27, 34, 0.88);
+      border: 1px solid rgba(159, 176, 195, 0.16);
+      border-radius: 20px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      min-height: 72vh;
+    }
+    .panel-header {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(159, 176, 195, 0.12);
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      font-family: var(--sans);
+    }
+    .panel-header h2 { margin: 0; font-size: 16px; }
+    .panel-header .sub { color: var(--muted); font-size: 13px; }
+    .toolbar-group { display: flex; gap: 8px; align-items: center; min-width: 0; }
+    .button {
+      appearance: none;
+      border: 1px solid rgba(159, 176, 195, 0.18);
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(56, 189, 248, 0.18), rgba(56, 189, 248, 0.08));
+      color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
+      font-family: var(--sans);
+      padding: 8px 14px;
+      white-space: nowrap; flex: none;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+    .button:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(56, 189, 248, 0.45); }
+    .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .button--primary {
+      background: linear-gradient(180deg, rgba(245, 158, 11, 0.45), rgba(245, 158, 11, 0.2));
+      border-color: rgba(245, 158, 11, 0.55);
+    }
+    .button--danger {
+      background: linear-gradient(180deg, rgba(248, 113, 113, 0.32), rgba(248, 113, 113, 0.12));
+      border-color: rgba(248, 113, 113, 0.55);
+    }
+    .button--xl { font-size: 16px; padding: 12px 24px; }
+    .select {
+      appearance: none;
+      border: 1px solid rgba(159, 176, 195, 0.18);
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.10);
+      color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
+      font-family: var(--sans); font-size: 13px;
+      padding: 8px 30px 8px 14px;
+      flex: 1 1 auto; min-width: 7ch; max-width: 26ch;
+      text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+      background-image:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%239fb0c3' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      transition: border-color 160ms ease;
+    }
+    .select:hover { border-color: rgba(56, 189, 248, 0.45); }
+    .select:focus { outline: none; border-color: rgba(56, 189, 248, 0.55); }
+    .select option { background: var(--panel); color: var(--text); }
+    .chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 10px; border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04); color: var(--muted); font-size: 12px;
+      font-family: var(--sans);
+    }
+    .chip[data-state="ok"]    { color: var(--ok); }
+    .chip[data-state="error"] { color: var(--danger); }
+    .chip[data-state="run"]   { color: var(--accent); }
+
+    #editor, #output, #input {
+      width: 100%;
+      border: none;
+      background: rgba(7, 14, 23, 0.85);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      line-height: 1.5;
+      outline: none;
+      tab-size: 2;
+    }
+    #editor {
+      padding: 14px 16px; resize: none; min-height: 360px;
+    }
+    #output {
+      margin: 0;
+      padding: 14px 16px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: linear-gradient(180deg, rgba(4, 10, 18, 0.9), rgba(7, 14, 23, 0.96));
+    }
+
+    /* Interactions: inert until the program is run. While idle, show a
+       centered Run card; once running, show the output pane (row 2) and
+       the input row (row 3). The `.idle` class on the section toggles it. */
+    .repl-idle {
+      display: none;
+      place-items: center; text-align: center; padding: 28px;
+      background: linear-gradient(180deg, rgba(4, 10, 18, 0.9), rgba(7, 14, 23, 0.96));
+      font-family: var(--sans);
+    }
+    .repl-idle-card { max-width: 44ch; display: grid; gap: 18px; justify-items: center; }
+    .repl-idle-card p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.55; }
+    .interactions.idle .repl-idle { display: grid; }
+    .interactions.idle #output,
+    .interactions.idle .input-row { display: none; }
+
+    .input-row {
+      display: grid; gap: 10px;
+      padding: 12px 14px 14px;
+      border-top: 1px solid rgba(159, 176, 195, 0.12);
+      background: rgba(13, 17, 23, 0.6);
+    }
+    #input {
+      min-height: 76px; resize: vertical;
+      border-radius: 12px;
+      border: 1px solid rgba(159, 176, 195, 0.18);
+      background: rgba(7, 14, 23, 0.85);
+      padding: 10px 12px;
+    }
+    #input:focus { border-color: rgba(56, 189, 248, 0.55); }
+    #input:disabled { opacity: 0.6; }
+    /* When the running process is blocked on stdin, highlight + ring the
+       input box; while it's busy computing, dim it. Driven by the
+       io-state flag the runtime sets (wasm_shell_io.c / shell-tty.js). */
+    .input-row.waiting #input {
+      border-color: rgba(245, 158, 11, 0.7);
+      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+    }
+    .input-row.busy #input { opacity: 0.65; }
+    .input-state { font-weight: 600; }
+    .input-row.waiting .input-state { color: var(--accent); }
+    .input-row.busy   .input-state { color: var(--muted); }
+    .input-actions {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      font-family: var(--sans); font-size: 13px; color: var(--muted);
+    }
+    .panel-footer {
+      padding: 10px 14px;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border-top: 1px solid rgba(159, 176, 195, 0.12);
+      background: rgba(13, 17, 23, 0.6);
+      font-family: var(--sans); font-size: 13px; color: var(--muted);
+    }
+    kbd {
+      font-family: var(--mono); font-size: 12px;
+      padding: 2px 6px; border-radius: 4px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">Racket CS on WASM</p>
+      <h1>Racket WASM IDE</h1>
+      <p>
+        Edit a program in <strong>Definitions</strong> on the left, then click
+        <em>Run</em> (or <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd>). The
+        <strong>Interactions</strong> pane on the right starts a fresh Racket
+        process, runs your definitions, and drops into a REPL <em>in the
+        program's namespace</em> — so every top-level definition is in scope,
+        just like DrRacket. The same input box feeds the program's stdin.
+      </p>
+    </section>
+
+    <div class="grid">
+      <!-- Definitions -->
+      <section class="panel" aria-label="Definitions">
+        <header class="panel-header">
+          <div>
+            <h2>Definitions</h2>
+            <div class="sub">Saved to <code>/tmp/main.rkt</code>; run with a REPL in its namespace.</div>
+          </div>
+          <div class="toolbar-group">
+            <select class="select" id="example" aria-label="Load an example">
+              <!-- options injected by ide.js (single source of truth) -->
+            </select>
+            <button class="button button--primary" id="run" type="button">▶ Run</button>
+            <button class="button button--danger" id="stop" type="button" disabled>Stop</button>
+          </div>
+        </header>
+        <textarea id="editor" spellcheck="false" autocapitalize="off"
+          autocorrect="off" autocomplete="off"></textarea>
+        <footer class="panel-footer">
+          <span><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>
+        </footer>
+      </section>
+
+      <!-- Interactions -->
+      <section class="panel interactions idle" id="interactions" aria-label="Interactions">
+        <header class="panel-header">
+          <div>
+            <h2>Interactions</h2>
+            <div class="sub">output · the program's stdin · a REPL in its namespace</div>
+          </div>
+          <span class="chip" id="status" data-state="idle">Idle</span>
+        </header>
+
+        <div class="repl-idle">
+          <div class="repl-idle-card">
+            <p>The REPL is inactive. Run the definitions to start a Racket
+               process; this pane becomes its interactions window — output, the
+               program's stdin, and a prompt in the program's namespace.</p>
+            <button class="button button--primary button--xl" id="run-idle" type="button">▶ Run definitions</button>
+          </div>
+        </div>
+
+        <pre id="output" tabindex="0" aria-label="Program output and REPL"></pre>
+
+        <div class="input-row">
+          <textarea id="input" spellcheck="false" autocapitalize="off"
+            autocorrect="off" autocomplete="off"
+            placeholder="(expr) — Cmd/Ctrl+Enter to evaluate · also feeds the program's stdin"
+            disabled></textarea>
+          <div class="input-actions">
+            <button class="button button--primary" id="evaluate" type="button" disabled>Evaluate</button>
+            <span id="input-state" class="input-state"></span>
+            <span><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> evaluates · <kbd>Enter</kbd> for a newline</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script defer src="./ide.js"></script>
+</body>
+</html>

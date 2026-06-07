@@ -1,0 +1,257 @@
+diff --git a/main.zuo b/main.zuo
+index 84c516d6b0..b1b5eeedd0 100644
+--- a/main.zuo
++++ b/main.zuo
+@@ -195,12 +195,20 @@
+   (define (build-base subdir token [options (hash)])
+     (define also? (hash-ref options 'also? #f))
+     (define prefix (hash-ref options 'prefix #f))
++    ;; WASM/Emscripten one-shot: inject the wasm cross-configure flags,
++    ;; default the configure wrapper to `emconfigure`, force cross mode,
++    ;; and finish at the `wasm` emcc-link target instead of installing.
++    (define wasm? (hash-ref options 'wasm? #f))
+     (define msvc? (eq? 'windows (hash-ref (runtime-env) 'toolchain-type)))
+     (define targets
+       (configured-targets-at (hash
+                               'configure (if (eq? 'windows (hash-ref (runtime-env) 'toolchain-type))
+                                              (at-source "racket/src" subdir "winfig.bat")
+                                              (at-source "racket/src" subdir "configure"))
++                              'configure-wrapper (let ([w (lookup 'CONFIGURE_WRAPPER)])
++                                                   (if (and wasm? (equal? w ""))
++                                                       "emconfigure"
++                                                       w))
+                               'inputs (list (at-source "racket/src" subdir "Makefile.in"))
+                               'outputs (list (at-source "racket/src/build" subdir "Makefile"))
+                               'configure-args (append
+@@ -216,6 +224,12 @@
+                                                (if (hash-ref options 'server-compile-machine? #f)
+                                                    '("--enable-crossany")
+                                                    '())
++                                               ;; WASM target: pb tpb32l cross to Emscripten
++                                               (if wasm?
++                                                   '("--enable-pb"
++                                                     "--enable-mach=tpb32l"
++                                                     "--host=wasm32-unknown-emscripten")
++                                                   '())
+                                                (shell->strings (lookup 'DISABLE_STATIC_LIBS))
+                                                (cond
+                                                  [msvc?
+@@ -249,7 +263,22 @@
+                                       'PLT_SETUP_OPTIONS (build-shell
+                                                           (if also? "-D" "")
+                                                           (setup-options)
+-                                                          (get-recompile-cache-options))
++                                                          (get-recompile-cache-options)
++                                                          ;; The wasm cross `raco setup` builds an
++                                                          ;; image, not a validated package release;
++                                                          ;; skip the package-dependency check. It
++                                                          ;; otherwise fails fatally on the binary
++                                                          ;; consume: each stripped `info.rkt` drops
++                                                          ;; `build-deps`, but the `build/zo` `.dep`
++                                                          ;; from the source bootstrap still records
++                                                          ;; build-only imports (a `(module+ test
++                                                          ;; (require rackunit))` submodule), so the
++                                                          ;; check reports dozens of "undeclared
++                                                          ;; dependency ... for build: rackunit-lib"
++                                                          ;; and sets a non-zero exit. See
++                                                          ;; build-wasm.md "Binary-only package
++                                                          ;; preload".
++                                                          (if wasm? "--no-pkg-deps" ""))
+                                       'DESTDIR (if prefix
+                                                    (lookup 'DESTDIR "")
+                                                    "")
+@@ -260,7 +289,16 @@
+                                       ;; `DESTDIR` fixes later:
+                                       'SKIP_DESTDIR_FIX "skip"
+                                       ;; Propagate `MAKE`
+-                                      'MAKE (lookup 'MAKE))
++                                      'MAKE (lookup 'MAKE)
++                                      ;; Propagate the configure wrapper so the
++                                      ;; rktio configure (run from cs/c/build.zuo
++                                      ;; via setup-rktio) is wrapped too
++                                      'CONFIGURE_WRAPPER (lookup 'CONFIGURE_WRAPPER)
++                                      ;; WASM native-library dep selection
++                                      ;; (consumed by cs/c/build.zuo's
++                                      ;; `wasm-deps` target). libffi is always
++                                      ;; built; this adds more (e.g. "draw").
++                                      'WASM_DEPS (lookup 'WASM_DEPS ""))
+                                      ;; Propagate `RACKET` and similar if specified
+                                      'RACKET (get-provided-racket)
+                                      'BOOTFILE_RACKET (lookup 'BOOTFILE_RACKET)
+@@ -269,17 +307,38 @@
+                                                    (if (equal? s "")
+                                                        ""
+                                                        (build-path s "ChezScheme")))
+-                                     'CROSS_MODE (if (equal? (lookup 'CS_CROSS_SUFFIX) "-cross")
++                                     'CROSS_MODE (if (or wasm?
++                                                         (equal? (lookup 'CS_CROSS_SUFFIX) "-cross"))
+                                                      "cross"
+                                                      "")))))
++    ;; For WASM, build the native library deps (libffi always; more via
++    ;; WASM_DEPS) before the kernel: the Chez kernel's ffi.c needs
++    ;; libffi's headers, and the `wasm` link consumes the deps' symbol /
++    ;; link-flag artifacts.
++    (when wasm?
++      (build (find-target "wasm-deps" targets) #f (build-options)))
+     (build (find-target "build" targets)
+            #f
+            (build-options))
+     (when (eq? 'windows (system-type))
+       (remove-early-load-dlls))
+-    (build (find-target "install-again" targets)
+-           #f
+-           (build-options)))
++    ;; For a WASM build, run the cross `raco setup` (compiling collections
++    ;; to compiled/<m>) and then the emcc link, rather than the native
++    ;; install step (there is no `racketcs` to install). `wasm-setup` runs
++    ;; before `wasm` so the target .zo are present in `collects` when the
++    ;; link preloads them.
++    (cond
++      [wasm?
++       ;; Install PKGS into share/pkgs (sources) before the cross setup,
++       ;; so `wasm-setup`'s `raco setup` compiles them for tpb32l too.
++       (build/dep (find-target build-config.rktd the-targets) token)
++       ;; Run raco setup so raco pkg commands are available
++       (build (find-target "wasm-setup" targets) #f (build-options))
++       (install-base-pkgs token (find-racket vm) #t)
++       (build (find-target "wasm-setup" targets) #f (build-options))
++       (build (find-target "wasm" targets) #f (build-options))]
++      [else
++       (build (find-target "install-again" targets) #f (build-options))]))
+ 
+   (define (remove-early-load-dlls)
+     ;; On Windows, remove DLLs that might be loaded by `raco` on startup,
+@@ -419,22 +478,56 @@
+     (define jobs (get-jobs))
+ 
+     (unless also?
+-      (pkgs-catalog token vars)
+-
+-      (raco vars "pkg" "update"
+-            "--all" "--auto" "--no-setup" "--scope" "installation"
+-            (shell->strings (lookup 'PKG_UPDATE_OPTIONS)))
+-      (raco vars "pkg" "install"
+-            (if jobs (list "-j" (~a jobs)) '())
+-            "--no-setup" "--pkgs" "--skip-installed" "--scope" "installation"
+-            "--deps" "search-auto"
+-            required-pkgs
+-            (pkgs-to-install))
++      (install-base-pkgs token vars)
+       (setup vm "--only-foreign-libs"))
+ 
+     (setup vm (shell->strings setup-extra-args)
+            (if also? "-D" '())))
+ 
++  ;; Install `PKGS` (plus required packages and their deps) into the
++  ;; installation's `share/pkgs` with `--no-setup` (a later `raco setup`
++  ;; compiles them). Shared by `in-place` and the wasm flow, where the
++  ;; cross `wasm-setup` does the compiling for tpb32l. Normally installs
++  ;; sources; on the wasm flow, if a prebuilt binary-only catalog exists
++  ;; (`wasm? = #t`, see `wasm-binary-pkgs`), clean-installs the stripped
++  ;; .zo-only packages from it instead.
++  (define (install-base-pkgs token vars [wasm? #f])
++    (define jobs (get-jobs))
++    (define bin-catalog (at-source "racket/src/.wasm-pkgs-cache/catalog"))
++    (cond
++      ;; WASM build with a prebuilt binary-only catalog present (from
++      ;; `make wasm-binary-pkgs`): clean-install PKGS from it as the sole
++      ;; catalog. The bootstrap source install left the full (source +
++      ;; build-only) tree under share/pkgs with its pkg db; clear that
++      ;; first so build-only packages don't linger and the binary versions
++      ;; install fresh (NOT `--skip-installed`). Each binary package has
++      ;; build-deps stripped from its info.rkt, so `--deps search-auto`
++      ;; walks only runtime deps -- build-deps pruned, image ships .zo-only.
++      ;; See build-wasm.md "Binary-only package preload".
++      [(and wasm? (directory-exists? bin-catalog))
++       (alert "wasm: installing packages from binary-only catalog")
++       (rm* (at-source "racket/share/pkgs"))           ; takes pkgs.rktd db
++       (rm* (at-source "racket/share/links.rktd"))     ; rebuilt by install
++       (rm* (at-source "racket/share/info-cache.rktd")) ; stale cache
++       (raco vars "pkg" "install"
++             (if jobs (list "-j" (~a jobs)) '())
++             "--no-setup" "--pkgs" "--scope" "installation"
++             "--catalog" bin-catalog
++             "--deps" "search-auto"
++             required-pkgs
++             (pkgs-to-install))]
++      [else
++       (pkgs-catalog token vars)
++       (raco vars "pkg" "update"
++             "--all" "--auto" "--no-setup" "--scope" "installation"
++             (shell->strings (lookup 'PKG_UPDATE_OPTIONS)))
++       (raco vars "pkg" "install"
++             (if jobs (list "-j" (~a jobs)) '())
++             "--no-setup" "--pkgs" "--skip-installed" "--scope" "installation"
++             "--deps" "search-auto"
++             required-pkgs
++             (pkgs-to-install))]))
++
+   (define (pkgs-catalog token vars)
+     (racket vars
+             (list "-U" "-G" (path-only build-config.rktd)
+@@ -840,6 +933,55 @@
+     (build-one "racket/src/expander/main.zuo" "expander")
+     (build-one "racket/src/cs/main.zuo" "schemified"))
+ 
++  ;; ------------------------------------------------------------
++  ;; WebAssembly (Emscripten) build -- configure + cross-build the CS
++  ;; runtime for tpb32l and emcc-link it, all through the stock build
++  ;; system (the `wasm` target in racket/src/cs/c/build.zuo). See
++  ;; build-wasm.md. Pass SCHEME=<native-threaded-host-scheme> and
++  ;; RACKET=<host-racket>, and make sure the emsdk is sourced. The native
++  ;; library deps (libffi + any WASM_DEPS) are built automatically by the
++  ;; `wasm-deps` target in racket/src/cs/c/build.zuo.
++
++  (define (wasm token)
++    (build-base "cs/c" token (hash 'wasm? #t)))
++
++  ;; Standalone step (run manually after a bootstrap `make wasm`): strip the
++  ;; already-cross-compiled in-tree packages into a cached binary-only
++  ;; catalog under racket/src/.wasm-pkgs-cache, which the next `make wasm`
++  ;; consumes (see `install-base-pkgs`). Not a dependency of `wasm`. See
++  ;; build-wasm.md "Binary-only package preload".
++  ;;
++  ;; The script must run in the **cross-compiler** context, because
++  ;; `pkg/strip`'s `fixup-zo` reads each tpb32l ".zo" (compiled fasl is
++  ;; machine-specific, unreadable by a plain host racket). Supply the same
++  ;; cross flags `raco setup` uses: `--cross-compiler tpb32l <cs/c-build>`
++  ;; plus `-MCR <cs/c-build>/compiled:` and `-G <build/config>`. Use a bare
++  ;; vars hash (just the exe) so `find-racket`'s `-X racket/collects` /
++  ;; `-G racket/etc` don't shadow the host racket's own collects, which is
++  ;; where pkg/strip et al. resolve from.
++  (define (wasm-binary-pkgs token)
++    (define exe (hash-ref (find-racket vm) 'racket))
++    (define cross-build (at-source "racket/src/build/cs/c"))
++    ;; compiled-file-roots, searched in order:
++    ;;   1. <cross-build>/compiled -- the cross compiler's own modules
++    ;;      (cross-serve etc.), needed by `--cross-compiler`.
++    ;;   2. build/zo -- the machine-INDEPENDENT cross output (`-MCR`,
++    ;;      get-mcr-args). `generate-stripped-directory` loads each
++    ;;      package's `info.rkt` via `get-info/full`, which EXECUTES it on
++    ;;      the host; the per-package `compiled/info_rkt.zo` under
++    ;;      `share/pkgs` is tpb32l (target) and unloadable on the host
++    ;;      (`fasl-read: incompatible ... 'tpb32l`). build/zo holds the
++    ;;      host-loadable machine-independent copy, so it MUST precede the
++    ;;      trailing "" ('same = `share/pkgs/.../compiled`, tpb32l) below.
++    ;;      (`fixup-zo` reads the tpb32l package `.zo` by direct path, not
++    ;;      via module resolution, so the shipped bytecode stays tpb32l.)
++    (racket (hash 'racket exe)
++            "-G" (path-only build-config.rktd)
++            "-MCR" (~a (path->complete-path (build-path cross-build "compiled")) ":"
++                       (path->complete-path (at-source "build/zo")) ":")
++            "--cross-compiler" "tpb32l" cross-build
++            (at-source "racket/src/build-wasm-binary-pkgs.rkt")))
++
+   ;; ------------------------------------------------------------
+   ;; Targets
+ 
+@@ -872,6 +1014,9 @@
+        [:target pb-stage () ,(lambda (token) (pb-manage 'stage))]
+        [:target pb-push () ,(lambda (token) (pb-manage 'push))]
+ 
++       [:target wasm () ,(lambda (token) (wasm token))]
++       [:target wasm-binary-pkgs () ,(lambda (token) (wasm-binary-pkgs token))]
++
+        [:target pkgs-catalog () ,(lambda (token) (pkgs-catalog token (find-racket vars vm)))]
+ 
+        [:target native-cs-for-cross () ,(lambda (token) (maybe-fetch 'cs) (native-for-cross "cs/c" token))]

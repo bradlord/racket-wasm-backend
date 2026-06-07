@@ -1,0 +1,83 @@
+diff --git a/racket/src/cs/c/configure.ac b/racket/src/cs/c/configure.ac
+index 018f0843c5..8a8ed2e037 100644
+--- a/racket/src/cs/c/configure.ac
++++ b/racket/src/cs/c/configure.ac
+@@ -150,6 +150,7 @@ use_flag_pthread=yes
+ use_flag_posix_pthread=no
+ 
+ OSX="f"
++EMSCRIPTEN="f"
+ SIGNED_EXE="f"
+ MINGW="f"
+ CONFIGURE_RACKET_SO_COMPILE=""
+@@ -376,6 +377,24 @@ case "$host_os" in
+     MACH_OS=qnx
+     use_flag_pthread=no
+     ;;
++  *emscripten*)
++    # WebAssembly via Emscripten. The machine type comes from
++    # `--enable-mach`/`--enable-target` (a pb variant such as tpb32l),
++    # so we only flag the target here; the final emcc link is driven by
++    # the build system's wasm target rather than the native executable
++    # embed path.
++    EMSCRIPTEN="t"
++    # The cross sizeof bisection can't run a wasm test binary; preset
++    # the pointer size (wasm32 / tpb32l are 32-bit) so AC_CHECK_SIZEOF
++    # takes its cached path instead of computing 0.
++    ac_cv_sizeof_void_p=4
++    # Emscripten needs -pthread at *compile* time (not just link) for the
++    # threaded tpb32l build: it enables atomics/bulk-memory/TLS. Mixing
++    # -pthread and non-pthread objects yields runtime "null function or
++    # function signature mismatch" crashes. Put it in CFLAGS so every
++    # translation unit (kernel, boot.o, pbchunk, main_em.o, ...) gets it.
++    CFLAGS="${CFLAGS} -pthread"
++    ;;
+   *)
+     ;;
+ esac
+@@ -760,16 +779,36 @@ if test "${enable_pb}" = "yes" ; then
+   enable_libffi=yes
+   enable_foreign=yes
+   SCHEME_LIBFFI=yes
++  # If the cross target was given explicitly as a pb machine
++  # (e.g. `--enable-target=tpb32l`), honor it instead of the
++  # host-derived `pb_machine_name`.
++  case "${enable_target}" in
++    pb* | tpb* )
++      pb_machine_name="${enable_target}"
++      ;;
++  esac
+   TARGET_MACH=${pb_machine_name}
+   if test "${CROSS_MODE}" != "cross" ; then
+     MACH=${pb_machine_name}
+   fi
+-  CONFIGURE_RACKET_SO_COMPILE="${CONFIGURE_RACKET_SO_COMPILE} PLT_CS_MACHINE_TYPE=${KERNEL_TARGET_MACH}"
+   if test "${enable_pbchunk}" != "no" ; then
+     PBCHUNK_MODE=pbchunk
+   fi
+ fi
+ 
++# A pb/tpb target compiles `(machine-type)` to a constant read from
++# PLT_CS_MACHINE_TYPE at compile time (see rumble/system.ss), so the
++# target machine name must be in the compile environment for the Racket
++# layers. This must fire whether the pb target was selected via
++# `--enable-pb` or via `--enable-mach=<tpb...>` with a cross `--host`,
++# so it is gated on the target being a pb machine rather than on
++# `enable_pb`.
++case "${KERNEL_TARGET_MACH}" in
++  *pb*)
++    CONFIGURE_RACKET_SO_COMPILE="${CONFIGURE_RACKET_SO_COMPILE} PLT_CS_MACHINE_TYPE=${KERNEL_TARGET_MACH}"
++    ;;
++esac
++
+ libffi_unavailable_message="did not find working configuration"
+ complain_if_libffi_fails=yes
+ m4_include(../ac/libffi.m4)
+@@ -928,6 +967,7 @@ AC_SUBST(KERNEL_TARGET_MACH)
+ AC_SUBST(CROSS_MODE)
+ AC_SUBST(SETUP_BOOT_MODE)
+ AC_SUBST(OSX)
++AC_SUBST(EMSCRIPTEN)
+ AC_SUBST(SIGNED_EXE)
+ AC_SUBST(MINGW)
+ AC_SUBST(Z_LIB)

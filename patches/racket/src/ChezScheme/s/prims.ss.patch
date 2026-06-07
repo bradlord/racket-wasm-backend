@@ -1,0 +1,31 @@
+diff --git a/racket/src/ChezScheme/s/prims.ss b/racket/src/ChezScheme/s/prims.ss
+index bd2322447b..c7c120f009 100644
+--- a/racket/src/ChezScheme/s/prims.ss
++++ b/racket/src/ChezScheme/s/prims.ss
+@@ -685,8 +685,24 @@
+       [(pb)
+        (unless (vector? x)
+          ($oops 'foreign-callable-entry-point "~s is not a vector" x))
+-       (bitwise-and (bitwise-arithmetic-shift-left (vector-ref x 2) (constant fixnum-offset))
+-                    (- (bitwise-arithmetic-shift-left 1 (constant ptr-bits)) 1))]
++       (let ([v (vector-ref x 2)])
++         ;; Three possible encodings, dispatched on value shape:
++         ;;  - box wrapping an integer: the WebAssembly tag from
++         ;;    S_ffi_closure under __EMSCRIPTEN__. The wrapped value
++         ;;    is the raw function-table index call_indirect uses.
++         ;;  - fixnum: aligned pointer packed in the fixnum bits on
++         ;;    non-WASM pb hosts; recover by shifting left.
++         ;;  - bignum / other integer: address too large for fixnum
++         ;;    packing on non-WASM pb hosts; return as-is.
++         ;; Dispatching on shape rather than machine-type-name keeps
++         ;; the Scheme side correct for both Emscripten and any
++         ;; hypothetical non-Emscripten tpb32l configuration.
++         (cond
++           [(box? v) (unbox v)]
++           [(fixnum? v)
++            (bitwise-and (bitwise-arithmetic-shift-left v (constant fixnum-offset))
++                         (- (bitwise-arithmetic-shift-left 1 (constant ptr-bits)) 1))]
++           [else v]))]
+       [else
+        (unless ($code? x)
+          ($oops 'foreign-callable-entry-point "~s is not a code object" x))

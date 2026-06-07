@@ -1,0 +1,101 @@
+diff --git a/racket/src/ChezScheme/s/pb.ss b/racket/src/ChezScheme/s/pb.ss
+index 3a4ea2a747..5d77ab87eb 100644
+--- a/racket/src/ChezScheme/s/pb.ss
++++ b/racket/src/ChezScheme/s/pb.ss
+@@ -1703,6 +1703,16 @@
+                   (set! ,lo ,(%inline call-arena-out (immediate ,off)))
+                   (set! ,hi ,(%inline call-arena-out (immediate ,(fx+ off 4))))))))
+ 
++          ;; Align off to the next 8-byte boundary. Doubles, single-
++          ;; floats (stored as doubles in the arena), and 64-bit ints
++          ;; on 32-bit pb all occupy an 8-byte slot. On 32-bit pb,
++          ;; after a 4-byte int/ptr arg, off is 4-byte but not 8-byte
++          ;; aligned -- and libffi's wasm port reads doubles via
++          ;; HEAPF64 (which indexes by 8), so misaligned doubles
++          ;; silently corrupt to ~0. Padding to 8 here matches the
++          ;; runtime walk in S_ffi_call (c/ffi.c) and is a no-op on
++          ;; 64-bit pb (off is always 8-aligned to start).
++          (define (align-8 off) (fxlogand (fx+ off 7) -8))
+           (lambda (types in? unboxed-fp?)
+             (let loop ([types types] [locs '()] [encs '()] [off 0])
+               (if (null? types)
+@@ -1711,29 +1721,31 @@
+                         [types (cdr types)])
+                     (nanopass-case (Ltype Type) type
+                       [(fp-double-float)
+-                       (loop types
+-                             (cons (if in?
+-                                       (if unboxed-fp?
+-                                           (load-double/unboxed off)
+-                                           (load-double/boxed off))
+-                                       (if unboxed-fp?
+-                                           (save-double/unboxed off)
+-                                           (save-double/boxed off)))
+-                                   locs)
+-                             (cons (constant ffi-typerep-double) encs)
+-                             (fx+ off 8))]
++                       (let ([off (align-8 off)])
++                         (loop types
++                               (cons (if in?
++                                         (if unboxed-fp?
++                                             (load-double/unboxed off)
++                                             (load-double/boxed off))
++                                         (if unboxed-fp?
++                                             (save-double/unboxed off)
++                                             (save-double/boxed off)))
++                                     locs)
++                               (cons (constant ffi-typerep-double) encs)
++                               (fx+ off 8)))]
+                       [(fp-single-float)
+-                       (loop types
+-                             (cons (if in?
+-                                       (if unboxed-fp?
+-                                           (load-double/unboxed off)
+-                                           (load-double/boxed off))
+-                                       (if unboxed-fp?
+-                                           (save-double/unboxed off)
+-                                           (save-double/boxed off)))
+-                                   locs)
+-                             (cons (constant ffi-typerep-float) encs)
+-                             (fx+ off 8))]
++                       (let ([off (align-8 off)])
++                         (loop types
++                               (cons (if in?
++                                         (if unboxed-fp?
++                                             (load-double/unboxed off)
++                                             (load-double/boxed off))
++                                         (if unboxed-fp?
++                                             (save-double/unboxed off)
++                                             (save-double/boxed off)))
++                                     locs)
++                               (cons (constant ffi-typerep-float) encs)
++                               (fx+ off 8)))]
+                       [(fp-ftd& ,ftd ,fptd)
+                        (loop types
+                              (cons (if in?
+@@ -1755,15 +1767,16 @@
+                       [else
+                        (cond
+                          [(64-bit-type-on-32-bit? type)
+-                          (loop types
+-                                (cons (if in?
+-                                          (load-two-int off)
+-                                          (save-two-int off))
+-                                      locs)
+-                                (nanopass-case (Ltype Type) type
+-                                  [(fp-integer ,bits) (cons (constant ffi-typerep-sint64) encs)]
+-                                  [else (cons (constant ffi-typerep-uint64) encs)])
+-                                (fx+ off 8))]
++                          (let ([off (align-8 off)])
++                            (loop types
++                                  (cons (if in?
++                                            (load-two-int off)
++                                            (save-two-int off))
++                                        locs)
++                                  (nanopass-case (Ltype Type) type
++                                    [(fp-integer ,bits) (cons (constant ffi-typerep-sint64) encs)]
++                                    [else (cons (constant ffi-typerep-uint64) encs)])
++                                  (fx+ off 8)))]
+                          [else
+                           (loop types
+                                 (cons (if in?

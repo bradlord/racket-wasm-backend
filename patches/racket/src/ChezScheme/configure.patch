@@ -1,0 +1,17 @@
+diff --git a/racket/src/ChezScheme/configure b/racket/src/ChezScheme/configure
+index e43bb7eb96..8a2d9a56f6 100755
+--- a/racket/src/ChezScheme/configure
++++ b/racket/src/ChezScheme/configure
+@@ -1011,7 +1011,11 @@ case "${flagsmuni}" in
+         mdldflags="-mi386nto"
+         ;;
+     em)
+-        mdlinkflags="-s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1"
++        # libffi's wasm closures need addFunction/removeFunction and a
++        # growable function table; the bare EXIT_RUNTIME/MEMORY_GROWTH
++        # line omits them, which is why the WASM kernel build used to
++        # awk-patch this line in Mf-config after configure.
++        mdlinkflags="-s EXIT_RUNTIME=1 -s ALLOW_MEMORY_GROWTH=1 -sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset -sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction -sALLOW_TABLE_GROWTH=1"
+         ;;
+ esac
+ 

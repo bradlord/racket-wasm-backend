@@ -1,0 +1,16 @@
+;; Pinned upstream Racket commit that this port's patches/overlay apply onto.
+;; A Racket-readable hash (read with `read` in build/config.rkt).
+;;
+;; The patches under patches/ were produced with `git diff <sha>...<fork-tip>`
+;; against this exact commit, so applying them onto this SHA is exact. The fork
+;; was ~8 commits behind origin/master at extraction time; bump `sha` and re-run
+;; `racket build/main.rkt sync apply` to test against a newer upstream.
+#hash(
+  (url . "https://github.com/racket/racket.git")
+  (sha . "6917300ab79704436422d78cb00956d957092d0b")
+  (date . "2026-05-20T17:23:06-06:00")
+  (subject . "setup: repair some doc-install cases")
+  (fork-provenance . #hash(
+    (origin . "git@github.com:bradlord/racket-wasm-backend.git")
+    (branch . "wasm-backend-full-history")))
+)
