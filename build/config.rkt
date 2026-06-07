@@ -16,7 +16,12 @@
 (define (at-root . parts) (apply build-path repo-root parts))
 
 (define patches-dir   (at-root "patches"))
-(define overlay-dir   (at-root "overlay"))
+;; overlay/ is regenerated from the fork by extract-from-fork.rkt; overlay-local/
+;; is repo-authored additive content NOT derived from the fork (e.g. the web-repl
+;; package). Both are copied into the clone by `apply`; the extractor only
+;; manages overlay/.
+(define overlay-dir       (at-root "overlay"))
+(define overlay-local-dir (at-root "overlay-local"))
 (define work-dir      (at-root ".work"))
 (define dist-dir      (at-root "dist"))
 ;; The cloned upstream tree.
@@ -43,7 +48,8 @@
 
 ;; Packages cross-installed into the image. List `-lib` implementation
 ;; packages, not metapackages (see build-wasm.md "Binary-only package preload").
-(define default-pkgs '("draw-lib" "datalog" "pict-lib"))
+;; web-repl is a local package shipped from overlay-local/pkgs/web-repl.
+(define default-pkgs '("draw-lib" "datalog" "pict-lib" "web-repl"))
 
 ;; Native C library deps. "draw" is the cairo/pango stack alias; libffi is
 ;; always built regardless.

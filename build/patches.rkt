@@ -49,7 +49,12 @@
          (path->string (path->complete-path p))))
 
   (unless check-only?
-    ;; 3. Copy overlay/ contents into the clone root (overlay/<rel> -> clone/<rel>).
-    (info-msg "copying overlay into clone")
+    ;; 3. Copy overlay/ then overlay-local/ into the clone root
+    ;;    (<rel> -> clone/<rel>). overlay/ is fork-derived; overlay-local/ is
+    ;;    repo-authored (the web-repl package). Content-aware copy preserves
+    ;;    mtimes of unchanged files (see copy-tree).
+    (info-msg "copying overlay + overlay-local into clone")
     (copy-tree overlay-dir clone-dir)
+    (when (directory-exists? overlay-local-dir)
+      (copy-tree overlay-local-dir clone-dir))
     (info-msg "delta applied")))

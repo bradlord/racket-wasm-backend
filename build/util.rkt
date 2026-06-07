@@ -74,8 +74,12 @@
   (filter (lambda (s) (not (string=? s "")))
           (string-split (apply git/string dir args) "\n")))
 
-;; Recursively copy the *contents* of src into dst (merging into existing dirs),
-;; overwriting files. Both are directories.
+;; Recursively copy the *contents* of src into dst (merging into existing dirs).
+;; Content-aware: a file whose bytes already match is left untouched, so its
+;; mtime is preserved. This is load-bearing -- re-applying the overlay must NOT
+;; bump the mtime of an unchanged source, or `raco setup` would treat its
+;; existing .zo as stale and recompile it (e.g. web-repl, which can only compile
+;; once its package deps like pict-lib are installed). Both args are directories.
 (define (copy-tree src dst)
   (make-directory* dst)
   (for ([p (in-list (directory-list src))])
@@ -83,6 +87,8 @@
     (define d (build-path dst p))
     (cond
       [(directory-exists? s) (copy-tree s d)]
+      [(and (file-exists? d) (files-equal? s d))
+       (void)] ; unchanged -- leave it (and its mtime) alone
       [else
        (make-directory* (path-only d))
        (when (or (file-exists? d) (link-exists? d)) (delete-file d))
@@ -90,3 +96,7 @@
        ;; Carry the source's permission bits (notably the exec bit on the
        ;; overlay shell scripts) into the clone.
        (file-or-directory-permissions d (file-or-directory-permissions s 'bits))])))
+
+(define (files-equal? a b)
+  (and (= (file-size a) (file-size b))
+       (bytes=? (file->bytes a) (file->bytes b))))

@@ -53,6 +53,14 @@
   ;; Top-level files that live natively in racket-wasm, not in the clone.
   (list "CLAUDE.md" "build-wasm.md" "buildit.sh" "rebuild-binary-catalog.sh"))
 
+;; The fork ships web-repl under racket/collects; this repo instead manages it as
+;; a *package* (overlay-local/pkgs/web-repl/, with an info.rkt depending on
+;; pict-lib) so a clean cross build compiles it after its package deps. Skip the
+;; fork's collects copy entirely so the two don't both ship. See the package's
+;; info.rkt and build-wasm.md "web-repl".
+(define (repo-managed-as-package? path)
+  (regexp-match? #rx"^racket/collects/web-repl/" path))
+
 ;; --- main ---------------------------------------------------------------
 
 (define (ensure-empty-dir! d)
@@ -112,6 +120,8 @@
     (cond
       [(member path group-c-native)
        (set! skipped (cons (list path "group-c-native") skipped))]
+      [(repo-managed-as-package? path)
+       (set! skipped (cons (list path "web-repl-package") skipped))]
       [(string=? status "A")
        (write-overlay! path)
        (set! overlaid (cons path overlaid))]
