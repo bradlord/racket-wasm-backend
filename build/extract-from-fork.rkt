@@ -67,6 +67,11 @@
     (lambda (o) (write-string diff o)))
   dest)
 
+;; The git tree mode for a path at the fork tip, e.g. "100644" or "100755".
+(define (git-mode path)
+  (define line (git-run "ls-tree" (fork-ref) "--" path))
+  (car (string-split line)))
+
 (define (write-overlay! path)
   ;; Exact file content at the fork tip (independent of working-tree state).
   (define content (git-run #:binary? #t "show" (string-append (fork-ref) ":" path)))
@@ -74,6 +79,9 @@
   (make-directory* (path-only dest))
   (call-with-output-file dest #:exists 'truncate
     (lambda (o) (write-bytes content o)))
+  ;; Preserve the executable bit (shell scripts under wasm-deps/, run-tests.sh).
+  (when (string=? (git-mode path) "100755")
+    (file-or-directory-permissions dest #o755))
   dest)
 
 (module+ main

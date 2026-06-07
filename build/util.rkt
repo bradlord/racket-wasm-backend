@@ -86,4 +86,7 @@
       [else
        (make-directory* (path-only d))
        (when (or (file-exists? d) (link-exists? d)) (delete-file d))
-       (copy-file s d)])))
+       (copy-file s d)
+       ;; Carry the source's permission bits (notably the exec bit on the
+       ;; overlay shell scripts) into the clone.
+       (file-or-directory-permissions d (file-or-directory-permissions s 'bits))])))
