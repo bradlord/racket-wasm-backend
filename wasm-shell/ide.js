@@ -121,10 +121,15 @@
       code:
 "#lang racket\n" +
 "\n" +
-";; pict builds pictures compositionally -- shapes and text are values\n" +
-";; you combine with operators like hc-append (horizontal) and\n" +
-";; vc-append (vertical) rather than drawing imperatively. Any pict\n" +
-";; returned to the Interactions pane is rendered inline.\n" +
+";; pict builds pictures compositionally -- shapes are values you\n" +
+";; combine with operators like hc-append (horizontal) and vc-append\n" +
+";; (vertical) rather than drawing imperatively. Any pict returned to\n" +
+";; the Interactions pane is rendered inline.\n" +
+";;\n" +
+";; NOTE: this example sticks to shapes -- text picts (the `text`\n" +
+";; function) don't work in this WASM build. Font rendering is the\n" +
+";; subject of the `wasm-text-fonts-wip` branch (see build-wasm.md);\n" +
+";; it is not in this build.\n" +
 "\n" +
 "(require pict)\n" +
 "\n" +
@@ -135,11 +140,11 @@
 "             (colorize (disk 80) \"steelblue\")\n" +
 "             (colorize (filled-ellipse 110 80) \"goldenrod\")))\n" +
 "\n" +
-";; Stack a caption under the shapes.\n" +
+";; Stack the shapes over an underline bar (no text).\n" +
 "(define diagram\n" +
 "  (vc-append 12\n" +
-"             (text \"pict on Racket WASM\" 'roman 22)\n" +
-"             shapes))\n" +
+"             shapes\n" +
+"             (colorize (filled-rectangle 300 6) \"slategray\")))\n" +
 "\n" +
 ";; A bare pict result renders, so just evaluating it displays it.\n" +
 "(frame (inset diagram 20))\n" +
