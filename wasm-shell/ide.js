@@ -153,6 +153,37 @@
 ";; REPL on the right.\n",
     },
     {
+      name: "Browser text",
+      code:
+"#lang racket\n" +
+"\n" +
+";; Browser-native text. racket/draw's own text path (Pango) doesn't\n" +
+";; work in this WASM build, so web-repl/text asks the *page* to render\n" +
+";; text with Canvas 2D and brings it back as an image -- no fonts in\n" +
+";; the image, no Pango. Fonts are CSS font strings.\n" +
+"\n" +
+"(require web-repl/text)\n" +
+"\n" +
+";; display-text blits a rendered string into the Interactions pane.\n" +
+"(display-text \"Hello from the browser!\"\n" +
+"              #:font \"bold 32px serif\" #:color \"crimson\")\n" +
+"(display-text \"monospace, teal\"\n" +
+"              #:font \"20px monospace\" #:color \"teal\")\n" +
+"\n" +
+";; measure-text returns the pixel size the page would use.\n" +
+"(define-values (w h)\n" +
+"  (measure-text \"how wide am I?\" #:font \"18px sans-serif\"))\n" +
+"(printf \"measured: ~a x ~a px\\n\" w h)\n" +
+"\n" +
+";; text-pict makes a pict, so browser text composes with shapes:\n" +
+"(require pict)\n" +
+"(vc-append 10\n" +
+"           (text-pict \"a captioned shape\"\n" +
+"                      #:font \"italic 22px sans-serif\"\n" +
+"                      #:color \"midnightblue\")\n" +
+"           (colorize (filled-rectangle 220 40) \"gold\"))\n",
+    },
+    {
       name: "DOM manipulation",
       code:
 "#lang racket\n" +
