@@ -170,18 +170,22 @@
 "(display-text \"monospace, teal\"\n" +
 "              #:font \"20px monospace\" #:color \"teal\")\n" +
 "\n" +
+";; Colors, sizes, and a background all work.\n" +
+"(display-text \"white on purple\"\n" +
+"              #:font \"28px sans-serif\" #:color \"white\"\n" +
+"              #:background \"rebeccapurple\")\n" +
+"\n" +
 ";; measure-text returns the pixel size the page would use.\n" +
 "(define-values (w h)\n" +
 "  (measure-text \"how wide am I?\" #:font \"18px sans-serif\"))\n" +
 "(printf \"measured: ~a x ~a px\\n\" w h)\n" +
 "\n" +
-";; text-pict makes a pict, so browser text composes with shapes:\n" +
-"(require pict)\n" +
-"(vc-append 10\n" +
-"           (text-pict \"a captioned shape\"\n" +
-"                      #:font \"italic 22px sans-serif\"\n" +
-"                      #:color \"midnightblue\")\n" +
-"           (colorize (filled-rectangle 220 40) \"gold\"))\n",
+";; NB: web-repl/text also has text->bitmap and text-pict. text-pict\n" +
+";; composes with pict shapes, but rendering a bitmap-backed pict needs\n" +
+";; (send dc draw-bitmap ...), which traps in this build on a separate\n" +
+";; latent draw-lib FFI bug (cairo_pattern_reference) -- see the\n" +
+";; wasm-text-fonts-wip branch / build-wasm.md. So this example stays\n" +
+";; with the direct display helpers.\n",
     },
     {
       name: "DOM manipulation",

@@ -115,6 +115,15 @@
 ;; text-pict : string [#:font #:color #:background] -> pict
 ;; A bitmap-backed pict, so browser-rendered text composes with the rest of
 ;; pict (hc-append, frame, ...). pict is a package -> lazy require.
+;;
+;; CAVEAT: drawing/rendering the result (e.g. the IDE's pict printer, which
+;; calls pict->bitmap) needs (send dc draw-bitmap ...), and that currently
+;; traps in this build on a separate latent draw-lib FFI bug
+;; (cairo_pattern_reference is mis-bound, returning void instead of the
+;; pattern, so wasm's typed call_indirect rejects it -- same class as
+;; cairo_font_options_copy on the wasm-text-fonts-wip branch). So this
+;; produces a valid pict but it will not render until that is fixed; the
+;; direct helpers above (display-text/text->bitmap) work today.
 (define (text-pict str
                    #:font       [font  "16px sans-serif"]
                    #:color      [color "black"]
