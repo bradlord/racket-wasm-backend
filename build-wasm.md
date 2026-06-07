@@ -1390,6 +1390,33 @@ megabytes of static code). `make-bitmap` returns a real `bitmap%`,
 software backend without error. The wasm grew from ~26 MB to ~32 MB
 and the .data from ~87 MB to ~95 MB.
 
+> **Text rendering -- see branch `wasm-text-fonts-wip`.** Drawing
+> (geometry) works as above, but *text* (`get-text-extent`, `draw-text`,
+> `pict`'s `text`) is a separate, harder story explored on that branch.
+> It is **not merged** here because it does not fully land in the browser,
+> but the investigation is substantial and worth not losing. Summary of
+> progress there:
+>
+> - **Root-caused and fixed three independent function-pointer / signature
+>   mismatches** -- all tolerated by native ABIs, all rejected by wasm's
+>   typed `call_indirect`, each hidden behind the previous: GObject
+>   `class_init` cast (GLib; fixed via a backport of the Fluendo glib WASM
+>   fork's fpcast patch), GObject `iface_init` cast (GLib; a `gtype.c`
+>   call-site patch), and `cairo_font_options_copy` mis-bound 2-arg vs 1
+>   (draw-lib; a genuine latent upstream Racket bug). After these, text
+>   *executes*.
+> - **Provisioned fontconfig** (a `fonts.conf` + DejaVu Sans + the
+>   `FONTCONFIG_*`/`HOME` env), so **under node text renders reliably**.
+> - **Still hangs in the browser**, and *not* for a signature reason: the
+>   font path makes GLib spawn a helper thread and `g_cond_wait`s for it,
+>   but `shell-worker.js` runs the module inside a Web Worker that then
+>   blocks synchronously, so Emscripten can never spawn/handshake the child
+>   thread (node can, hence node works). `-sPTHREAD_POOL_SIZE` made it
+>   worse (startup hang). The real fixes are architectural
+>   (`-sPROXY_TO_PTHREAD`, or de-threading GLib on the font path) and are
+>   the open work. The branch's `build-wasm.md` has the full write-up,
+>   symbolicated stacks, and the per-fix detail.
+
 A handful of libm / libc essentials (fmod, pow, sqrt, sin/cos/tan,
 atan2, exp/log, floor/ceil/round/trunc, fabs) are registered in
 `wasm_extras.inc` because draw-lib's color math reaches them via
