@@ -827,12 +827,14 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
 `--use-preload-cache` is **browser-only** (it is in `browser-args`, not
 `node-args`, in `cs/c/build.zuo`). It makes the generated `.data` loader
 stash the preload package in IndexedDB keyed by package name + total
-size, so a returning browser reads the (large) boot/collects/etc/pkgs
+size, so a returning browser reads the (large) boot/collects/etc
 payload from IDB instead of re-fetching `scheme-web.data` over the
 network on every load. The cache self-invalidates when the package size
 changes, so a rebuild that alters the preload set transparently refreshes
 it. The node surface has no persistent IndexedDB to cache into, so the
-flag is omitted there.
+flag is omitted there. (The browser's *package* tree no longer rides in
+`scheme-web.data` — it ships as a separate `share.data`/`share.data.js`
+that caches itself the same way; see "Packages as a separate data file".)
 
 Notably absent: `-sPROXY_TO_PTHREAD` and the pthread-pool flags. The
 earlier design used `PROXY_TO_PTHREAD` so Emscripten itself spawned the
@@ -1334,6 +1336,64 @@ absent, `install-base-pkgs` falls back to the source install verbatim.
   as the path, the vendored `pkgs/datalog/` copy has been removed and
   `datalog` installs from the upstream catalog like any other package, its
   build-deps pruned by the strip.
+
+### Packages as a separate data file
+
+The package tree is the part of the preload that changes most often (every
+`PKGS` edit), and re-linking just to repackage it is the slow step. So **both**
+surfaces ship the package payload as a **separate Emscripten data file** —
+`share.data` + its loader `share.data.js`, produced by `file_packager.py` —
+instead of baking it into the emcc link. Changing packages then means:
+re-install + repack (`pack-pkgs`), **no relink**.
+
+The split (in `cs/c/build.zuo`, the `wasm` target): the link preloads only
+`core-preloads` (boot images + `/collects` + `/etc`, which change only on a
+Racket-version rebuild) into the MEMFS, for both the node (`scheme.*`) and
+browser (`scheme-web.*`) surfaces. The package tree is no longer referenced in
+the link at all.
+
+The orchestrator's `pack-share-data` (`build/stages.rkt`) runs `file_packager.py`
+against the installed tree to emit `share.data`/`share.data.js` into the wasm
+out dir: the wholesale `/share/pkgs`, `/share/links.rktd`, and every in-tree
+`/pkgs/<name>` the links file points at (the `links-pkgs-roots` parse of
+`links.rktd` for `(up up #"pkgs" #"name")` entries — formerly in `build.zuo`,
+now living **only** here). It is wired into both `build` and
+`rebuild-binary-catalog` (after the link, before `collect-outputs`), and exposed
+standalone as `racket build/main.rkt pack-pkgs` for the repack-without-relink
+path.
+
+Both surfaces emit and share **one** `share.data`/`share.data.js` pair; the
+generated loader is environment-aware (browser `fetch` vs node `readFileSync`),
+and `Module.locateFile` resolves `share.data` next to the script in either case.
+It is **not** built with `--use-preload-cache`: the package payload is small
+(~10MB — the browser already caches the big core `.data` via the link's own
+`--use-preload-cache`, and re-fetches `share.data` through the ordinary HTTP
+cache), and the IndexedDB cache path throws under node (no `indexedDB`), dumping
+a stack trace on every boot. Caching this tier buys little and isn't worth that.
+
+Runtime wiring loads `share.data.js` so its loader pushes onto `Module.preRun`
+and gates `run()` via `addRunDependency` until `share.data` is in MEMFS — so
+`/share/pkgs` is present before `main()`, exactly as when it was in-link:
+
+- **Browser:** `shell-worker.js` does `importScripts("./share.data.js")`
+  **before** `importScripts("./scheme-web.js")`. The loader runs in the worker's
+  global scope, where its self-declared `var Module` binds to the `self.Module`
+  the worker set up.
+- **Node:** `scheme.js`'s `Module` is module-scoped (not global) and there is no
+  `importScripts`, so the baked-in `--pre-js` `node-load-share.js` reproduces the
+  worker's environment: it puts this module's `Module` and `require` on
+  `globalThis`, then runs `./share.data.js` via **indirect** `eval` (global
+  scope). Direct eval would not do — the loader's own `var Module` would shadow
+  ours and disconnect. Loading at runtime (not as another `--pre-js` payload) is
+  what keeps the packages out of the link.
+
+Two runtime methods the externally-loaded loader reaches by name —
+`FS_createPath` and `FS_createDataFile` — plus `addRunDependency` /
+`removeRunDependency` are added to each link's `-sEXPORTED_RUNTIME_METHODS` (the
+browser already exported the latter two for IDBFS; the in-link core loader uses
+minified locals and needs none exported). If `file_packager` emits a reference to
+a method not yet exported, boot aborts with an "X is not exported" error — add it
+to that list and rebuild.
 
 ### A `web-repl` helper collection
 

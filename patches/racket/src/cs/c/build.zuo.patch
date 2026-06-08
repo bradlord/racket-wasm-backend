@@ -1,5 +1,5 @@
 diff --git a/racket/src/cs/c/build.zuo b/racket/src/cs/c/build.zuo
-index b4e92eecc6..f820bf06f3 100644
+index b4e92eecc6..6810122352 100644
 --- a/racket/src/cs/c/build.zuo
 +++ b/racket/src/cs/c/build.zuo
 @@ -54,6 +54,24 @@
@@ -148,7 +148,7 @@ index b4e92eecc6..f820bf06f3 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +775,270 @@
+@@ -691,6 +775,257 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -273,58 +273,18 @@ index b4e92eecc6..f820bf06f3 100644
 +                   (define dep-uflags
 +                     (read-flag-lines (build-path wasm-deps-dir "wasm_deps_uflags.txt")))
 +                   (define (preload src dest) (list "--preload-file" (~a src "@" dest)))
-+                   (define (preload-if-dir src dest)
-+                     (if (directory-exists? src) (preload src dest) '()))
-+                   ;; Installed packages (PKGS): preload share/pkgs and the
-+                   ;; installation links file so the runtime finds them.
-+                   ;; main_em.c sets config-dir=/etc, so the links file is
-+                   ;; looked up at /share/links.rktd. Catalog packages copied
-+                   ;; under share/pkgs are covered by the wholesale share/pkgs
-+                   ;; preload above. But the links file also has entries that
-+                   ;; resolve to /pkgs/<name> -- `static-root`s for in-tree
-+                   ;; metapackages/libraries (base, racket-lib, compiler-lib,
-+                   ;; zo-lib, ...) and named-collection links for any
-+                   ;; in-tree local source packages linked in place.
-+                   ;; These are linked, not copied, so their source is the
-+                   ;; in-tree <root>/pkgs/<name>; Racket errors reading the
-+                   ;; links file if any referenced dir is absent. Rather than
-+                   ;; maintain a hardcoded list, parse links.rktd and preload
-+                   ;; every /pkgs/<name> it points at.
-+                   ;;
-+                   ;; Each entry is `(<tag> <path> [<version-regexp>])`; an
-+                   ;; entry resolves to /pkgs/<name> when <path> (relative to
-+                   ;; the links file's /share dir) is `(up up #"pkgs" #"name")`
-+                   ;; -- up up escapes /share to /, then pkgs/name. zuo's
-+                   ;; reader yields the bareword `up` as a symbol and the
-+                   ;; byte-strings as plain strings.
-+                   (define (links-pkgs-roots links-file)
-+                     (filter
-+                      (lambda (x) x)
-+                      (map (lambda (e)
-+                             (let ([path (and (pair? e) (pair? (cdr e)) (cadr e))])
-+                               (and (list? path)
-+                                    (= (length path) 4)
-+                                    (eq? (car path) 'up)
-+                                    (eq? (cadr path) 'up)
-+                                    (equal? (list-ref path 2) "pkgs")
-+                                    (list-ref path 3))))
-+                           (car (string-read (file->string links-file))))))
-+                   (define share-preloads
-+                     (let ([share-pkgs (at-source "../../../share/pkgs")]
-+                           [links (at-source "../../../share/links.rktd")])
-+                       (if (directory-exists? share-pkgs)
-+                           (append (preload share-pkgs "/share/pkgs")
-+                                   (if (file-exists? links)
-+                                       (append
-+                                        (preload links "/share/links.rktd")
-+                                        (apply append
-+                                               (map (lambda (name)
-+                                                      (preload-if-dir
-+                                                       (at-source (~a "../../../../pkgs/" name))
-+                                                       (~a "/pkgs/" name)))
-+                                                    (links-pkgs-roots links))))
-+                                       '()))
-+                           '())))
++                   ;; Installed packages (PKGS) are NOT preloaded here. Both
++                   ;; surfaces ship the package tree (share/pkgs + links.rktd +
++                   ;; any in-tree /pkgs/<name> the links file points at) as a
++                   ;; SEPARATE file_packager artifact -- share.data/share.data.js,
++                   ;; built by the orchestrator's `pack-pkgs` step -- loaded at
++                   ;; runtime (browser: shell-worker.js importScripts; node:
++                   ;; node-load-share.js indirect-eval). That keeps the package
++                   ;; payload out of this (expensive) link so a package change
++                   ;; needn't relink. The links-file parse that finds in-tree
++                   ;; /pkgs roots now lives once, in the orchestrator
++                   ;; (build/stages.rkt `links-pkgs-roots`). See build-wasm.md
++                   ;; "Packages as a separate data file".
 +                   ;; Inputs shared by both surfaces (node `scheme.*` and
 +                   ;; browser `scheme-web.*`). wasm_shell_io.o is NOT here --
 +                   ;; it is browser-only and appended in the browser link.
@@ -335,14 +295,17 @@ index b4e92eecc6..f820bf06f3 100644
 +                             wasm-prim-objs
 +                             pbchunk-objs
 +                             (list libkernel.a liblz4.a (target->path librktio.a))))
-+                   ;; Boot images + collects/etc/share, preloaded into the MEMFS.
-+                   (define preloads
++                   ;; Boot images + collects/etc, preloaded into the MEMFS of
++                   ;; BOTH surfaces. Packages are not here -- they ship as a
++                   ;; separate share.data (see the note above core-preloads'
++                   ;; absence of share/pkgs and "Packages as a separate data
++                   ;; file" in build-wasm.md).
++                   (define core-preloads
 +                     (append (preload petite-chunked.boot "petite.boot")
 +                             (preload scheme-chunked.boot "scheme.boot")
 +                             (preload racket-chunked.boot "racket.boot")
 +                             (preload (at-source "../../../collects") "/collects")
-+                             (preload (at-source "../../../etc") "/etc")
-+                             share-preloads))
++                             (preload (at-source "../../../etc") "/etc")))
 +                   (define wasm-shell (at-source "../../../../wasm-shell"))
 +                   ;; The node (`scheme.*`) link: REPL over Node's stdio.
 +                   (define node-args
@@ -359,11 +322,24 @@ index b4e92eecc6..f820bf06f3 100644
 +                      ;; anywhere. Must be extern-pre-js -- the --preload-file
 +                      ;; loader runs at parse time, before ordinary --pre-js.
 +                      (list "--extern-pre-js" (build-path wasm-shell "node-locate-file.js")
-+                            "--post-js"       (build-path wasm-shell "node-tty.js"))
-+                      preloads
++                            "--post-js"       (build-path wasm-shell "node-tty.js")
++                            ;; node-load-share.js (pre-js): at runtime load the
++                            ;; separate package data file (share.data via
++                            ;; share.data.js) by indirect-eval, the node analog
++                            ;; of the worker's importScripts. Like the browser,
++                            ;; node ships packages OUT of the link so a package
++                            ;; change needn't relink scheme.*.
++                            "--pre-js"        (build-path wasm-shell "node-load-share.js"))
++                      ;; Core preloads only (boot/collects/etc); packages load
++                      ;; from share.data at runtime via node-load-share.js.
++                      core-preloads
 +                      (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
 +                            "-sEXPORTED_FUNCTIONS=_malloc,_free,_main,_setThrew,_memcpy,_memset"
-+                            "-sEXPORTED_RUNTIME_METHODS=getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction")
++                            (~a "-sEXPORTED_RUNTIME_METHODS="
++                                "getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,"
++                                ;; Reached by name from the externally-loaded
++                                ;; share.data.js package loader (see browser link).
++                                "addRunDependency,removeRunDependency,FS_createPath,FS_createDataFile"))
 +                      ;; Force-link the symbols the deps manifest registers
 +                      ;; via Sforeign_symbol (wasm-ld would otherwise strip
 +                      ;; them before init_foreign takes their address).
@@ -384,12 +360,18 @@ index b4e92eecc6..f820bf06f3 100644
 +                      dep-linkflags
 +                      (list "--pre-js"  (build-path wasm-shell "idbfs-init.js")
 +                            "--post-js" (build-path wasm-shell "shell-tty.js"))
-+                      preloads
++                      ;; Core preloads only: the package tree ships as a
++                      ;; separate share.data/share.data.js (built by the
++                      ;; orchestrator's `pack-pkgs`, loaded by shell-worker.js)
++                      ;; so changing PKGS needn't relink this surface.
++                      core-preloads
 +                      ;; Cache the preloaded .data package in IndexedDB keyed by
 +                      ;; package name + size so a returning browser reuses it
-+                      ;; instead of re-downloading the (large) boot/collects/pkgs
++                      ;; instead of re-downloading the (large) boot/collects
 +                      ;; payload on every load. Browser surface only -- the node
-+                      ;; link has no persistent IDB to cache into.
++                      ;; link has no persistent IDB to cache into. (Caches only
++                      ;; this core payload; the separate share.data is small and
++                      ;; uncached -- see pack-pkgs / build-wasm.md.)
 +                      (list "--use-preload-cache")
 +                      (list "-sEXIT_RUNTIME=1" "-sALLOW_MEMORY_GROWTH=1" "-sALLOW_TABLE_GROWTH=1"
 +                            (~a "-sEXPORTED_FUNCTIONS="
@@ -399,7 +381,12 @@ index b4e92eecc6..f820bf06f3 100644
 +                                "_wasm_dom_reply_seq_addr,_wasm_dom_reply_len_addr,_wasm_dom_reply_buf_addr,_wasm_dom_reply_cap")
 +                            (~a "-sEXPORTED_RUNTIME_METHODS="
 +                                "getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,"
-+                                "HEAPU8,HEAP32,FS,addRunDependency,removeRunDependency")
++                                "HEAPU8,HEAP32,FS,addRunDependency,removeRunDependency,"
++                                ;; Reached by name from the externally-loaded
++                                ;; share.data.js package loader (the in-link
++                                ;; loader uses minified locals; a separate
++                                ;; script needs them exported on Module).
++                                "FS_createPath,FS_createDataFile")
 +                            "-sFORCE_FILESYSTEM=1" "-lidbfs.js")
 +                      dep-uflags))
 +                   (shell/wait (map string->shell node-args))
@@ -419,7 +406,7 @@ index b4e92eecc6..f820bf06f3 100644
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                  ,(lambda (path token)
                     (scheme "--script" (at-source "convert-to-boot.ss")
-@@ -765,7 +1113,11 @@
+@@ -765,7 +1100,11 @@
                                   token))])]
             [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                  (not (equal? (lookup 'RACKET) "")))
@@ -432,7 +419,7 @@ index b4e92eecc6..f820bf06f3 100644
              (when xpatch?
                (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
              `([:target bootfiles ()
-@@ -878,7 +1230,19 @@
+@@ -878,7 +1217,19 @@
                  ,(lambda (token)
                     (install #f)
                     (setup))]
@@ -453,7 +440,7 @@ index b4e92eecc6..f820bf06f3 100644
         [:target plain-install ()
                  ,(lambda (token)
                     (install #f))]
-@@ -1092,32 +1456,39 @@
+@@ -1092,32 +1443,39 @@
                   (list petite-v.boot scheme-v.boot racket-v.boot)
                   (list "petite.boot" "scheme.boot" "racket.boot")))])
  
@@ -516,7 +503,7 @@ index b4e92eecc6..f820bf06f3 100644
      (call-with-dest-racket
       (lambda (bindir dest-racket)
         (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
-@@ -1125,13 +1496,37 @@
+@@ -1125,13 +1483,37 @@
                                     (hash-set config 'copytree-prepared-setup-files #t)
                                     config))
         (maybe-copytree copytree-config dest-racket copytree-racket at-dir)

@@ -8,6 +8,8 @@
 ;;   apply [--check]           apply patches/ + overlay/ into the clone
 ;;   build  [opts]             full cross-build (ensure clone+delta, then make) -> dist/
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
+;;   pack-pkgs                 repack the browser package data file (share.data)
+;;                             from the already-installed tree -- no emcc relink
 ;;   serve [port]              COOP/COEP server over dist/
 ;;   clean                     remove the cloned tree (.work/racket)
 ;;
@@ -56,6 +58,13 @@
 
 (define (cmd-rebuild-catalog args) (rebuild-binary-catalog (parse-build-opts args)))
 
+;; Repack only the browser package data file (share.data/share.data.js) from
+;; the already-installed share/pkgs tree, then refresh dist/. The point of the
+;; split: this avoids the emcc relink, so changing packages is cheap.
+(define (cmd-pack-pkgs args)
+  (pack-share-data)
+  (collect-outputs))
+
 (define (cmd-serve args)
   (define port (if (pair? args) (car args) "8123"))
   (define serve.rkt (build-path dist-dir "serve.rkt"))
@@ -76,6 +85,7 @@
         (cons "apply" cmd-apply)
         (cons "build" cmd-build)
         (cons "rebuild-binary-catalog" cmd-rebuild-catalog)
+        (cons "pack-pkgs" cmd-pack-pkgs)
         (cons "serve" cmd-serve)
         (cons "clean" cmd-clean)))
 

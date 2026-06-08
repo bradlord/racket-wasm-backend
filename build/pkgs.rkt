@@ -87,4 +87,5 @@
   (info-msg "stage 4/4: binary consume (make wasm)")
   (mk)
 
+  (pack-share-data)
   (collect-outputs))

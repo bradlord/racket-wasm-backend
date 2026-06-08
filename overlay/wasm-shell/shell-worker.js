@@ -152,6 +152,16 @@ self.onmessage = function (event) {
   if (!msg || msg.type !== "init") return;
   self.onmessage = null;
   self.Module = buildModule(msg);
+  // Load the package payload loader first. Unlike the boot/collects payload
+  // (baked into scheme-web.js by the emcc link), the Racket package tree
+  // ships as a SEPARATE file_packager artifact -- share.data + share.data.js,
+  // built by the orchestrator's `pack-pkgs` step -- so changing packages
+  // needn't relink scheme-web.*. This loader pushes onto Module.preRun and
+  // gates run() via addRunDependency until share.data is fetched into MEMFS,
+  // so /share/pkgs is present before main(), exactly as when it was in-link.
+  // It must run before scheme-web.js so its preRun registers in time; it
+  // reaches FS/addRunDependency (exported on Module) once the runtime is up.
+  importScripts("./share.data.js");
   // Synchronously instantiate the runtime; Emscripten's generated
   // wrapper reads self.Module that we set above.
   importScripts("./scheme-web.js");
