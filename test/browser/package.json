@@ -1,0 +1,16 @@
+{
+  "name": "racket-wasm-browser-test",
+  "private": true,
+  "type": "module",
+  "description": "Headless browser tests + ad-hoc eval CLI for the Racket WASM IDE surface.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "eval": "node tools/eval.mjs",
+    "install-browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "playwright": "^1.49.0"
+  }
+}

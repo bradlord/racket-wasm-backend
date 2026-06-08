@@ -13,3 +13,9 @@
 .DS_Store
 /compiled/
 **/compiled/
+
+# Browser test harness (test/browser/).
+/test/browser/node_modules/
+/test/browser/test-results/
+/test/browser/playwright-report/
+/test/browser/blob-report/
