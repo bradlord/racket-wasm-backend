@@ -1,0 +1,38 @@
+Overall Goal: The scripts in this repo should let me create custom Racket/WASM-based web applications, rather than just the IDE/web-repl and the node repl. Eventually, I should be able to point to a directory with HTML/JS/Racket and some configuration (preferably written in racket), and have it output a usable web page (including the WASM and .data files needed to run it.)
+
+- Review files in overlay and patches folder for pieces that can be removed or used outside of racket repo.
+    - We probably don't need any gitignore updates on the racket repo, since we won't be committing.
+    - build-wasm-binary-pkgs.rkt should probably live outside of the racket repo checkout.
+    - ~everything in wasm-shell/ can be outside racket repo checkout
+    - Dependency building code? 
+- Investigate a separate build for a main thread version vs the worker thread version.
+- Build the same-version host racket automatically. (RACKET=auto)
+- Github workflow to build and deploy web-repl
+- Improve process for building binary package catalog. I think we could keep around a semi-permanent directory to which we'd install the full t32pbl packages, and then extract the binary catalog from there. That way, adding a single new package wouldn't require re-building every other package.
+- Improve handling of locally defined packages. Instead of adding them to the racket repo's pkgs directory, maybe just `raco pkg install --copy --binary(?) <path>`.
+- Instead of passing the packages to install via PKGS, maybe we should set PKGS= (i.e., blank) when building and then install requested packages via raco pkg install
+    - Maybe reuse this bare racket directory as a starting point for later builds
+- DONE. Maybe include the packages as a whole separate emscripten data file so we don't need to re-link every time.
+    python $EMSDK/upstream/emscripten/tools/file_packager.py \
+        share.data \
+        --preload someplace/share/@/share \
+        --js-output=share.data.js \
+        --use-preload-cache \
+        --indexeddb-name="racket-webpl-share"
+
+- WON'T DO. ~I wonder if we could do a single link to generate a racket.wasm, and then build scheme.{html,js} and scheme-web.{html,js} with a separate emcc pointing to racket.wasm. The idea being to avoid multiple links just because they have different prejs/postjs/etc.~ (This probably wouldn't be worth the effort in the short term, since it would save ~20 seconds per build.)
+
+- Make this scriptable via racket. I should be able to define apps using instructions along these lines:
+  (define (build-web-repl)
+    (define build-dir "./dest")
+    (define pkgs '(draw-lib pict-lib))
+    ; We'll probably need a separate workspace in which we can install packages before installing them.
+    (define local-pkgs (list "web-repl/pkgs/web-repl"))
+    (define wasm-libs '(cairo etc))
+    ; Should it be possible to specify additional C files that should be build/linked?
+    ; Maybe also somehow adjust --pre-js/--post-js, etc
+    (make-wasm-racket #:dest build-dir
+                      #pkgs pkgs
+                      #local-pkgs local-pkgs
+                      #wasm-libs libs)
+    (copy-files "./web-repl/public" build-dir))

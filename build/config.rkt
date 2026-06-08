@@ -22,6 +22,13 @@
 ;; manages overlay/.
 (define overlay-dir       (at-root "overlay"))
 (define overlay-local-dir (at-root "overlay-local"))
+;; Repo-side, NOT copied into the clone: host-side runtime glue (browser worker
+;; bootstrap + dev server) and the page surfaces. The emcc link no longer stages
+;; these; the orchestrator's collect-outputs copies them into dist/ directly, so
+;; a surface can be swapped without touching the (expensive) link. See
+;; build-wasm.md and the project roadmap.
+(define runtime-glue-dir  (at-root "runtime-glue"))
+(define surfaces-dir      (at-root "surfaces"))
 (define work-dir      (at-root ".work"))
 (define dist-dir      (at-root "dist"))
 ;; The cloned upstream tree.
@@ -46,10 +53,16 @@
 
 ;; --- build defaults (from the fork's buildit.sh active line) ------------
 
-;; Packages cross-installed into the image. List `-lib` implementation
-;; packages, not metapackages (see build-wasm.md "Binary-only package preload").
-;; web-repl is a local package shipped from overlay-local/pkgs/web-repl.
-(define default-pkgs '("draw-lib" "datalog" "pict-lib" "web-repl"))
+;; Catalog packages cross-installed into the image (by name). List `-lib`
+;; implementation packages, not metapackages (see build-wasm.md "Binary-only
+;; package preload").
+(define default-pkgs '("draw-lib" "datalog" "pict-lib"))
+
+;; Local (path) packages the default IDE build ships, installed via
+;; `raco pkg install --copy` (build/app.rkt `make-wasm-racket` #:local-pkgs).
+;; web-repl is the WASM browser-surface helper collection; it lives in-repo at
+;; packages/web-repl, NOT in the clone -- the clone stays pure upstream-delta.
+(define default-local-pkgs (list (at-root "packages" "web-repl")))
 
 ;; Native C library deps. "draw" is the cairo/pango stack alias; libffi is
 ;; always built regardless.
@@ -61,3 +74,12 @@
 
 ;; The target Chez machine type for the WASM build.
 (define target-machine "tpb32l")
+
+;; What the emcc link + pack-share-data emit into the clone's wasm out dir -- the
+;; runtime proper (the link products + the separate package payload). This is the
+;; set the orchestrator copies into dist/ and caches per build-key. Glue/surface
+;; are repo-side and copied separately, so they are NOT part of this set.
+(define runtime-output-names
+  '("scheme.js" "scheme.wasm" "scheme.data"
+    "scheme-web.js" "scheme-web.wasm" "scheme-web.data"
+    "share.data" "share.data.js"))

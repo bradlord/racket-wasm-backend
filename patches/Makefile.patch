@@ -2,7 +2,7 @@ diff --git a/Makefile b/Makefile
 index c10c9e2dac..cb7889aa5f 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -67,6 +67,17 @@ CONFIGURE_ARGS =
+@@ -67,6 +67,23 @@ CONFIGURE_ARGS =
  # replaced with the build subdirectory where `configure` is run
  CONFIGURE_ARGS_qq =
  
@@ -17,15 +17,22 @@ index c10c9e2dac..cb7889aa5f 100644
 +# (the full cairo/pango stack that racket/draw needs). Empty = libffi only.
 +WASM_DEPS =
 +
++# WebAssembly: local (path) packages to `raco pkg install --copy` into
++# share/pkgs for `make wasm`, in addition to the catalog PKGS. Space-separated
++# absolute source dirs. The orchestrator sets this from an app's #:local-pkgs;
++# see build-wasm.md "Local app packages".
++LOCAL_PKGS =
++
  # ------------------------------------------------------------
  # Cross-build support
  
-@@ -185,6 +196,8 @@ BUILD_VARS = MAKE=$(MAKE) \
+@@ -185,6 +196,9 @@ BUILD_VARS = MAKE=$(MAKE) \
               CPUS="$(CPUS)" \
               CONFIGURE_ARGS_qq='$(CONFIGURE_ARGS_qq)' \
               CONFIGURE_ARGS="$(CONFIGURE_ARGS)" \
 +             CONFIGURE_WRAPPER="$(CONFIGURE_WRAPPER)" \
 +             WASM_DEPS="$(WASM_DEPS)" \
++             LOCAL_PKGS="$(LOCAL_PKGS)" \
               CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
               RACKET="$(RACKET)" \
               PLAIN_RACKET="$(PLAIN_RACKET)" \

@@ -164,16 +164,94 @@ That link target emits **both** runtime surfaces into
   `echo '(+ 1 2)' | node scheme.js`); and
 - the **browser** runtime -- `scheme-web.{js,wasm,data}` (adds the
   browser-only `wasm_shell_io.o`, the SAB/DOM exports, IDBFS, and the
-  `idbfs-init.js`/`shell-tty.js` glue), plus the page assets copied next
-  to it: `ide.html`/`.js` (the DrRacket-like IDE surface),
-  `shell-worker.js`, and `serve.rkt`. Serve them with
-  `racket serve.rkt 8123` (it sets the COOP/COEP headers
-  `SharedArrayBuffer` needs) and open `ide.html`.
+  `idbfs-init.js`/`shell-tty.js` glue baked in via `--pre`/`--post-js`).
 
-The browser-link flags live in the `wasm` target itself; the staged
-page-asset list mirrors
-`racket/src/ChezScheme/install-wasm-browser-shell.rkt` (kept around for
-re-staging assets without a relink) -- keep the two lists in sync.
+**The link emits only the runtime, not the page.** As of the
+runtime/surface decoupling (project roadmap Phase 0), the `wasm` target no
+longer stages any page assets next to the binary. The host-side glue
+(`shell-worker.js`, the COOP/COEP dev server `serve.rkt`) and the page
+**surface** (`ide.html`/`.js`, the DrRacket-like IDE) live **repo-side**, not
+in the clone -- under `runtime-glue/` and `surfaces/ide/` respectively -- and
+the orchestrator's `collect-outputs` (`build/stages.rkt`) copies them into
+`dist/` alongside the runtime. This is the seam that lets a different surface
+ship against the same runtime binary without re-linking; see the project
+roadmap. Serve `dist/` with `racket serve.rkt 8123` (sets the COOP/COEP
+headers `SharedArrayBuffer` needs) and open `ide.html`.
+
+The browser-link flags live in the `wasm` target itself.
+`racket/src/ChezScheme/install-wasm-browser-shell.rkt` is a **legacy**,
+unused-by-`make wasm` script that still lists the old in-clone asset names; it
+is not part of the decoupled path and is no longer kept in sync.
+
+#### Building a custom app (`make-wasm-racket` / the `app` subcommand)
+
+Because the runtime is surface-agnostic, a *custom* web app is just "the shared
+runtime + glue, plus a different page surface, into a different output dir."
+`build/app.rkt` exposes that as `make-wasm-racket`:
+
+```racket
+(make-wasm-racket #:dest "out"
+                  #:pkgs '(draw-lib)      ; -> PKGS  ('() = core only)
+                  #:wasm-libs '(draw)     ; -> WASM_DEPS ('() = libffi only)
+                  #:public "app/public")  ; the page surface (html/js/rkt)
+```
+
+It wraps `build-runtime` (`build/stages.rkt`) -- the same engine the CLI `build`
+uses -- differing only in the output `dest` and the page `surface-dir`. An app
+dir carries an `app.rkt` manifest that `(provide app)` a hash of those fields
+(`'pkgs 'wasm-libs 'public 'local-pkgs`); `racket build/main.rkt app <dir>`
+loads it (`run-app-manifest`) and builds into `<dir>/dist` (override `--dest`).
+`examples/hello/` is the minimal example: a non-IDE page that seeds a `main.rkt`
+into MEMFS, runs it (`argv ["-u" "/tmp/main.rkt"]`), and drains its stdout from
+the output ring -- the smallest counterpart to `ide.js`.
+
+**Local app packages (`#:local-pkgs`).** Catalog packages come from `#:pkgs`
+(by name); an app's own packages are passed as **source dirs** in
+`#:local-pkgs` and installed into `share/pkgs` via `raco pkg install --copy`,
+so app code can live anywhere -- the clone stays pure upstream-delta. The
+orchestrator threads them as the `LOCAL_PKGS` make var into `main.zuo`'s
+`install-base-pkgs`, which (per package) `update --copy`s an already-present one
+or `install --copy`s a new one (neither `raco` verb is idempotent on its own).
+A `--link` from an outside path would record an absolute *host* path in
+`links.rktd` that doesn't exist in MEMFS, which is why local packages must be
+**copied** into `share/pkgs` (where the wholesale wasm preload picks them up).
+Their contents feed the build-key, so editing a local package rebuilds.
+
+The repo's own `web-repl` helper package is itself a `#:local-pkgs` entry now:
+it lives at `packages/web-repl` (no longer `overlay-local/`, no longer in the
+clone), and the default IDE build ships it via `default-local-pkgs`
+(`build/config.rkt`). The binary-catalog path still injects it into the stripped
+catalog (`inject-local-packages!`, `build/pkgs.rkt`), since that flow installs
+from the catalog rather than via `LOCAL_PKGS`.
+
+#### Runtime cache (build isolation)
+
+The runtime binary + package payload are fully determined by the **pinned
+upstream SHA**, a **hash of the delta** (`patches/` + `overlay/` +
+`overlay-local/`), the native-dep selection (**`WASM_DEPS`**), and the package
+set (**`PKGS`**) -- *not* by the page surface. `build/cache.rkt` hashes those
+into a short **build-key** and caches the runtime set (`runtime-output-names`)
+under `.work/runtime-cache/<key>/`. `build-runtime` (`build/stages.rkt`) checks
+it first:
+
+- **cache hit** -- a config built before is reassembled by *copying from the
+  cache*: no `make`, no relink, and no mutation of the shared clone. Two apps
+  with different configs therefore get separate cache entries and never clobber
+  each other in the one clone -- the "build isolation" the roadmap calls for.
+- **cache miss** -- a normal `make wasm` into the clone, then the runtime set is
+  snapshotted into the cache for next time.
+
+Only the heavy runtime set is cached; glue (`runtime-glue/`) and the page surface
+(`surfaces/…`, an app's `public/`) are repo-side and copied fresh on every
+assemble, so editing a surface or `serve.rkt` is picked up immediately and never
+invalidates the cache. Editing the delta (any patch/overlay file) *does* change
+the build-key, so the cache self-invalidates. `--force` (CLI) / `#:force?`
+(`make-wasm-racket`) bypasses the cache and forces a real build. Entries are
+large (~100 MB each); they live under the disposable `.work/`.
+
+> Note: `make wasm` already ships packages *out of the link* (share.data), so a
+> `PKGS`-only change never relinks even on a cache miss -- it reinstalls +
+> repacks. The cache adds the cross-config isolation on top of that.
 
 `wasm-setup` (a `cs/c/build.zuo` target) assembles the cross-compiler
 xpatch (`compile-xpatch.tpb32l`/`library-xpatch.tpb32l`, via the shared
@@ -794,7 +872,10 @@ pthreads of its own):
 
 `make wasm`'s `wasm` target builds the browser runtime alongside the
 node one (it adds `wasm_shell_io.o`, the `--post-js shell-tty.js`, and
-the ring exports, and stages the page assets). The underlying link is
+the ring exports). It does **not** stage the page assets -- those
+(`shell-worker.js`, `serve.rkt`, the surface `ide.*`) are copied into
+`dist/` from the repo by the orchestrator's `collect-outputs`, not from the
+clone (see the runtime/surface split note near the top). The underlying link is
 (the example paths below predate the move to `build/cs/c/wasm/`, but the
 flags are what the `wasm` target emits):
 
@@ -1150,11 +1231,15 @@ The selector is the build's **`PKGS`** variable (see `buildit.sh`:
 then runs `raco pkg install <REQUIRED_PKGS> <PKGS>` with
 `--deps search-auto`, so transitive deps come along.
 
-1. **Local package?** Put its source under `pkgs/<name>/` (a directory
-   with an `info.rkt`); it's auto-catalogued. **Catalog package**
-   (like `draw-lib`)? Skip this -- it resolves from the configured
-   catalog. Either way, check `info.rkt`'s `deps` for native-library
-   needs (see "FFI dependencies" below).
+1. **Local package?** The orchestrator route is **`#:local-pkgs`** (a path
+   anywhere on disk), `--copy`-installed into `share/pkgs` -- the clone stays
+   pure upstream-delta. See "Local app packages" above; this is how `web-repl`
+   (now at `packages/web-repl`) ships. (The older in-tree route -- drop the
+   source under the clone's `pkgs/<name>/` so `pkg/dirs-catalog` catalogs it and
+   add `<name>` to `PKGS` -- still works for packages that genuinely live in the
+   tree.) **Catalog package** (like `draw-lib`)? Skip this -- it resolves from
+   the configured catalog. Either way, check `info.rkt`'s `deps` for
+   native-library needs (see "FFI dependencies" below).
 2. Add `<name>` to `PKGS` in the build invocation.
 3. Rebuild (`make wasm` / `buildit.sh`). The install writes
    `racket/share/pkgs/<name>` + its links entry; the link preloads the

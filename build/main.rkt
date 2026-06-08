@@ -7,6 +7,7 @@
 ;;   sync                      clone/fast-forward upstream to the pinned commit
 ;;   apply [--check]           apply patches/ + overlay/ into the clone
 ;;   build  [opts]             full cross-build (ensure clone+delta, then make) -> dist/
+;;   app <dir> [opts]          build a custom app from <dir>/app.rkt -> <dir>/dist
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
@@ -25,7 +26,8 @@
          "upstream.rkt"
          "patches.rkt"
          "stages.rkt"
-         "pkgs.rkt")
+         "pkgs.rkt"
+         "app.rkt")
 
 ;; --- option parsing for build-like subcommands --------------------------
 
@@ -45,6 +47,9 @@
          [("--wasm-deps") (val 'wasm-deps)]
          [("--scheme")    (val 'scheme)]
          [("--racket")    (val 'racket)]
+         [("--dest")      (val 'dest)]
+         ;; Boolean flag: bypass the runtime cache and force a real build.
+         [("--force")     (loop (cdr as) (hash-set h 'force? #t))]
          [else (error 'build "unknown option: ~a" a)])])))
 
 ;; --- subcommands --------------------------------------------------------
@@ -57,6 +62,19 @@
 (define (cmd-build args) (build (parse-build-opts args)))
 
 (define (cmd-rebuild-catalog args) (rebuild-binary-catalog (parse-build-opts args)))
+
+;; Build a custom app: `app <dir> [--dest <dir>] [--scheme <p>] [--racket <p>]`.
+;; <dir>/app.rkt provides `app` (a hash); output lands in <dir>/dist (or --dest).
+(define (cmd-app args)
+  (when (null? args)
+    (error 'app "usage: app <dir> [--dest <dir>] [--scheme <path>] [--racket <path>]"))
+  (define dir (car args))
+  (define opts (parse-build-opts (cdr args)))
+  (run-app-manifest dir
+                    #:dest   (hash-ref opts 'dest #f)
+                    #:scheme (hash-ref opts 'scheme #f)
+                    #:racket (hash-ref opts 'racket #f)
+                    #:force? (hash-ref opts 'force? #f)))
 
 ;; Repack only the browser package data file (share.data/share.data.js) from
 ;; the already-installed share/pkgs tree, then refresh dist/. The point of the
@@ -84,6 +102,7 @@
   (list (cons "sync"  cmd-sync)
         (cons "apply" cmd-apply)
         (cons "build" cmd-build)
+        (cons "app" cmd-app)
         (cons "rebuild-binary-catalog" cmd-rebuild-catalog)
         (cons "pack-pkgs" cmd-pack-pkgs)
         (cons "serve" cmd-serve)

@@ -121,7 +121,7 @@ index 84c516d6b0..b1b5eeedd0 100644
  
    (define (remove-early-load-dlls)
      ;; On Windows, remove DLLs that might be loaded by `raco` on startup,
-@@ -419,22 +478,56 @@
+@@ -419,22 +478,78 @@
      (define jobs (get-jobs))
  
      (unless also?
@@ -184,7 +184,29 @@ index 84c516d6b0..b1b5eeedd0 100644
 +             "--no-setup" "--pkgs" "--skip-installed" "--scope" "installation"
 +             "--deps" "search-auto"
 +             required-pkgs
-+             (pkgs-to-install))]))
++             (pkgs-to-install))])
++    ;; Local app packages (LOCAL_PKGS): absolute source dirs --copy-installed
++    ;; into share/pkgs so the wholesale wasm preload ships them (a --link from
++    ;; an outside path would record an absolute host path absent in MEMFS). The
++    ;; catalog/named PKGS above install first; these resolve deps via --deps
++    ;; search-auto. `install` errors on an already-present package and `update`
++    ;; on an absent one, so pick per package by checking share/pkgs/<name>;
++    ;; `update --copy` re-copies an edited local package. Runs after EITHER
++    ;; cond branch (source install or binary catalog).
++    (for-each
++     (lambda (p)
++       (define name (~a (cdr (split-path p))))
++       (define installed? (directory-exists? (at-source (~a "racket/share/pkgs/" name))))
++       (raco vars "pkg" (if installed? "update" "install")
++             (if jobs (list "-j" (~a jobs)) '())
++             "--copy" "--no-setup" "--scope" "installation"
++             ;; Resolve the local package's own deps from the binary catalog
++             ;; when one is present (it has them, and it keeps the resolve
++             ;; offline); otherwise the default catalogs (source build).
++             (if (directory-exists? bin-catalog) (list "--catalog" bin-catalog) '())
++             "--deps" "search-auto"
++             p))
++     (shell->strings (lookup 'LOCAL_PKGS))))
 +
    (define (pkgs-catalog token vars)
      (racket vars

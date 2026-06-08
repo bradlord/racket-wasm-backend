@@ -148,7 +148,7 @@ index b4e92eecc6..6810122352 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +775,257 @@
+@@ -691,6 +775,253 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -389,18 +389,14 @@ index b4e92eecc6..6810122352 100644
 +                                "FS_createPath,FS_createDataFile")
 +                            "-sFORCE_FILESYSTEM=1" "-lidbfs.js")
 +                      dep-uflags))
++                   ;; The link emits ONLY the runtime (scheme*.{js,wasm,data})
++                   ;; plus the glue baked in above (node-*.js, idbfs-init.js,
++                   ;; shell-tty.js). Surface assets (ide.*) and host-side glue
++                   ;; (shell-worker.js, serve.rkt) are no longer staged here --
++                   ;; the orchestrator (build/stages.rkt) copies them from the
++                   ;; repo so a surface can be swapped without touching the link.
 +                   (shell/wait (map string->shell node-args))
-+                   (shell/wait (map string->shell browser-args))
-+                   ;; Stage the IDE page assets next to scheme-web.*. Keep
-+                   ;; this list in sync with
-+                   ;; racket/src/ChezScheme/install-wasm-browser-shell.rkt (the
-+                   ;; legacy build.sh path uses that script). shell-tty.js is
-+                   ;; intentionally absent -- it is baked in via --post-js above.
-+                   (for-each (lambda (name)
-+                               (cp (build-path wasm-shell name)
-+                                   (build-path out-dir name)))
-+                             (list "ide.html" "ide.js"
-+                                   "shell-worker.js" "serve.rkt")))
++                   (shell/wait (map string->shell browser-args)))
 +                :recur]
 +
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))

@@ -5,6 +5,9 @@
 # Collected build outputs.
 /dist/
 
+# Per-app build outputs (racket build/main.rkt app <dir> -> <dir>/dist).
+/examples/*/dist/
+
 # Transient build log.
 /build.log
 
