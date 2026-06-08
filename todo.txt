@@ -1,17 +1,47 @@
 Overall Goal: The scripts in this repo should let me create custom Racket/WASM-based web applications, rather than just the IDE/web-repl and the node repl. Eventually, I should be able to point to a directory with HTML/JS/Racket and some configuration (preferably written in racket), and have it output a usable web page (including the WASM and .data files needed to run it.)
 
+=== Progress (branch wasm-custom-apps; see build-wasm.md + ~/.claude/plans) ===
+The core goal is MET: `racket build/main.rkt app <dir>` (or make-wasm-racket)
+builds an arbitrary HTML/JS/Racket app + a racket config into dist/.
+  Phase 0 (commit 887c17f) - decoupled the runtime binary from the page surface;
+    the emcc link emits only the runtime, collect-outputs assembles dist/ from
+    runtime + repo-side glue (runtime-glue/) + a surface dir.
+  Phase 1 (887c17f) - make-wasm-racket API + `app <dir>` subcommand + app.rkt
+    manifest; examples/hello is a minimal non-IDE app.
+  Phase 2 (887c17f) - local packages via `raco pkg install --copy` (out of clone).
+  Phase 3 (887c17f) - content-complete runtime cache keyed by build inputs, so
+    differing app configs don't fight over the one clone.
+  Phase 4 (commit fdc00fb) - the IDE is now just an app (apps/ide), built by the
+    same make-wasm-racket path (dogfood). Validated via a full binary-catalog
+    rebuild from cleared caches.
+Still open: main-thread build variant, RACKET=auto, GitHub deploy workflow,
+semi-permanent install dir for cheap single-package adds, extra-C / pre-post-js
+hooks, finishing the wasm-shell/ extraction. (See annotations below.)
+
 - Review files in overlay and patches folder for pieces that can be removed or used outside of racket repo.
     - We probably don't need any gitignore updates on the racket repo, since we won't be committing.
-    - build-wasm-binary-pkgs.rkt should probably live outside of the racket repo checkout.
-    - ~everything in wasm-shell/ can be outside racket repo checkout
-    - Dependency building code? 
+    - build-wasm-binary-pkgs.rkt should probably live outside of the racket repo checkout.   [not done]
+    - PARTIAL. ~everything in wasm-shell/ can be outside racket repo checkout
+        DONE (Phase 0): shell-worker.js + serve.rkt -> runtime-glue/, ide.* -> apps/ide/public/.
+        Still in overlay/wasm-shell (they are emcc link inputs, baked into the binary):
+        node-locate-file.js, node-tty.js, node-load-share.js, shell-tty.js, idbfs-init.js,
+        plus the test files (run-tests.sh, perf-bench.rktl, draw-stack-test.rkt).
+    - Dependency building code?   [not done]
 - Investigate a separate build for a main thread version vs the worker thread version.
 - Build the same-version host racket automatically. (RACKET=auto)
 - Github workflow to build and deploy web-repl
 - Improve process for building binary package catalog. I think we could keep around a semi-permanent directory to which we'd install the full t32pbl packages, and then extract the binary catalog from there. That way, adding a single new package wouldn't require re-building every other package.
-- Improve handling of locally defined packages. Instead of adding them to the racket repo's pkgs directory, maybe just `raco pkg install --copy --binary(?) <path>`.
+    [not done. Phase 3's runtime cache is whole-config (no clobbering between apps) but NOT
+     incremental single-package adds; this semi-permanent install dir is still open.]
+- DONE (Phase 2). Improve handling of locally defined packages. Instead of adding them to the racket repo's pkgs directory, maybe just `raco pkg install --copy --binary(?) <path>`.
+    Local packages are now passed as #:local-pkgs paths -> the LOCAL_PKGS make var ->
+    main.zuo `raco pkg install/update --copy` into share/pkgs (clone stays pure upstream).
+    web-repl moved overlay-local/pkgs/web-repl -> packages/web-repl. Used --copy (not --binary):
+    the cross raco setup compiles the copied source to tpb32l .zo, which ships in share.data.
 - Instead of passing the packages to install via PKGS, maybe we should set PKGS= (i.e., blank) when building and then install requested packages via raco pkg install
     - Maybe reuse this bare racket directory as a starting point for later builds
+    [not done. We still install named catalog PKGS up front + local-pkgs via --copy; a bare
+     PKGS= base reused across builds is the semi-permanent-dir idea above.]
 - DONE. Maybe include the packages as a whole separate emscripten data file so we don't need to re-link every time.
     python $EMSDK/upstream/emscripten/tools/file_packager.py \
         share.data \
@@ -22,7 +52,11 @@ Overall Goal: The scripts in this repo should let me create custom Racket/WASM-b
 
 - WON'T DO. ~I wonder if we could do a single link to generate a racket.wasm, and then build scheme.{html,js} and scheme-web.{html,js} with a separate emcc pointing to racket.wasm. The idea being to avoid multiple links just because they have different prejs/postjs/etc.~ (This probably wouldn't be worth the effort in the short term, since it would save ~20 seconds per build.)
 
-- Make this scriptable via racket. I should be able to define apps using instructions along these lines:
+- DONE (Phase 1). Make this scriptable via racket. I should be able to define apps using instructions along these lines:
+    Implemented as build/app.rkt `make-wasm-racket` (#:dest #:pkgs #:wasm-libs #:local-pkgs
+    #:public). An app dir carries app.rkt providing an `app` hash; `racket build/main.rkt
+    app <dir>` builds it. The #:public tree is copied into dist/ (the copy-files step).
+    NOT YET: additional C files, and --pre-js/--post-js hooks (the commented questions below).
   (define (build-web-repl)
     (define build-dir "./dest")
     (define pkgs '(draw-lib pict-lib))
