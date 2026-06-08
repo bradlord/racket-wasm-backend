@@ -171,7 +171,7 @@ runtime/surface decoupling (project roadmap Phase 0), the `wasm` target no
 longer stages any page assets next to the binary. The host-side glue
 (`shell-worker.js`, the COOP/COEP dev server `serve.rkt`) and the page
 **surface** (`ide.html`/`.js`, the DrRacket-like IDE) live **repo-side**, not
-in the clone -- under `runtime-glue/` and `surfaces/ide/` respectively -- and
+in the clone -- under `runtime-glue/` and `apps/ide/public/` respectively -- and
 the orchestrator's `collect-outputs` (`build/stages.rkt`) copies them into
 `dist/` alongside the runtime. This is the seam that lets a different surface
 ship against the same runtime binary without re-linking; see the project
@@ -196,14 +196,24 @@ runtime + glue, plus a different page surface, into a different output dir."
                   #:public "app/public")  ; the page surface (html/js/rkt)
 ```
 
-It wraps `build-runtime` (`build/stages.rkt`) -- the same engine the CLI `build`
-uses -- differing only in the output `dest` and the page `surface-dir`. An app
-dir carries an `app.rkt` manifest that `(provide app)` a hash of those fields
-(`'pkgs 'wasm-libs 'public 'local-pkgs`); `racket build/main.rkt app <dir>`
-loads it (`run-app-manifest`) and builds into `<dir>/dist` (override `--dest`).
+It wraps `build-runtime` (`build/stages.rkt`), differing only in the output
+`dest` and the page `surface-dir`. An app dir carries an `app.rkt` manifest that
+`(provide app)` a hash of those fields (`'pkgs 'wasm-libs 'public 'local-pkgs`);
+`read-app-manifest` normalizes it and `run-app-manifest` builds it.
+`racket build/main.rkt app <dir>` builds into `<dir>/dist` (override `--dest`).
 `examples/hello/` is the minimal example: a non-IDE page that seeds a `main.rkt`
 into MEMFS, runs it (`argv ["-u" "/tmp/main.rkt"]`), and drains its stdout from
 the output ring -- the smallest counterpart to `ide.js`.
+
+**The IDE is just an app (dogfood).** There is no bespoke IDE build:
+`racket build/main.rkt build` builds **`apps/ide`** through this same path
+(`cmd-build` -> `run-app-manifest ide-app-dir` -> `make-wasm-racket`). The IDE's
+package / native-dep / surface config lives in `apps/ide/app.rkt` (the single
+source of truth -- `build/config.rkt` no longer hardcodes a default package
+set), and its page is `apps/ide/public/{ide.html,ide.js}`. The binary-catalog
+rebuild (`build/pkgs.rkt`) reads the same manifest, so the IDE's package set is
+defined in exactly one place. To ship a different surface or dep set, write an
+app and `build` it -- the IDE has no privileged path.
 
 **Local app packages (`#:local-pkgs`).** Catalog packages come from `#:pkgs`
 (by name); an app's own packages are passed as **source dirs** in
@@ -242,7 +252,7 @@ it first:
   snapshotted into the cache for next time.
 
 Only the heavy runtime set is cached; glue (`runtime-glue/`) and the page surface
-(`surfaces/…`, an app's `public/`) are repo-side and copied fresh on every
+(an app's `public/`) are repo-side and copied fresh on every
 assemble, so editing a surface or `serve.rkt` is picked up immediately and never
 invalidates the cache. Editing the delta (any patch/overlay file) *does* change
 the build-key, so the cache self-invalidates. `--force` (CLI) / `#:force?`

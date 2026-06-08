@@ -23,12 +23,16 @@
 (define overlay-dir       (at-root "overlay"))
 (define overlay-local-dir (at-root "overlay-local"))
 ;; Repo-side, NOT copied into the clone: host-side runtime glue (browser worker
-;; bootstrap + dev server) and the page surfaces. The emcc link no longer stages
-;; these; the orchestrator's collect-outputs copies them into dist/ directly, so
-;; a surface can be swapped without touching the (expensive) link. See
-;; build-wasm.md and the project roadmap.
+;; bootstrap + dev server), copied into dist/ by the orchestrator's
+;; collect-outputs so a surface can be swapped without touching the (expensive)
+;; link. See build-wasm.md and the project roadmap.
 (define runtime-glue-dir  (at-root "runtime-glue"))
-(define surfaces-dir      (at-root "surfaces"))
+
+;; The repo's canonical app: the DrRacket-like IDE / web-repl. `build` builds
+;; this app (through the generic make-wasm-racket path -- it is the dogfood, not
+;; a bespoke build), and the binary-catalog rebuild reads its package/dep set.
+;; Its config lives in apps/ide/app.rkt; its page surface in apps/ide/public.
+(define ide-app-dir (at-root "apps" "ide"))
 (define work-dir      (at-root ".work"))
 (define dist-dir      (at-root "dist"))
 ;; The cloned upstream tree.
@@ -51,22 +55,11 @@
 (define upstream-url  (lock-ref 'url))
 (define upstream-sha  (lock-ref 'sha))
 
-;; --- build defaults (from the fork's buildit.sh active line) ------------
-
-;; Catalog packages cross-installed into the image (by name). List `-lib`
-;; implementation packages, not metapackages (see build-wasm.md "Binary-only
-;; package preload").
-(define default-pkgs '("draw-lib" "datalog" "pict-lib"))
-
-;; Local (path) packages the default IDE build ships, installed via
-;; `raco pkg install --copy` (build/app.rkt `make-wasm-racket` #:local-pkgs).
-;; web-repl is the WASM browser-surface helper collection; it lives in-repo at
-;; packages/web-repl, NOT in the clone -- the clone stays pure upstream-delta.
-(define default-local-pkgs (list (at-root "packages" "web-repl")))
-
-;; Native C library deps. "draw" is the cairo/pango stack alias; libffi is
-;; always built regardless.
-(define default-wasm-deps "draw")
+;; --- build defaults -----------------------------------------------------
+;;
+;; The IDE app's package / native-dep / surface config lives in its manifest
+;; (apps/ide/app.rkt), read via build/app.rkt `read-app-manifest` -- not here.
+;; This keeps a single source of truth for what the default build ships.
 
 ;; Host toolchains: overridable on the CLI. #f means "resolve/build".
 (define default-host-scheme #f)   ; native *threaded* Chez (cross-compiler host)

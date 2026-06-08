@@ -29,7 +29,7 @@
   (cond
     [(not (directory-exists? dir)) ""]
     [else
-     (define base (path->complete-path dir))
+     (define base (simplify-path (path->complete-path dir)))
      (define lines
        (sort
         (for/list ([p (in-directory dir)] #:when (file-exists? p))

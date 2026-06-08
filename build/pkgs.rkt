@@ -11,9 +11,18 @@
          "upstream.rkt"
          "patches.rkt"
          "toolchain.rkt"
-         "stages.rkt")
+         "stages.rkt"
+         "app.rkt")
 
 (provide rebuild-binary-catalog)
+
+;; A list of symbols/strings -> the space-joined make-var string. Mirrors
+;; build/app.rkt's `->names` (the binary path drives `make-wasm` directly with
+;; strings, where the app path goes through make-wasm-racket).
+(define (->names xs)
+  (string-join (for/list ([x (in-list xs)])
+                 (if (symbol? x) (symbol->string x) (format "~a" x)))
+               " "))
 
 ;; Paths inside the clone that the rebuild must clear for a clean source tree.
 (define (clone-path . parts) (apply build-path clone-dir parts))
@@ -30,17 +39,17 @@
 
 ;; The strip (build-wasm-binary-pkgs.rkt) builds the binary catalog from
 ;; `installed-pkg-names`, which surfaces catalog-installed and in-tree static-root
-;; packages but NOT the repo's local (path) packages (web-repl) -- so the binary
-;; consume can't find them. After the strip, inject every `default-local-pkgs`
-;; package into the catalog as source (they're tiny and pure; the consume's
-;; `raco setup` compiles them for tpb32l alongside their now-present deps) and
-;; rebuild the catalog index. See build-wasm.md "web-repl" / "Binary-only
-;; package preload".
-(define (inject-local-packages! racket)
+;; packages but NOT the app's local (path) packages (web-repl) -- so the binary
+;; consume can't find them. After the strip, inject each local package
+;; (`local-pkg-paths`, from the app manifest) into the catalog as source (they're
+;; tiny and pure; the consume's `raco setup` compiles them for tpb32l alongside
+;; their now-present deps) and rebuild the catalog index. See build-wasm.md
+;; "web-repl" / "Binary-only package preload".
+(define (inject-local-packages! racket local-pkg-paths)
   (define cache-pkgs (clone-path "racket" "src" ".wasm-pkgs-cache" "pkgs"))
   (define catalog (clone-path "racket" "src" ".wasm-pkgs-cache" "catalog"))
   (define names
-    (for/list ([src (in-list default-local-pkgs)]
+    (for/list ([src (in-list local-pkg-paths)]
                #:when (directory-exists? src))
       (define name (path->string (file-name-from-path src)))
       (define dest (build-path cache-pkgs name))
@@ -59,10 +68,14 @@
          #:args (list "-l-" "pkg/dirs-catalog"
                       (path->string catalog) (path->string cache-pkgs)))))
 
-;; opts: same shape as stages.rkt's `build` (pkgs/wasm-deps/scheme/racket).
+;; Rebuild the IDE app's binary catalog. opts may override pkgs/wasm-deps/
+;; scheme/racket; otherwise the IDE app manifest (apps/ide/app.rkt) is the
+;; source of truth for the package / native-dep / local-package set.
 (define (rebuild-binary-catalog opts)
-  (define pkgs      (hash-ref opts 'pkgs (string-join default-pkgs " ")))
-  (define wasm-deps (hash-ref opts 'wasm-deps default-wasm-deps))
+  (define m (read-app-manifest ide-app-dir))
+  (define pkgs      (hash-ref opts 'pkgs (->names (hash-ref m 'pkgs))))
+  (define wasm-deps (hash-ref opts 'wasm-deps (->names (hash-ref m 'wasm-libs))))
+  (define local-pkg-paths (hash-ref m 'local-pkgs))  ; absolute source dirs
   (unless (directory-exists? (build-path clone-dir ".git")) (sync))
   (apply-delta)
   (define scheme (resolve-host-scheme (hash-ref opts 'scheme #f)))
@@ -73,9 +86,7 @@
   ;; this the binary image would drop them. See build-wasm.md "Local app
   ;; packages".
   (define local-pkgs
-    (string-join (map (lambda (p) (path->string (path->complete-path p)))
-                      default-local-pkgs)
-                 " "))
+    (string-join (map path->string local-pkg-paths) " "))
   (define (mk #:target [t "wasm"])
     (make-wasm #:target t #:scheme scheme #:racket racket
                #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs))
@@ -90,7 +101,7 @@
   ;;     then inject the repo's local packages (web-repl) the strip can't see.
   (info-msg "stage 3/4: build binary-only catalog (make wasm-binary-pkgs)")
   (mk #:target "wasm-binary-pkgs")
-  (inject-local-packages! racket)
+  (inject-local-packages! racket local-pkg-paths)
   ;; (4) Consume: clean-install from the catalog (catalog present -> .zo-only).
   (info-msg "stage 4/4: binary consume (make wasm)")
   (mk)

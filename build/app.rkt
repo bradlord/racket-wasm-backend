@@ -23,7 +23,7 @@
          "config.rkt"
          "stages.rkt")
 
-(provide make-wasm-racket run-app-manifest)
+(provide make-wasm-racket run-app-manifest read-app-manifest)
 
 ;; A list of symbols/strings -> the space-joined make-var string make-wasm wants.
 ;; '() / "" means "none" (libffi-only for wasm-libs; no extra packages).
@@ -70,15 +70,16 @@
                  #:force?      force?))
 
 ;; Load an app manifest module (`<app-dir>/app.rkt` providing `app`, a hash of
-;; the make-wasm-racket fields) and build it. `dest` defaults to <app-dir>/dist;
-;; the manifest's `public` is resolved relative to the app dir. scheme/racket
-;; pass through from the CLI.
-(define (run-app-manifest app-dir
-                          #:dest [dest #f]
-                          #:scheme [scheme #f]
-                          #:racket [racket #f]
-                          #:force? [force? #f])
-  (define dir (->path app-dir))
+;; the make-wasm-racket fields) and return its fields normalized & resolved
+;; against the app dir: 'pkgs / 'wasm-libs (symbol/string lists as-is),
+;; 'local-pkgs (absolute paths), 'public (absolute path or #f), 'dir. This is
+;; the single source of truth for an app's build config, shared by the build
+;; (`run-app-manifest`) and the binary-catalog rebuild (`build/pkgs.rkt`), so
+;; the IDE's package/dep set lives in one place: apps/ide/app.rkt.
+(define (read-app-manifest app-dir)
+  ;; Absolute + simplified, so it works as a base for app-relative paths whether
+  ;; the caller passed an absolute (ide-app-dir) or relative (CLI `app <dir>`) one.
+  (define dir (simplify-path (path->complete-path (->path app-dir))))
   (unless (directory-exists? dir)
     (error 'app "no app directory at ~a" dir))
   (define manifest (build-path dir "app.rkt"))
@@ -89,14 +90,30 @@
     (error 'app "~a must provide `app` as a hash of fields, got: ~s" manifest spec))
   (define (ref k [d '()]) (hash-ref spec k d))
   (define public (ref 'public #f))
+  ;; Resolve app-relative paths to absolute *simplified* form (collapse `..`),
+  ;; so e.g. apps/ide/../../packages/web-repl == the repo's packages/web-repl --
+  ;; matters because the local-package path feeds the build-key.
+  (define (resolve p) (simplify-path (path->complete-path (->path p) dir)))
+  (hash 'dir        dir
+        'pkgs       (ref 'pkgs '())
+        'wasm-libs  (ref 'wasm-libs '())
+        'local-pkgs (map resolve (ref 'local-pkgs '()))
+        'public     (and public (resolve public))))
+
+;; Load an app manifest and build it. `dest` defaults to <app-dir>/dist;
+;; scheme/racket/force pass through from the CLI.
+(define (run-app-manifest app-dir
+                          #:dest [dest #f]
+                          #:scheme [scheme #f]
+                          #:racket [racket #f]
+                          #:force? [force? #f])
+  (define m (read-app-manifest app-dir))
   (make-wasm-racket
-   #:dest       (or dest (build-path dir "dist"))
-   #:pkgs       (ref 'pkgs '())
-   #:wasm-libs  (ref 'wasm-libs '())
-   ;; Resolve local-package + surface paths relative to the app dir.
-   #:local-pkgs (for/list ([p (in-list (ref 'local-pkgs '()))])
-                  (path->complete-path (->path p) dir))
-   #:public     (and public (path->complete-path (->path public) dir))
+   #:dest       (or dest (build-path (hash-ref m 'dir) "dist"))
+   #:pkgs       (hash-ref m 'pkgs)
+   #:wasm-libs  (hash-ref m 'wasm-libs)
+   #:local-pkgs (hash-ref m 'local-pkgs)
+   #:public     (hash-ref m 'public)
    #:scheme     scheme
    #:racket     racket
    #:force?     force?))

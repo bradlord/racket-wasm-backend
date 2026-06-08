@@ -59,7 +59,16 @@
 (define (cmd-apply args)
   (apply-delta #:check-only? (and (member "--check" args) #t)))
 
-(define (cmd-build args) (build (parse-build-opts args)))
+;; `build` builds the repo's canonical app -- the IDE (apps/ide) -- into dist/,
+;; through the same generic make-wasm-racket path any custom app uses (the
+;; dogfood). For a different config, write an app and use `app <dir>`.
+(define (cmd-build args)
+  (define opts (parse-build-opts args))
+  (run-app-manifest ide-app-dir
+                    #:dest   dist-dir
+                    #:scheme (hash-ref opts 'scheme #f)
+                    #:racket (hash-ref opts 'racket #f)
+                    #:force? (hash-ref opts 'force? #f)))
 
 (define (cmd-rebuild-catalog args) (rebuild-binary-catalog (parse-build-opts args)))
 

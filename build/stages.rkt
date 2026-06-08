@@ -16,7 +16,7 @@
          "toolchain.rkt"
          "cache.rkt")
 
-(provide build build-runtime collect-outputs make-wasm pack-share-data)
+(provide build-runtime collect-outputs make-wasm pack-share-data)
 
 (define (emsdk-ready?)
   (and (find-executable-path "emcc")
@@ -151,7 +151,7 @@
 ;; defaults to the IDE (surfaces/ide) -- Phase 1's make-wasm-racket overrides
 ;; #:surface-dir / #:dest to assemble an arbitrary app from its own public/ dir.
 (define (collect-outputs #:dest        [dest dist-dir]
-                         #:surface-dir [surface-dir (build-path surfaces-dir "ide")]
+                         #:surface-dir [surface-dir (build-path ide-app-dir "public")]
                          #:runtime-src [runtime-src (clone-wasm-out)])
   (unless (directory-exists? runtime-src)
     (error 'collect-outputs "no runtime output dir at ~a (did the link run / cache exist?)" runtime-src))
@@ -184,7 +184,7 @@
                        #:local-pkgs [local-pkgs '()]
                        #:scheme [scheme-opt #f] #:racket [racket-opt #f]
                        #:dest [dest dist-dir]
-                       #:surface-dir [surface-dir (build-path surfaces-dir "ide")]
+                       #:surface-dir [surface-dir (build-path ide-app-dir "public")]
                        #:force? [force? #f])
   ;; The runtime is fully determined by (upstream-sha, delta, wasm-deps, pkgs,
   ;; local-pkgs). If we've built this exact config before, assemble straight from
@@ -215,14 +215,3 @@
      (snapshot-runtime! key (clone-wasm-out))
      (collect-outputs #:dest dest #:surface-dir surface-dir
                       #:runtime-src (clone-wasm-out))]))
-
-;; Full build (CLI). opts is a hash with optional keys:
-;;   'pkgs 'wasm-deps (strings), 'scheme 'racket (paths)
-;; Produces dist/ with the default IDE surface.
-(define (build opts)
-  (build-runtime #:pkgs       (hash-ref opts 'pkgs (string-join default-pkgs " "))
-                 #:wasm-deps   (hash-ref opts 'wasm-deps default-wasm-deps)
-                 #:local-pkgs  default-local-pkgs
-                 #:scheme      (hash-ref opts 'scheme #f)
-                 #:racket      (hash-ref opts 'racket #f)
-                 #:force?      (hash-ref opts 'force? #f)))
