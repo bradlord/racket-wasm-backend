@@ -35,11 +35,11 @@ async function waitForHttp(url, timeoutMs) {
   }
 }
 
-// Spawn `racket build/main.rkt serve <port>` (serves dist/). Resolves to a
+// Spawn `racket build/main.rkt serve dist <port>` (serves dist/). Resolves to a
 // handle with { port, baseURL, stop() }.
 export async function startServer({ port, timeoutMs = 30_000 } = {}) {
   port = port || (await freePort());
-  const proc = spawn('racket', [resolve(repoRoot, 'build/main.rkt'), 'serve', String(port)], {
+  const proc = spawn('racket', [resolve(repoRoot, 'build/main.rkt'), 'serve', 'dist', String(port)], {
     cwd: repoRoot,
     // Quiet: serve.rkt doesn't trap SIGTERM, so killing it on stop() would
     // otherwise print a backtrace to our stderr. Startup failures still surface
@@ -50,7 +50,7 @@ export async function startServer({ port, timeoutMs = 30_000 } = {}) {
     throw new Error(`failed to start serve.rkt (is racket on PATH? is dist/ built?): ${e.message}`);
   });
   const baseURL = `http://127.0.0.1:${port}`;
-  await waitForHttp(`${baseURL}/ide.html`, timeoutMs);
+  await waitForHttp(`${baseURL}/`, timeoutMs);
   return {
     port,
     baseURL,

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { gotoIde, bootRepl, evalRepl, loadAndRun, canvasCount, status } from '../lib/ide.mjs';
 
 // One worker boot per test (process-per-run, like the IDE). These exercise the
-// actual ide.html surface end to end: cross-origin isolation, the SAB stdin/
+// actual index.html surface end to end: cross-origin isolation, the SAB stdin/
 // stdout rings, the submission REPL, racket/draw + the canvas blit channel, and
 // the web-repl helpers.
 

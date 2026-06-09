@@ -8,9 +8,10 @@
 ;;
 ;; Output lands in examples/hello/dist (override with --dest). Serve that dir
 ;; with COOP/COEP headers (serve.rkt is repo-side glue, run it in place) and
-;; open hello.html:
+;; open / (the page is index.html):
 ;;
-;;   cd examples/hello/dist && racket ../../../runtime-glue/serve.rkt 8123
+;;   racket build/main.rkt serve examples/hello/dist 8123
+;;   # or: cd examples/hello/dist && racket ../../../runtime-glue/serve.rkt 8123
 ;;
 ;; The manifest is a real Racket module that `(provide app)` a hash of fields
 ;; (see build/app.rkt `make-wasm-racket`); it is free to compute them.

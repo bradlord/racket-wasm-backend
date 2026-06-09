@@ -26,9 +26,9 @@ export default defineConfig({
   },
   // Serve dist/ with the COOP/COEP headers SharedArrayBuffer needs.
   webServer: {
-    command: `racket ${resolve(repoRoot, 'build/main.rkt')} serve ${PORT}`,
+    command: `racket ${resolve(repoRoot, 'build/main.rkt')} serve dist ${PORT}`,
     cwd: repoRoot,
-    url: `${baseURL}/ide.html`,
+    url: `${baseURL}/`,
     reuseExistingServer: !process.env.CI,
     timeout: 60_000,
   },

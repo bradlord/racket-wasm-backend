@@ -5,7 +5,7 @@ A standalone build of **Racket CS for WebAssembly** (Emscripten), expressed as a
 at a pinned commit (`upstream.lock`), applies a small set of source patches
 (`patches/`) and additive files (`overlay/`), and drives the cross-build end to
 end, emitting a node runtime (`scheme.{js,wasm,data}`) and a browser/IDE surface
-(`scheme-web.*` + `ide.html`).
+(`scheme-web.*` + `index.html`).
 
 The architecture, build stages, dependency recipes, and known issues are
 documented in [`build-wasm.md`](build-wasm.md). Read it before working in here.
@@ -34,5 +34,5 @@ racket build/main.rkt apply         # apply patches/ + overlay/ into the clone
 racket build/main.rkt build \
   --pkgs "draw-lib datalog pict-lib" --wasm-deps draw \
   --scheme <host-chez> --racket <host-racket>
-racket build/main.rkt serve 8123    # COOP/COEP server -> http://127.0.0.1:8123/ide.html
+racket build/main.rkt serve dist 8123   # COOP/COEP server -> http://127.0.0.1:8123/
 ```

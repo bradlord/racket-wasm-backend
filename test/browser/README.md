@@ -1,6 +1,6 @@
 # Browser tests for the Racket WASM IDE
 
-Headless-Chromium tests and an ad-hoc eval CLI that drive the real `ide.html`
+Headless-Chromium tests and an ad-hoc eval CLI that drive the real `index.html`
 browser surface from `dist/`. They exercise the whole browser stack: cross-origin
 isolation, the SharedArrayBuffer stdin/stdout rings, the submission REPL,
 `racket/draw` + the canvas blit channel, and the `web-repl` helpers.
@@ -59,7 +59,7 @@ node tools/eval.mjs --shot /tmp/out.png '#lang racket
 (send dc draw-ellipse 2 2 56 56)
 (display-bm bm)'
 
-# reuse an already-running server (racket build/main.rkt serve 8123)
+# reuse an already-running server (racket build/main.rkt serve dist 8123)
 node tools/eval.mjs --url http://127.0.0.1:8123 '(+ 1 2)'
 
 # watch it happen

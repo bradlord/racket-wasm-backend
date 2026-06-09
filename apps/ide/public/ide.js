@@ -36,7 +36,7 @@
 
   /* ---- example programs ------------------------------------------- */
   /* The Definitions editor is seeded from here (no hardcoded markup in
-   * ide.html). Each entry is { name, code }; the first is the default.
+   * index.html). Each entry is { name, code }; the first is the default.
    * The racket/draw and DOM-RPC examples are the two halves of the old
    * combined demo, split so each shows one capability. */
 

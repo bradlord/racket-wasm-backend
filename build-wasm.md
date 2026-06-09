@@ -13,7 +13,7 @@
 > | edit/checkout the Racket tree | `racket build/main.rkt sync apply` (-> `.work/racket`) |
 > | `make wasm SCHEME=.. RACKET=.. PKGS=.. WASM_DEPS=..` | `racket build/main.rkt build [--scheme ..] [--racket ..] [--pkgs ..] [--wasm-deps ..]` |
 > | `make wasm-binary-pkgs` (the 4-stage catalog) | `racket build/main.rkt rebuild-binary-catalog` |
-> | serve the output dir | `racket build/main.rkt serve [port]` (over `dist/`) |
+> | serve the output dir | `racket build/main.rkt serve <dir> [port]` (e.g. `dist`) |
 >
 > Everything below — architecture, stages, dep recipes, traps — is unchanged and
 > remains the source of truth for *how* the build works; only the entry point
@@ -170,7 +170,7 @@ That link target emits **both** runtime surfaces into
 runtime/surface decoupling (project roadmap Phase 0), the `wasm` target no
 longer stages any page assets next to the binary. The host-side glue
 (`shell-worker.js`, the COOP/COEP dev server `serve.rkt`) and the page
-**surface** (`ide.html`/`.js`, the DrRacket-like IDE) live **repo-side**, not
+**surface** (`index.html`/`ide.js`, the DrRacket-like IDE) live **repo-side**, not
 in the clone -- under `runtime-glue/` and `apps/ide/public/` respectively -- and
 the orchestrator's `collect-outputs` (`build/stages.rkt`) copies them into
 `dist/` alongside the runtime. This is the seam that lets a different surface
@@ -189,7 +189,8 @@ copy, so a browser and a node app with the same `pkgs`/`wasm-libs` share one
 cache entry. `serve.rkt` is repo-side glue and is **not** copied into `dist/`;
 run it in place against the output dir: `racket runtime-glue/serve.rkt 8123`
 (sets the COOP/COEP headers `SharedArrayBuffer` needs), or use
-`racket build/main.rkt serve`, then open `ide.html`.
+`racket build/main.rkt serve <dir> [port]`, then open `/` (the surface's entry
+page is `index.html`).
 
 The browser-link flags live in the `wasm` target itself.
 `racket/src/ChezScheme/install-wasm-browser-shell.rkt` is a **legacy**,
@@ -224,7 +225,7 @@ the output ring -- the smallest counterpart to `ide.js`.
 (`cmd-build` -> `run-app-manifest ide-app-dir` -> `make-wasm-racket`). The IDE's
 package / native-dep / surface config lives in `apps/ide/app.rkt` (the single
 source of truth -- `build/config.rkt` no longer hardcodes a default package
-set), and its page is `apps/ide/public/{ide.html,ide.js}`. The binary-catalog
+set), and its page is `apps/ide/public/{index.html,ide.js}`. The binary-catalog
 rebuild (`build/pkgs.rkt`) reads the same manifest, so the IDE's package set is
 defined in exactly one place. To ship a different surface or dep set, write an
 app and `build` it -- the IDE has no privileged path.
@@ -827,7 +828,7 @@ profiling is no longer needed.
 The browser shell in `wasm-shell/` is a
 **shared runtime + per-surface host** design: one
 `scheme-web.{js,wasm,data}` binary backs every browser surface. Today
-there is one surface -- `ide.html`/`ide.js`, the DrRacket-like IDE (see
+there is one surface -- `index.html`/`ide.js`, the DrRacket-like IDE (see
 "IDE page" below) -- but the architecture is deliberately surface-
 agnostic (future doc widgets / embeds / canvas GUIs are just another
 HTML+JS pair that drives the same worker with a different init
@@ -953,13 +954,13 @@ CPU.
 
 Serve with **COOP/COEP headers** — `SharedArrayBuffer` is unavailable
 without cross-origin isolation, so a plain static server will not start
-the runtime. `wasm-shell/serve.rkt` (staged next to the build output)
-sets the headers:
+the runtime. `runtime-glue/serve.rkt` (repo-side glue, run in place against
+the output dir — not copied into `dist/`) sets the headers:
 
 ```sh
-cd racket/src/build/cs/c/wasm
-racket serve.rkt 8123
-# browse to http://127.0.0.1:8123/ide.html
+racket build/main.rkt serve dist 8123
+# or: cd dist && racket ../runtime-glue/serve.rkt 8123
+# browse to http://127.0.0.1:8123/
 ```
 
 Notes / status:
@@ -974,7 +975,7 @@ Notes / status:
 
 ### IDE page
 
-`ide.html` + `ide.js` is a single DrRacket-like page: a **Definitions**
+`index.html` + `ide.js` is a single DrRacket-like page: a **Definitions**
 editor on the left, an **Interactions** pane (output + REPL + the
 program's stdin) on the right. It replaces the earlier split
 `browser-shell` (bare REPL) and `playground` (run-a-module) pages --
@@ -1068,7 +1069,7 @@ alternative (custodian shutdown + fresh namespace per Run, for sub-
 second re-runs) is deferred; process-per-run matches the latency users
 expect from comparable in-browser IDEs.
 
-Serve and visit `http://127.0.0.1:8123/ide.html`.
+Serve and visit `http://127.0.0.1:8123/`.
 
 ### WIP: pre-generate `compiled/tpb32l`
 

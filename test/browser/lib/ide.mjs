@@ -1,4 +1,4 @@
-// Page object for the Racket WASM IDE (ide.html), usable from both
+// Page object for the Racket WASM IDE (index.html), usable from both
 // @playwright/test specs and the raw-playwright `tools/eval.mjs` CLI -- it only
 // touches the common `page` API.
 //
@@ -72,7 +72,7 @@ function clean(s) {
 
 // Open the IDE and assert cross-origin isolation (else the runtime can't start).
 export async function gotoIde(page) {
-  await page.goto('/ide.html', { waitUntil: 'domcontentloaded' });
+  await page.goto('/', { waitUntil: 'domcontentloaded' });
   const isolated = await page.evaluate(
     () => typeof SharedArrayBuffer !== 'undefined' && typeof Atomics !== 'undefined',
   );

@@ -18,5 +18,5 @@
    ;; The web-repl helper package, by path (--copy-installed). Relative to this
    ;; app dir -> the repo's packages/web-repl. The clone stays pure upstream.
    'local-pkgs '("../../packages/web-repl")
-   ;; The page surface: ide.html + ide.js.
+   ;; The page surface: index.html + ide.js.
    'public     "public"))
