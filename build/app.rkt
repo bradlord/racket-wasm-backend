@@ -23,7 +23,7 @@
          "config.rkt"
          "stages.rkt")
 
-(provide make-wasm-racket run-app-manifest read-app-manifest)
+(provide make-wasm-racket run-app-manifest package-app-manifest read-app-manifest)
 
 ;; A list of symbols/strings -> the space-joined make-var string make-wasm wants.
 ;; '() / "" means "none" (libffi-only for wasm-libs; no extra packages).
@@ -69,6 +69,7 @@
                           #:extern-pre-js [extern-pre-js '()]
                           #:scheme [scheme #f]
                           #:racket [racket #f]
+                          #:runtime-pkg [runtime-pkg #f]
                           #:force? [force? #f])
   (define (->paths xs) (map (lambda (p) (path->complete-path (->path p))) xs))
   (build-runtime #:pkgs          (->names pkgs)
@@ -82,6 +83,7 @@
                  #:dest           (->path dest)
                  #:surface-dir    (and public (->path public))
                  #:target         (normalize-target target)
+                 #:runtime-pkg    (and runtime-pkg (->path runtime-pkg))
                  #:force?         force?))
 
 ;; Load an app manifest module (`<app-dir>/app.rkt` providing `app`, a hash of
@@ -134,6 +136,7 @@
                           #:dest [dest #f]
                           #:scheme [scheme #f]
                           #:racket [racket #f]
+                          #:runtime-pkg [runtime-pkg #f]
                           #:force? [force? #f])
   (define m (read-app-manifest app-dir))
   (make-wasm-racket
@@ -146,6 +149,32 @@
    #:pre-js        (hash-ref m 'pre-js)
    #:post-js       (hash-ref m 'post-js)
    #:extern-pre-js (hash-ref m 'extern-pre-js)
+   #:scheme        scheme
+   #:racket        racket
+   #:runtime-pkg   runtime-pkg
+   #:force?        force?))
+
+;; Load an app manifest and emit a distributable binary package (runtime set +
+;; build-metadata + a .tar.gz) for its config into `dest` (default
+;; <app-dir>/package). The package is app-config-specific (its key covers pkgs/
+;; wasm-libs/local-pkgs and, for link-JS apps, the targeted surface) but ships
+;; the union of surfaces -- `app <dir> --runtime <dest>` assembles against it.
+(define (package-app-manifest app-dir
+                              #:dest [dest #f]
+                              #:scheme [scheme #f]
+                              #:racket [racket #f]
+                              #:force? [force? #f])
+  (define m (read-app-manifest app-dir))
+  (define (->paths xs) (map (lambda (p) (path->complete-path (->path p))) xs))
+  (build-package
+   #:dest          (or dest (build-path (hash-ref m 'dir) "package"))
+   #:pkgs          (->names (hash-ref m 'pkgs))
+   #:wasm-deps     (->names (hash-ref m 'wasm-libs))
+   #:local-pkgs    (->paths (hash-ref m 'local-pkgs))
+   #:target        (hash-ref m 'target)
+   #:pre-js        (->paths (hash-ref m 'pre-js))
+   #:post-js       (->paths (hash-ref m 'post-js))
+   #:extern-pre-js (->paths (hash-ref m 'extern-pre-js))
    #:scheme        scheme
    #:racket        racket
    #:force?        force?))

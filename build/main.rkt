@@ -8,6 +8,8 @@
 ;;   apply [--check]           apply patches/ + overlay/ into the clone
 ;;   build  [opts]             full cross-build (ensure clone+delta, then make) -> dist/
 ;;   app <dir> [opts]          build a custom app from <dir>/app.rkt -> <dir>/dist
+;;   package [<dir>] [opts]    emit a distributable binary package (runtime set +
+;;                             metadata + .tar.gz) for <dir>'s config (default IDE)
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
@@ -19,8 +21,14 @@
 ;;   --wasm-deps "<d ...>"  native dep selection ("draw" alias) (default from config)
 ;;   --scheme <path>        native threaded host Chez (else resolve/build)
 ;;   --racket <path>        same-version host Racket (else resolve)
+;;
+;; app / build options:
+;;   --runtime <pkg-dir>    assemble against a prebuilt binary package (no clone/
+;;                          make); errors on a build-key mismatch unless --force
+;;   --force                bypass the cache / proceed despite a key mismatch
 (require racket/list
          racket/file
+         racket/string
          "config.rkt"
          "util.rkt"
          "upstream.rkt"
@@ -48,7 +56,10 @@
          [("--scheme") (val 'scheme)]
          [("--racket") (val 'racket)]
          [("--dest") (val 'dest)]
-         ;; Boolean flag: bypass the runtime cache and force a real build.
+         ;; A prebuilt binary package dir to assemble against (no clone/make).
+         [("--runtime") (val 'runtime)]
+         ;; Boolean flag: bypass the runtime cache and force a real build; with
+         ;; --runtime, proceed despite a build-key mismatch.
          [("--force") (loop (cdr as) (hash-set h 'force? #t))]
          [else (error 'build "unknown option: ~a" a)])])))
 
@@ -68,6 +79,7 @@
                     #:dest dist-dir
                     #:scheme (hash-ref opts 'scheme #f)
                     #:racket (hash-ref opts 'racket #f)
+                    #:runtime-pkg (hash-ref opts 'runtime #f)
                     #:force? (hash-ref opts 'force? #f)))
 
 (define (cmd-rebuild-catalog args) (rebuild-binary-catalog (parse-build-opts args)))
@@ -83,7 +95,23 @@
                     #:dest (hash-ref opts 'dest #f)
                     #:scheme (hash-ref opts 'scheme #f)
                     #:racket (hash-ref opts 'racket #f)
+                    #:runtime-pkg (hash-ref opts 'runtime #f)
                     #:force? (hash-ref opts 'force? #f)))
+
+;; Emit a distributable binary package: `package [<app-dir>] [--dest <dir>]
+;; [opts]`. Default app = the IDE; default dest = <app-dir>/package. Produces the
+;; package dir (runtime set + metadata) and a sibling .tar.gz.
+(define (cmd-package args)
+  (define-values (dir rest)
+    (if (or (null? args) (string-prefix? (car args) "--"))
+        (values ide-app-dir args)
+        (values (car args) (cdr args))))
+  (define opts (parse-build-opts rest))
+  (package-app-manifest dir
+                        #:dest (hash-ref opts 'dest #f)
+                        #:scheme (hash-ref opts 'scheme #f)
+                        #:racket (hash-ref opts 'racket #f)
+                        #:force? (hash-ref opts 'force? #f)))
 
 ;; Repack only the browser package data file (share.data/share.data.js) from
 ;; the already-installed share/pkgs tree, then refresh dist/. The point of the
@@ -125,6 +153,7 @@
         (cons "apply" cmd-apply)
         (cons "build" cmd-build)
         (cons "app" cmd-app)
+        (cons "package" cmd-package)
         (cons "rebuild-binary-catalog" cmd-rebuild-catalog)
         (cons "pack-pkgs" cmd-pack-pkgs)
         (cons "serve" cmd-serve)

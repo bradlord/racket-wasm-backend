@@ -17,7 +17,8 @@
          "config.rkt"
          "util.rkt")
 
-(provide build-key cache-dir-for cache-complete? snapshot-runtime!)
+(provide build-key build-key-components key-from-components
+         cache-dir-for cache-complete? snapshot-runtime!)
 
 (define cache-root (build-path work-dir "runtime-cache"))
 
@@ -40,43 +41,40 @@
         string<?))
      (sha1 (open-input-string (string-join lines "\n")))]))
 
-;; The cache key for a (pkgs, wasm-deps, local-pkgs) build. pkgs/wasm-deps are
-;; the make-var strings ("" = none); local-pkgs is a list of source dirs whose
-;; *contents* are hashed in (so editing a local package invalidates the cache).
-;; `link-js` is the app's emcc link-JS files (--pre/--post/--extern-pre-js,
-;; combined): they change the linked binary, so their *contents* are hashed in,
-;; together with the surface they target (only that surface gets the JS at the
-;; link). When `link-js` is empty the component is "" and is omitted entirely, so
-;; keys for link-JS-free apps stay byte-identical to before this field existed --
-;; and a node and a browser app with the same pkgs still share one entry.
-;; Truncated to 16 hex chars -- ample for a local cache.
-(define (build-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs [local-pkgs '()]
-                   #:link-js [link-js '()] #:target [target 'browser])
+;; The *components* that determine a (pkgs, wasm-deps, local-pkgs[, link-js])
+;; build, as an inspectable hash. This is the single source of truth for the
+;; build-key -- `key-from-components` hashes these into the key, and the
+;; package/dist metadata records them verbatim so a key mismatch can be reported
+;; component-by-component (build/metadata.rkt). pkgs/wasm-deps are the make-var
+;; strings ("" = none).
+;;   'upstream-sha 'upstream-url  the pinned upstream the delta applies onto.
+;;   'delta-hash   sha1 of patches/ + overlay/ + overlay-local/ contents.
+;;   'wasm-deps 'pkgs  the make-var strings.
+;;   'local-pkgs   a list of (basename . content-hash) -- both *which* packages
+;;                 and *what's in them* feed the key (so editing one rebuilds).
+;;   'link-js      surface-tagged hash of the emcc link-JS contents, or #f when
+;;                 the app supplies none (see the note in key-from-components).
+;;   'target       the surface the link JS targets (only meaningful with link-js).
+(define (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
+                             #:local-pkgs [local-pkgs '()]
+                             #:link-js [link-js '()] #:target [target 'browser])
   (define delta
     (sha1 (open-input-string
            (string-append (dir-content-hash patches-dir) "|"
                           (dir-content-hash overlay-dir) "|"
                           (dir-content-hash overlay-local-dir)))))
-  ;; Identify each local package by its basename + a hash of its contents, so
-  ;; both *which* packages and *what's in them* feed the key. Sorted for order
-  ;; independence.
+  ;; Identify each local package by its basename + a hash of its contents.
   (define locals
-    (sha1 (open-input-string
-           (string-join
-            (sort
-             (for/list ([p (in-list local-pkgs)])
-               (define dir (if (path? p) p (string->path p)))
-               (string-append (path->string (file-name-from-path dir)) ":"
-                              (dir-content-hash dir)))
-             string<?)
-            "|"))))
+    (for/list ([p (in-list local-pkgs)])
+      (define dir (if (path? p) p (string->path p)))
+      (cons (path->string (file-name-from-path dir)) (dir-content-hash dir))))
   ;; Surface-tagged hash of the link-JS file contents (basename + file sha1,
-  ;; sorted). "" when there is no link JS -- see the note above.
+  ;; sorted). #f when there is no link JS -- so it is omitted from the key.
   (define link-component
     (if (null? link-js)
-        ""
+        #f
         (string-append
-         (format "~a" target) ":"
+         (format "~a" (normalize-target target)) ":"
          (sha1 (open-input-string
                 (string-join
                  (sort
@@ -86,12 +84,46 @@
                                    (if (file-exists? f) (call-with-input-file f sha1) "")))
                   string<?)
                  "|"))))))
+  (hash 'upstream-sha upstream-sha
+        'upstream-url upstream-url
+        'delta-hash   delta
+        'wasm-deps    wasm-deps
+        'pkgs         pkgs
+        'local-pkgs   locals
+        'link-js      link-component
+        'target       (normalize-target target)))
+
+;; Hash a components hash into the 16-hex build-key. The join is, byte for byte,
+;; the one this code has always produced: `upstream-sha | delta | wasm-deps |
+;; pkgs | locals [| link-component]`, where `locals` is the sha1 of the sorted
+;; "basename:content-hash" lines and the link component is appended only when an
+;; app supplies link JS. Keeping the join in one place means the recorded
+;; components and the key can never drift. Truncated to 16 hex -- ample locally.
+(define (key-from-components c)
+  (define locals
+    (sha1 (open-input-string
+           (string-join
+            (sort (for/list ([p (in-list (hash-ref c 'local-pkgs))])
+                    (string-append (car p) ":" (cdr p)))
+                  string<?)
+            "|"))))
+  (define link-component (hash-ref c 'link-js))
   (substring
    (sha1 (open-input-string
-          (string-join (append (list upstream-sha delta wasm-deps pkgs locals)
-                               (if (equal? link-component "") '() (list link-component)))
+          (string-join (append (list (hash-ref c 'upstream-sha)
+                                     (hash-ref c 'delta-hash)
+                                     (hash-ref c 'wasm-deps)
+                                     (hash-ref c 'pkgs)
+                                     locals)
+                               (if link-component (list link-component) '()))
                        "|")))
    0 16))
+
+(define (build-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs [local-pkgs '()]
+                   #:link-js [link-js '()] #:target [target 'browser])
+  (key-from-components
+   (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
+                         #:link-js link-js #:target target)))
 
 (define (cache-dir-for key) (build-path cache-root key))
 

@@ -305,6 +305,43 @@ large (~100 MB each); they live under the disposable `.work/`.
 > `PKGS`-only change never relinks even on a cache miss -- it reinstalls +
 > repacks. The cache adds the cross-config isolation on top of that.
 
+#### Build metadata + distributable binary packages
+
+Every assembled output -- an app build's `dist/`, a runtime cache entry, and a
+distributable package -- carries a **`racket-wasm.build.rktd`** sidecar (an
+S-expression `hash`, `build/metadata.rkt`). It records the **`build-key`** and,
+under `'components`, the *inputs* that produced it: `upstream-sha`/`upstream-url`,
+`delta-hash`, `wasm-deps`, `pkgs`, `local-pkgs` (each `(basename . content-hash)`),
+the surface-tagged `link-js` component (or `#f`), and `target`. It also records
+the build's `racket-version` -- **informational provenance only, deliberately
+*not* part of the key** (the key is the delta + dep set; host == target version
+per this doc's `RACKET=` rule). `build/cache.rkt` is the single source of truth:
+`build-key-components` builds the components hash, `key-from-components` hashes it
+into the key (the exact historical join, so existing cache entries stay valid),
+and `build-key` composes the two.
+
+A **distributable binary package** is just a directory of the full runtime set
+(`runtime-output-names`, *both* surfaces) plus that metadata file -- a portable
+cache entry. `racket build/main.rkt package [<app-dir>]` builds (or reuses the
+cache for) the app's config and emits `<app-dir>/package/` (override `--dest`)
+plus a sibling **`.tar.gz`**. Because a package is keyed by the same components,
+it is config-specific (and, for a link-JS app, surface-specific via that
+component), but it always ships the union of surfaces so either `target` can
+consume it.
+
+**Consuming a package (`--runtime <pkg-dir>`).** `racket build/main.rkt app
+<dir> --runtime <pkg-dir>` (also on `build`) assembles the app's surface against
+a prebuilt package **with no clone, no `make`, no emsdk** -- the
+"`build`-without-the-Racket-source" path. `build-runtime` (`build/stages.rkt`)
+takes a separate branch (`assemble-from-package`) that recomputes the app's
+*expected* `build-key` from the local repo + manifest (all the inputs live here,
+not in the upstream clone) and compares it to the package's recorded key. A
+**mismatch errors**, reporting which components differ (e.g. `pkgs: app expects
+… / package has …`); `--force` downgrades that to a warning and assembles anyway.
+The resulting `dist/` records the *package's* provenance (it describes the actual
+binaries shipped). The `target` filter still selects which surface subset is
+copied, and the package must contain that surface's files.
+
 `wasm-setup` (a `cs/c/build.zuo` target) assembles the cross-compiler
 xpatch (`compile-xpatch.tpb32l`/`library-xpatch.tpb32l`, via the shared
 `assemble-cross-xpatch`) and calls the existing cross `setup`
