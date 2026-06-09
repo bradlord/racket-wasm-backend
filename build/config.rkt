@@ -69,10 +69,33 @@
 (define target-machine "tpb32l")
 
 ;; What the emcc link + pack-share-data emit into the clone's wasm out dir -- the
-;; runtime proper (the link products + the separate package payload). This is the
-;; set the orchestrator copies into dist/ and caches per build-key. Glue/surface
-;; are repo-side and copied separately, so they are NOT part of this set.
-(define runtime-output-names
-  '("scheme.js" "scheme.wasm" "scheme.data"
-    "scheme-web.js" "scheme-web.wasm" "scheme-web.data"
+;; runtime proper (the link products + the separate package payload), split by
+;; surface. The single `wasm` make target builds BOTH surfaces, so a build always
+;; produces (and the cache always stores) the union; an app's `target` then
+;; selects which subset collect-outputs copies into dist/.
+;;   node    -- scheme.{js,wasm,data}; packages are baked into scheme.data.
+;;   browser -- scheme-web.{js,wasm,data} + the separate package payload
+;;              share.data/share.data.js (packed by file_packager, not the link).
+;; Glue/surface are repo-side and copied separately, so they are NOT in this set.
+(define node-runtime-names
+  '("scheme.js" "scheme.wasm" "scheme.data"))
+(define web-runtime-names
+  '("scheme-web.js" "scheme-web.wasm" "scheme-web.data"
     "share.data" "share.data.js"))
+;; The full set a build emits and the cache snapshots (both surfaces).
+(define runtime-output-names (append node-runtime-names web-runtime-names))
+
+;; An app's `target` field: which surface it runs on. Default is browser.
+;; `web` is accepted as an alias for `browser`.
+(define (normalize-target t)
+  (define s (if (string? t) (string->symbol t) t))
+  (case s
+    [(browser web) 'browser]
+    [(node) 'node]
+    [else (error 'app "target must be 'browser or 'node, got: ~s" t)]))
+
+;; The runtime files a given target ships in dist/.
+(define (runtime-names-for-target target)
+  (case (normalize-target target)
+    [(node) node-runtime-names]
+    [(browser) web-runtime-names]))

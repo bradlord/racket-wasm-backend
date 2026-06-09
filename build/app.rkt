@@ -52,11 +52,14 @@
 ;;                the clone stays pure upstream-delta. Their contents feed the
 ;;                build-key, so editing one rebuilds.
 ;;   #:scheme / #:racket  host toolchain paths, or #f to resolve/build.
+;;   #:target     'browser (default) or 'node -- which surface to ship into dist:
+;;                browser = scheme-web.* + share.data* + glue; node = scheme.*.
 (define (make-wasm-racket #:dest dest
                           #:pkgs [pkgs '()]
                           #:wasm-libs [wasm-libs '()]
                           #:public [public #f]
                           #:local-pkgs [local-pkgs '()]
+                          #:target [target 'browser]
                           #:scheme [scheme #f]
                           #:racket [racket #f]
                           #:force? [force? #f])
@@ -67,12 +70,14 @@
                  #:racket      racket
                  #:dest        (->path dest)
                  #:surface-dir (and public (->path public))
+                 #:target      (normalize-target target)
                  #:force?      force?))
 
 ;; Load an app manifest module (`<app-dir>/app.rkt` providing `app`, a hash of
 ;; the make-wasm-racket fields) and return its fields normalized & resolved
 ;; against the app dir: 'pkgs / 'wasm-libs (symbol/string lists as-is),
-;; 'local-pkgs (absolute paths), 'public (absolute path or #f), 'dir. This is
+;; 'local-pkgs (absolute paths), 'public (absolute path or #f), 'target
+;; ('browser/'node, default browser), 'dir. This is
 ;; the single source of truth for an app's build config, shared by the build
 ;; (`run-app-manifest`) and the binary-catalog rebuild (`build/pkgs.rkt`), so
 ;; the IDE's package/dep set lives in one place: apps/ide/app.rkt.
@@ -98,7 +103,8 @@
         'pkgs       (ref 'pkgs '())
         'wasm-libs  (ref 'wasm-libs '())
         'local-pkgs (map resolve (ref 'local-pkgs '()))
-        'public     (and public (resolve public))))
+        'public     (and public (resolve public))
+        'target     (normalize-target (ref 'target 'browser))))
 
 ;; Load an app manifest and build it. `dest` defaults to <app-dir>/dist;
 ;; scheme/racket/force pass through from the CLI.
@@ -114,6 +120,7 @@
    #:wasm-libs  (hash-ref m 'wasm-libs)
    #:local-pkgs (hash-ref m 'local-pkgs)
    #:public     (hash-ref m 'public)
+   #:target     (hash-ref m 'target)
    #:scheme     scheme
    #:racket     racket
    #:force?     force?))

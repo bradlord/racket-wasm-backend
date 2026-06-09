@@ -94,12 +94,14 @@
 
 (define (cmd-serve args)
   (define port (if (pair? args) (car args) "8123"))
-  (define serve.rkt (build-path dist-dir "serve.rkt"))
-  (unless (file-exists? serve.rkt)
-    (error 'serve "no ~a -- run `build` first" serve.rkt))
+  (unless (directory-exists? dist-dir)
+    (error 'serve "no ~a -- run `build` first" dist-dir))
+  ;; serve.rkt is repo-side glue, not copied into dist/; run it in place with the
+  ;; process cwd set to dist/ (it serves the current directory).
+  (define serve.rkt (build-path runtime-glue-dir "serve.rkt"))
   (info-msg "serving ~a on port ~a (COOP/COEP) -> http://127.0.0.1:~a/ide.html"
             dist-dir port port)
-  (run "racket" #:dir dist-dir #:args (list "serve.rkt" port)))
+  (run "racket" #:dir dist-dir #:args (list (path->string serve.rkt) port)))
 
 (define (cmd-clean args)
   (when (directory-exists? clone-dir)

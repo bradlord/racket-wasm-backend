@@ -7,9 +7,10 @@
 ;;     --scheme <host-chez> --racket <host-racket>
 ;;
 ;; Output lands in examples/hello/dist (override with --dest). Serve that dir
-;; with COOP/COEP headers and open hello.html:
+;; with COOP/COEP headers (serve.rkt is repo-side glue, run it in place) and
+;; open hello.html:
 ;;
-;;   cd examples/hello/dist && racket serve.rkt 8123   # -> /hello.html
+;;   cd examples/hello/dist && racket ../../../runtime-glue/serve.rkt 8123
 ;;
 ;; The manifest is a real Racket module that `(provide app)` a hash of fields
 ;; (see build/app.rkt `make-wasm-racket`); it is free to compute them.
@@ -23,4 +24,7 @@
    'wasm-libs '()
    ;; The page surface (html/js/racket) lives here, resolved relative to this
    ;; app dir. Every file in it is copied next to the runtime in the output.
-   'public    "public"))
+   'public    "public"
+   ;; Which runtime surface to ship: 'browser (default) emits scheme-web.* +
+   ;; share.data* + the worker glue; 'node emits scheme.* only. Omit for browser.
+   'target    'browser))

@@ -55,10 +55,11 @@
 ;; by `pack-share-data` (file_packager), not the link -- see that function and
 ;; build-wasm.md "Packages as a separate data file".
 
-;; Surface-agnostic host-side glue, copied from the repo (runtime-glue/) rather
-;; than staged by the link: shell-worker.js bootstraps the browser runtime
-;; worker; serve.rkt is the COOP/COEP dev server. Any browser surface needs them.
-(define glue-files '("shell-worker.js" "serve.rkt"))
+;; Host-side glue for the *browser* surface, copied from the repo (runtime-glue/)
+;; rather than staged by the link: shell-worker.js bootstraps the browser runtime
+;; worker. Node apps don't need it. serve.rkt (the COOP/COEP dev server) lives in
+;; runtime-glue/ and is run in place by `serve` -- it is NOT copied into dist/.
+(define browser-glue-files '("shell-worker.js"))
 
 ;; Parse a links.rktd for entries whose path resolves to /pkgs/<name> -- the
 ;; `(up up #"pkgs" #"name")` form, which `up up` escapes /share to / before
@@ -147,11 +148,14 @@
                (list "--js-output=share.data.js"))))
 
 ;; Assemble dist/: the runtime binaries from the clone's link output, the
-;; host-side glue from the repo, and a page surface from the repo. The surface
-;; defaults to the IDE (surfaces/ide) -- Phase 1's make-wasm-racket overrides
-;; #:surface-dir / #:dest to assemble an arbitrary app from its own public/ dir.
+;; host-side glue from the repo, and a page surface from the repo. `target`
+;; selects which surface's runtime ships (browser = scheme-web.* + share.data*;
+;; node = scheme.*), defaulting to browser. The surface dir defaults to the IDE
+;; -- make-wasm-racket overrides #:surface-dir / #:dest / #:target to assemble an
+;; arbitrary app from its own public/ dir.
 (define (collect-outputs #:dest        [dest dist-dir]
                          #:surface-dir [surface-dir (build-path ide-app-dir "public")]
+                         #:target      [target 'browser]
                          #:runtime-src [runtime-src (clone-wasm-out)])
   (unless (directory-exists? runtime-src)
     (error 'collect-outputs "no runtime output dir at ~a (did the link run / cache exist?)" runtime-src))
@@ -162,10 +166,11 @@
       (define d (build-path dest name))
       (when (file-exists? d) (delete-file d))
       (copy-file s d)))
-  ;; 1. Runtime binaries (from the clone's link output, or the runtime cache).
-  (for ([n (in-list runtime-output-names)]) (copy-into runtime-src n))
-  ;; 2. Host-side glue (from the repo).
-  (for ([n (in-list glue-files)]) (copy-into runtime-glue-dir n))
+  ;; 1. Runtime binaries for this surface (from the clone's link output, or cache).
+  (for ([n (in-list (runtime-names-for-target target))]) (copy-into runtime-src n))
+  ;; 2. Host-side glue (from the repo) -- browser only.
+  (when (eq? (normalize-target target) 'browser)
+    (for ([n (in-list browser-glue-files)]) (copy-into runtime-glue-dir n)))
   ;; 3. Surface assets (from the repo; default = the IDE). Copies every file in
   ;;    the surface dir, so an app's public/ html+js+css all ship.
   (when (and surface-dir (directory-exists? surface-dir))
@@ -185,6 +190,7 @@
                        #:scheme [scheme-opt #f] #:racket [racket-opt #f]
                        #:dest [dest dist-dir]
                        #:surface-dir [surface-dir (build-path ide-app-dir "public")]
+                       #:target [target 'browser]
                        #:force? [force? #f])
   ;; The runtime is fully determined by (upstream-sha, delta, wasm-deps, pkgs,
   ;; local-pkgs). If we've built this exact config before, assemble straight from
@@ -194,7 +200,7 @@
   (cond
     [(and (not force?) (cache-complete? key))
      (info-msg "runtime cache hit (~a): assembling from cache, no build" key)
-     (collect-outputs #:dest dest #:surface-dir surface-dir
+     (collect-outputs #:dest dest #:surface-dir surface-dir #:target target
                       #:runtime-src (cache-dir-for key))]
     [else
      (require-emsdk!)
@@ -213,5 +219,5 @@
      (pack-share-data)
      ;; Cache the runtime set for this config so the next build of it is a copy.
      (snapshot-runtime! key (clone-wasm-out))
-     (collect-outputs #:dest dest #:surface-dir surface-dir
+     (collect-outputs #:dest dest #:surface-dir surface-dir #:target target
                       #:runtime-src (clone-wasm-out))]))

@@ -175,8 +175,21 @@ in the clone -- under `runtime-glue/` and `apps/ide/public/` respectively -- and
 the orchestrator's `collect-outputs` (`build/stages.rkt`) copies them into
 `dist/` alongside the runtime. This is the seam that lets a different surface
 ship against the same runtime binary without re-linking; see the project
-roadmap. Serve `dist/` with `racket serve.rkt 8123` (sets the COOP/COEP
-headers `SharedArrayBuffer` needs) and open `ide.html`.
+roadmap.
+
+**Surface selection (`target`).** Although the one `wasm` make target always
+builds *both* surfaces (so the runtime cache stores the union), an app declares
+which one it ships via its manifest's `'target` field -- `'browser` (default) or
+`'node`. `collect-outputs` copies only that subset into `dist/`: a browser app
+gets `scheme-web.{js,wasm,data}` + the separate package payload
+`share.data`/`share.data.js` + the worker glue `shell-worker.js`; a node app gets
+`scheme.{js,wasm,data}` only (packages are baked into `scheme.data`, and it needs
+no browser glue). `target` is *not* part of the build-key -- it only filters the
+copy, so a browser and a node app with the same `pkgs`/`wasm-libs` share one
+cache entry. `serve.rkt` is repo-side glue and is **not** copied into `dist/`;
+run it in place against the output dir: `racket runtime-glue/serve.rkt 8123`
+(sets the COOP/COEP headers `SharedArrayBuffer` needs), or use
+`racket build/main.rkt serve`, then open `ide.html`.
 
 The browser-link flags live in the `wasm` target itself.
 `racket/src/ChezScheme/install-wasm-browser-shell.rkt` is a **legacy**,
@@ -198,7 +211,8 @@ runtime + glue, plus a different page surface, into a different output dir."
 
 It wraps `build-runtime` (`build/stages.rkt`), differing only in the output
 `dest` and the page `surface-dir`. An app dir carries an `app.rkt` manifest that
-`(provide app)` a hash of those fields (`'pkgs 'wasm-libs 'public 'local-pkgs`);
+`(provide app)` a hash of those fields
+(`'pkgs 'wasm-libs 'public 'local-pkgs 'target`);
 `read-app-manifest` normalizes it and `run-app-manifest` builds it.
 `racket build/main.rkt app <dir>` builds into `<dir>/dist` (override `--dest`).
 `examples/hello/` is the minimal example: a non-IDE page that seeds a `main.rkt`
@@ -882,10 +896,11 @@ pthreads of its own):
 
 `make wasm`'s `wasm` target builds the browser runtime alongside the
 node one (it adds `wasm_shell_io.o`, the `--post-js shell-tty.js`, and
-the ring exports). It does **not** stage the page assets -- those
-(`shell-worker.js`, `serve.rkt`, the surface `ide.*`) are copied into
-`dist/` from the repo by the orchestrator's `collect-outputs`, not from the
-clone (see the runtime/surface split note near the top). The underlying link is
+the ring exports). It does **not** stage the page assets -- the worker glue
+`shell-worker.js` and the surface `ide.*` are copied into `dist/` from the repo
+by the orchestrator's `collect-outputs`, not from the clone (`serve.rkt` is
+repo-side glue run in place, not copied; see the runtime/surface split note near
+the top). The underlying link is
 (the example paths below predate the move to `build/cs/c/wasm/`, but the
 flags are what the `wasm` target emits):
 
