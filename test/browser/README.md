@@ -44,7 +44,7 @@ node tools/eval.mjs '(+ 1 2)'
 node tools/eval.mjs '(require racket/list) (range 5)'
 
 # a whole module (anything starting with #lang runs as a module)
-node tools/eval.mjs --file ../../examples/hello.rkt
+node tools/eval.mjs --file ../../examples/hello/public/main.rkt
 echo '#lang racket/base
 (displayln (for/sum ([i 100]) i))' | node tools/eval.mjs -
 

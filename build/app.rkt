@@ -54,30 +54,42 @@
 ;;   #:scheme / #:racket  host toolchain paths, or #f to resolve/build.
 ;;   #:target     'browser (default) or 'node -- which surface to ship into dist:
 ;;                browser = scheme-web.* + share.data* + glue; node = scheme.*.
+;;   #:pre-js / #:post-js / #:extern-pre-js  app-supplied emcc link JS (lists of
+;;                paths) spliced into the #:target surface's link only. They feed
+;;                the build-key (editing one relinks), and the targeted surface
+;;                keys separately from the other once present.
 (define (make-wasm-racket #:dest dest
                           #:pkgs [pkgs '()]
                           #:wasm-libs [wasm-libs '()]
                           #:public [public #f]
                           #:local-pkgs [local-pkgs '()]
                           #:target [target 'browser]
+                          #:pre-js [pre-js '()]
+                          #:post-js [post-js '()]
+                          #:extern-pre-js [extern-pre-js '()]
                           #:scheme [scheme #f]
                           #:racket [racket #f]
                           #:force? [force? #f])
-  (build-runtime #:pkgs       (->names pkgs)
-                 #:wasm-deps   (->names wasm-libs)
-                 #:local-pkgs  (map (lambda (p) (path->complete-path (->path p))) local-pkgs)
-                 #:scheme      scheme
-                 #:racket      racket
-                 #:dest        (->path dest)
-                 #:surface-dir (and public (->path public))
-                 #:target      (normalize-target target)
-                 #:force?      force?))
+  (define (->paths xs) (map (lambda (p) (path->complete-path (->path p))) xs))
+  (build-runtime #:pkgs          (->names pkgs)
+                 #:wasm-deps      (->names wasm-libs)
+                 #:local-pkgs     (->paths local-pkgs)
+                 #:pre-js         (->paths pre-js)
+                 #:post-js        (->paths post-js)
+                 #:extern-pre-js  (->paths extern-pre-js)
+                 #:scheme         scheme
+                 #:racket         racket
+                 #:dest           (->path dest)
+                 #:surface-dir    (and public (->path public))
+                 #:target         (normalize-target target)
+                 #:force?         force?))
 
 ;; Load an app manifest module (`<app-dir>/app.rkt` providing `app`, a hash of
 ;; the make-wasm-racket fields) and return its fields normalized & resolved
 ;; against the app dir: 'pkgs / 'wasm-libs (symbol/string lists as-is),
 ;; 'local-pkgs (absolute paths), 'public (absolute path or #f), 'target
-;; ('browser/'node, default browser), 'dir. This is
+;; ('browser/'node, default browser), 'pre-js / 'post-js / 'extern-pre-js
+;; (absolute paths to app-supplied emcc link JS), 'dir. This is
 ;; the single source of truth for an app's build config, shared by the build
 ;; (`run-app-manifest`) and the binary-catalog rebuild (`build/pkgs.rkt`), so
 ;; the IDE's package/dep set lives in one place: apps/ide/app.rkt.
@@ -99,12 +111,22 @@
   ;; so e.g. apps/ide/../../packages/web-repl == the repo's packages/web-repl --
   ;; matters because the local-package path feeds the build-key.
   (define (resolve p) (simplify-path (path->complete-path (->path p) dir)))
-  (hash 'dir        dir
-        'pkgs       (ref 'pkgs '())
-        'wasm-libs  (ref 'wasm-libs '())
-        'local-pkgs (map resolve (ref 'local-pkgs '()))
-        'public     (and public (resolve public))
-        'target     (normalize-target (ref 'target 'browser))))
+  ;; A link-JS field is a list of app-relative .js paths (a bare string is
+  ;; accepted as a one-element list, like 'public); resolve each.
+  (define (resolve-list k)
+    (define v (ref k '()))
+    (map resolve (if (or (string? v) (path? v)) (list v) v)))
+  (hash 'dir           dir
+        'pkgs          (ref 'pkgs '())
+        'wasm-libs     (ref 'wasm-libs '())
+        'local-pkgs    (map resolve (ref 'local-pkgs '()))
+        'public        (and public (resolve public))
+        'target        (normalize-target (ref 'target 'browser))
+        ;; App-supplied emcc link JS, resolved to absolute paths. They ship into
+        ;; the app's target surface only (see build/stages.rkt make-wasm).
+        'pre-js        (resolve-list 'pre-js)
+        'post-js       (resolve-list 'post-js)
+        'extern-pre-js (resolve-list 'extern-pre-js)))
 
 ;; Load an app manifest and build it. `dest` defaults to <app-dir>/dist;
 ;; scheme/racket/force pass through from the CLI.
@@ -115,12 +137,15 @@
                           #:force? [force? #f])
   (define m (read-app-manifest app-dir))
   (make-wasm-racket
-   #:dest       (or dest (build-path (hash-ref m 'dir) "dist"))
-   #:pkgs       (hash-ref m 'pkgs)
-   #:wasm-libs  (hash-ref m 'wasm-libs)
-   #:local-pkgs (hash-ref m 'local-pkgs)
-   #:public     (hash-ref m 'public)
-   #:target     (hash-ref m 'target)
-   #:scheme     scheme
-   #:racket     racket
-   #:force?     force?))
+   #:dest          (or dest (build-path (hash-ref m 'dir) "dist"))
+   #:pkgs          (hash-ref m 'pkgs)
+   #:wasm-libs     (hash-ref m 'wasm-libs)
+   #:local-pkgs    (hash-ref m 'local-pkgs)
+   #:public        (hash-ref m 'public)
+   #:target        (hash-ref m 'target)
+   #:pre-js        (hash-ref m 'pre-js)
+   #:post-js       (hash-ref m 'post-js)
+   #:extern-pre-js (hash-ref m 'extern-pre-js)
+   #:scheme        scheme
+   #:racket        racket
+   #:force?        force?))

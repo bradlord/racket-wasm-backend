@@ -1,8 +1,8 @@
 diff --git a/Makefile b/Makefile
-index c10c9e2dac..cb7889aa5f 100644
+index c10c9e2..84ac8ed 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -67,6 +67,23 @@ CONFIGURE_ARGS =
+@@ -67,6 +67,34 @@ CONFIGURE_ARGS =
  # replaced with the build subdirectory where `configure` is run
  CONFIGURE_ARGS_qq =
  
@@ -23,20 +23,35 @@ index c10c9e2dac..cb7889aa5f 100644
 +# see build-wasm.md "Local app packages".
 +LOCAL_PKGS =
 +
++# WebAssembly: app-supplied emcc link JS for `make wasm`, and the surface it
++# targets. LINK_*_JS are space-separated absolute .js paths spliced into the
++# `wasm` link via --pre-js / --post-js / --extern-pre-js; APP_TARGET (node or
++# browser) selects which surface gets them. The orchestrator sets these from an
++# app's #:pre-js/#:post-js/#:extern-pre-js; see build-wasm.md "App-supplied link
++# JS".
++LINK_PRE_JS =
++LINK_POST_JS =
++LINK_EXTERN_PRE_JS =
++APP_TARGET =
++
  # ------------------------------------------------------------
  # Cross-build support
  
-@@ -185,6 +196,9 @@ BUILD_VARS = MAKE=$(MAKE) \
+@@ -185,6 +213,13 @@ BUILD_VARS = MAKE=$(MAKE) \
               CPUS="$(CPUS)" \
               CONFIGURE_ARGS_qq='$(CONFIGURE_ARGS_qq)' \
               CONFIGURE_ARGS="$(CONFIGURE_ARGS)" \
 +             CONFIGURE_WRAPPER="$(CONFIGURE_WRAPPER)" \
 +             WASM_DEPS="$(WASM_DEPS)" \
 +             LOCAL_PKGS="$(LOCAL_PKGS)" \
++             LINK_PRE_JS="$(LINK_PRE_JS)" \
++             LINK_POST_JS="$(LINK_POST_JS)" \
++             LINK_EXTERN_PRE_JS="$(LINK_EXTERN_PRE_JS)" \
++             APP_TARGET="$(APP_TARGET)" \
               CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
               RACKET="$(RACKET)" \
               PLAIN_RACKET="$(PLAIN_RACKET)" \
-@@ -223,6 +236,32 @@ cs: $(ZUO)
+@@ -223,6 +258,32 @@ cs: $(ZUO)
  bc: $(ZUO)
  	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
  

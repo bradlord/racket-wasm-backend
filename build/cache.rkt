@@ -43,8 +43,15 @@
 ;; The cache key for a (pkgs, wasm-deps, local-pkgs) build. pkgs/wasm-deps are
 ;; the make-var strings ("" = none); local-pkgs is a list of source dirs whose
 ;; *contents* are hashed in (so editing a local package invalidates the cache).
+;; `link-js` is the app's emcc link-JS files (--pre/--post/--extern-pre-js,
+;; combined): they change the linked binary, so their *contents* are hashed in,
+;; together with the surface they target (only that surface gets the JS at the
+;; link). When `link-js` is empty the component is "" and is omitted entirely, so
+;; keys for link-JS-free apps stay byte-identical to before this field existed --
+;; and a node and a browser app with the same pkgs still share one entry.
 ;; Truncated to 16 hex chars -- ample for a local cache.
-(define (build-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs [local-pkgs '()])
+(define (build-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs [local-pkgs '()]
+                   #:link-js [link-js '()] #:target [target 'browser])
   (define delta
     (sha1 (open-input-string
            (string-append (dir-content-hash patches-dir) "|"
@@ -63,8 +70,27 @@
                               (dir-content-hash dir)))
              string<?)
             "|"))))
+  ;; Surface-tagged hash of the link-JS file contents (basename + file sha1,
+  ;; sorted). "" when there is no link JS -- see the note above.
+  (define link-component
+    (if (null? link-js)
+        ""
+        (string-append
+         (format "~a" target) ":"
+         (sha1 (open-input-string
+                (string-join
+                 (sort
+                  (for/list ([p (in-list link-js)])
+                    (define f (if (path? p) p (string->path p)))
+                    (string-append (path->string (file-name-from-path f)) ":"
+                                   (if (file-exists? f) (call-with-input-file f sha1) "")))
+                  string<?)
+                 "|"))))))
   (substring
-   (sha1 (open-input-string (string-join (list upstream-sha delta wasm-deps pkgs locals) "|")))
+   (sha1 (open-input-string
+          (string-join (append (list upstream-sha delta wasm-deps pkgs locals)
+                               (if (equal? link-component "") '() (list link-component)))
+                       "|")))
    0 16))
 
 (define (cache-dir-for key) (build-path cache-root key))

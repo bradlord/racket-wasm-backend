@@ -1,5 +1,5 @@
 diff --git a/main.zuo b/main.zuo
-index 84c516d6b0..b1b5eeedd0 100644
+index 84c516d..557877d 100644
 --- a/main.zuo
 +++ b/main.zuo
 @@ -195,12 +195,20 @@
@@ -60,7 +60,7 @@ index 84c516d6b0..b1b5eeedd0 100644
                                        'DESTDIR (if prefix
                                                     (lookup 'DESTDIR "")
                                                     "")
-@@ -260,7 +289,16 @@
+@@ -260,7 +289,26 @@
                                        ;; `DESTDIR` fixes later:
                                        'SKIP_DESTDIR_FIX "skip"
                                        ;; Propagate `MAKE`
@@ -74,11 +74,21 @@ index 84c516d6b0..b1b5eeedd0 100644
 +                                      ;; (consumed by cs/c/build.zuo's
 +                                      ;; `wasm-deps` target). libffi is always
 +                                      ;; built; this adds more (e.g. "draw").
-+                                      'WASM_DEPS (lookup 'WASM_DEPS ""))
++                                      'WASM_DEPS (lookup 'WASM_DEPS "")
++                                      ;; App-supplied emcc link JS + the surface
++                                      ;; it targets, consumed by cs/c/build.zuo's
++                                      ;; `wasm` link. Space-joined absolute paths
++                                      ;; (the orchestrator's make-wasm); the link
++                                      ;; appends them to scheme.* or scheme-web.*
++                                      ;; per APP_TARGET only.
++                                      'LINK_PRE_JS (lookup 'LINK_PRE_JS "")
++                                      'LINK_POST_JS (lookup 'LINK_POST_JS "")
++                                      'LINK_EXTERN_PRE_JS (lookup 'LINK_EXTERN_PRE_JS "")
++                                      'APP_TARGET (lookup 'APP_TARGET "browser"))
                                       ;; Propagate `RACKET` and similar if specified
                                       'RACKET (get-provided-racket)
                                       'BOOTFILE_RACKET (lookup 'BOOTFILE_RACKET)
-@@ -269,17 +307,38 @@
+@@ -269,17 +317,38 @@
                                                     (if (equal? s "")
                                                         ""
                                                         (build-path s "ChezScheme")))
@@ -121,7 +131,7 @@ index 84c516d6b0..b1b5eeedd0 100644
  
    (define (remove-early-load-dlls)
      ;; On Windows, remove DLLs that might be loaded by `raco` on startup,
-@@ -419,22 +478,78 @@
+@@ -419,22 +488,78 @@
      (define jobs (get-jobs))
  
      (unless also?
@@ -211,7 +221,7 @@ index 84c516d6b0..b1b5eeedd0 100644
    (define (pkgs-catalog token vars)
      (racket vars
              (list "-U" "-G" (path-only build-config.rktd)
-@@ -840,6 +933,55 @@
+@@ -840,6 +965,55 @@
      (build-one "racket/src/expander/main.zuo" "expander")
      (build-one "racket/src/cs/main.zuo" "schemified"))
  
@@ -267,7 +277,7 @@ index 84c516d6b0..b1b5eeedd0 100644
    ;; ------------------------------------------------------------
    ;; Targets
  
-@@ -872,6 +1014,9 @@
+@@ -872,6 +1046,9 @@
         [:target pb-stage () ,(lambda (token) (pb-manage 'stage))]
         [:target pb-push () ,(lambda (token) (pb-manage 'push))]
  

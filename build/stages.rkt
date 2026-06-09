@@ -32,14 +32,28 @@
 ;; Run `make wasm` (or another target) in the clone root, mirroring buildit.sh.
 ;; `local-pkgs` is a space-joined string of absolute local-package source dirs;
 ;; main.zuo's install-base-pkgs `--copy`-installs them into share/pkgs.
+;;
+;; `pre-js`/`post-js`/`extern-pre-js` are the app's emcc link-JS files (lists of
+;; absolute paths); `app-target` ('node/'browser) is the surface they target. They
+;; flow as the LINK_*_JS / APP_TARGET make vars -> main.zuo (propagation) ->
+;; cs/c/build.zuo's `wasm` link, which appends them to the targeted surface only.
+;; Like LOCAL_PKGS, these vars are shell-split downstream, so the paths must not
+;; contain spaces.
 (define (make-wasm #:target [target "wasm"]
                    #:scheme scheme #:racket racket
-                   #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs [local-pkgs ""])
+                   #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs [local-pkgs ""]
+                   #:pre-js [pre-js '()] #:post-js [post-js '()]
+                   #:extern-pre-js [extern-pre-js '()] #:app-target [app-target 'browser])
   ;; SETUP_MACHINE_FLAGS mirrors buildit.sh's `-MCR \`pwd\`/build/zo:` with pwd =
   ;; the make working dir (the clone root).
   (define setup-flags
     (string-append "-MCR " (path->string (path->complete-path clone-dir)) "/build/zo:"))
-  (info-msg "make ~a  (PKGS=~s WASM_DEPS=~s LOCAL_PKGS=~s)" target pkgs wasm-deps local-pkgs)
+  ;; A list of paths -> the space-joined absolute-path string the LINK_*_JS make
+  ;; vars want ("" = none).
+  (define (join-paths xs)
+    (string-join (map (lambda (p) (path->string (path->complete-path p))) xs) " "))
+  (info-msg "make ~a  (PKGS=~s WASM_DEPS=~s LOCAL_PKGS=~s APP_TARGET=~s)"
+            target pkgs wasm-deps local-pkgs app-target)
   (run "make" #:dir clone-dir
        #:args (list target
                     (string-append "SCHEME=" scheme)
@@ -47,6 +61,10 @@
                     (string-append "PKGS=" pkgs)
                     (string-append "WASM_DEPS=" wasm-deps)
                     (string-append "LOCAL_PKGS=" local-pkgs)
+                    (string-append "LINK_PRE_JS=" (join-paths pre-js))
+                    (string-append "LINK_POST_JS=" (join-paths post-js))
+                    (string-append "LINK_EXTERN_PRE_JS=" (join-paths extern-pre-js))
+                    (string-append "APP_TARGET=" (symbol->string (normalize-target app-target)))
                     (string-append "SETUP_MACHINE_FLAGS=" setup-flags))))
 
 ;; The runtime set (link products + the separate package payload share.data*)
@@ -187,16 +205,21 @@
 ;; (dist/ + the IDE surface) and the app API (`build/app.rkt` make-wasm-racket).
 (define (build-runtime #:pkgs pkgs #:wasm-deps wasm-deps
                        #:local-pkgs [local-pkgs '()]
+                       #:pre-js [pre-js '()] #:post-js [post-js '()]
+                       #:extern-pre-js [extern-pre-js '()]
                        #:scheme [scheme-opt #f] #:racket [racket-opt #f]
                        #:dest [dest dist-dir]
                        #:surface-dir [surface-dir (build-path ide-app-dir "public")]
                        #:target [target 'browser]
                        #:force? [force? #f])
   ;; The runtime is fully determined by (upstream-sha, delta, wasm-deps, pkgs,
-  ;; local-pkgs). If we've built this exact config before, assemble straight from
-  ;; the cache -- no `make`, no relink, and crucially no mutation of the shared
-  ;; clone, so an app with a different config can't clobber this one (Phase 3).
-  (define key (build-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs))
+  ;; local-pkgs) plus, when present, the app's link JS + the surface it targets.
+  ;; If we've built this exact config before, assemble straight from the cache --
+  ;; no `make`, no relink, and crucially no mutation of the shared clone, so an
+  ;; app with a different config can't clobber this one (Phase 3).
+  (define link-js (append extern-pre-js pre-js post-js))
+  (define key (build-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
+                         #:link-js link-js #:target target))
   (cond
     [(and (not force?) (cache-complete? key))
      (info-msg "runtime cache hit (~a): assembling from cache, no build" key)
@@ -213,7 +236,9 @@
      (make-wasm #:scheme scheme #:racket racket #:pkgs pkgs #:wasm-deps wasm-deps
                 #:local-pkgs (string-join (map (lambda (p) (path->string (path->complete-path p)))
                                                local-pkgs)
-                                          " "))
+                                          " ")
+                #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
+                #:app-target target)
      ;; Pack the browser package payload as a separate data file (the browser
      ;; link no longer bakes it in); collect picks up share.data/share.data.js.
      (pack-share-data)

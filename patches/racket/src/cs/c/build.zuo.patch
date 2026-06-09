@@ -1,5 +1,5 @@
 diff --git a/racket/src/cs/c/build.zuo b/racket/src/cs/c/build.zuo
-index b4e92eecc6..6810122352 100644
+index b4e92ee..260cdd3 100644
 --- a/racket/src/cs/c/build.zuo
 +++ b/racket/src/cs/c/build.zuo
 @@ -54,6 +54,24 @@
@@ -148,7 +148,7 @@ index b4e92eecc6..6810122352 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +775,253 @@
+@@ -691,6 +775,273 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -307,6 +307,22 @@ index b4e92eecc6..6810122352 100644
 +                             (preload (at-source "../../../collects") "/collects")
 +                             (preload (at-source "../../../etc") "/etc")))
 +                   (define wasm-shell (at-source "../../../../wasm-shell"))
++                   ;; App-supplied emcc link JS (build/app.rkt manifest fields
++                   ;; 'pre-js/'post-js/'extern-pre-js), passed as space-joined
++                   ;; absolute paths in the LINK_*_JS make vars and shell-split
++                   ;; here; each file becomes `<flag> <path>`. They are appended to
++                   ;; the targeted surface only (APP_TARGET), AFTER the built-in
++                   ;; glue below -- so an app's --pre-js runs after node-load-share
++                   ;; and an app's --extern-pre-js after node-locate-file.
++                   (define (link-js-args flag var)
++                     (apply append
++                            (map (lambda (f) (list flag f))
++                                 (shell->strings (lookup var "")))))
++                   (define app-link-args
++                     (append (link-js-args "--extern-pre-js" 'LINK_EXTERN_PRE_JS)
++                             (link-js-args "--pre-js" 'LINK_PRE_JS)
++                             (link-js-args "--post-js" 'LINK_POST_JS)))
++                   (define app-target (lookup 'APP_TARGET "browser"))
 +                   ;; The node (`scheme.*`) link: REPL over Node's stdio.
 +                   (define node-args
 +                     (append
@@ -330,6 +346,8 @@ index b4e92eecc6..6810122352 100644
 +                            ;; node ships packages OUT of the link so a package
 +                            ;; change needn't relink scheme.*.
 +                            "--pre-js"        (build-path wasm-shell "node-load-share.js"))
++                      ;; App link JS for the node surface only.
++                      (if (equal? app-target "node") app-link-args (list))
 +                      ;; Core preloads only (boot/collects/etc); packages load
 +                      ;; from share.data at runtime via node-load-share.js.
 +                      core-preloads
@@ -360,6 +378,8 @@ index b4e92eecc6..6810122352 100644
 +                      dep-linkflags
 +                      (list "--pre-js"  (build-path wasm-shell "idbfs-init.js")
 +                            "--post-js" (build-path wasm-shell "shell-tty.js"))
++                      ;; App link JS for the browser surface only.
++                      (if (equal? app-target "browser") app-link-args (list))
 +                      ;; Core preloads only: the package tree ships as a
 +                      ;; separate share.data/share.data.js (built by the
 +                      ;; orchestrator's `pack-pkgs`, loaded by shell-worker.js)
@@ -402,7 +422,7 @@ index b4e92eecc6..6810122352 100644
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                  ,(lambda (path token)
                     (scheme "--script" (at-source "convert-to-boot.ss")
-@@ -765,7 +1100,11 @@
+@@ -765,7 +1116,11 @@
                                   token))])]
             [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                  (not (equal? (lookup 'RACKET) "")))
@@ -415,7 +435,7 @@ index b4e92eecc6..6810122352 100644
              (when xpatch?
                (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
              `([:target bootfiles ()
-@@ -878,7 +1217,19 @@
+@@ -878,7 +1233,19 @@
                  ,(lambda (token)
                     (install #f)
                     (setup))]
@@ -436,7 +456,7 @@ index b4e92eecc6..6810122352 100644
         [:target plain-install ()
                  ,(lambda (token)
                     (install #f))]
-@@ -1092,32 +1443,39 @@
+@@ -1092,32 +1459,39 @@
                   (list petite-v.boot scheme-v.boot racket-v.boot)
                   (list "petite.boot" "scheme.boot" "racket.boot")))])
  
@@ -499,7 +519,7 @@ index b4e92eecc6..6810122352 100644
      (call-with-dest-racket
       (lambda (bindir dest-racket)
         (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
-@@ -1125,13 +1483,37 @@
+@@ -1125,13 +1499,37 @@
                                     (hash-set config 'copytree-prepared-setup-files #t)
                                     config))
         (maybe-copytree copytree-config dest-racket copytree-racket at-dir)

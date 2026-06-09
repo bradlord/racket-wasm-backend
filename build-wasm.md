@@ -252,15 +252,39 @@ clone), and the default IDE build ships it via `default-local-pkgs`
 catalog (`inject-local-packages!`, `build/pkgs.rkt`), since that flow installs
 from the catalog rather than via `LOCAL_PKGS`.
 
+**App-supplied link JS (`#:pre-js` / `#:post-js` / `#:extern-pre-js`).** An app
+can contribute its own JS to the emcc link via the manifest fields `'pre-js`,
+`'post-js`, `'extern-pre-js` (each a list of app-relative `.js` paths, a bare
+string accepted as one). `read-app-manifest` resolves them to absolute paths;
+`make-wasm-racket` threads them through `build-runtime`, which passes them to
+`make-wasm` as the space-joined `LINK_PRE_JS` / `LINK_POST_JS` /
+`LINK_EXTERN_PRE_JS` make vars (plus `APP_TARGET`). The `Makefile`'s `BUILD_VARS`
+forwards them to the `zuo . wasm` invocation, `main.zuo` propagates them into the
+`cs/c` sub-build's vars, and the `wasm` link target in
+`racket/src/cs/c/build.zuo` shell-splits each and appends `--pre-js <path>` (etc.)
+**after** its own built-in glue (`node-tty.js`/`idbfs-init.js`, the
+`node-locate-file.js` extern-pre-js), so an app's JS runs after — and can override
+— the runtime's. The JS lands in the app's **target surface only** (a node app's
+JS in `scheme.*`, a browser app's in `scheme-web.*`); the one `wasm` target still
+builds both surfaces, `APP_TARGET` just selects which link gets the JS. Because
+the JS changes the linked binary, its **contents feed the build-key** (so editing
+a pre-js file relinks), together with the target — meaning an app *with* link JS
+keys separately per surface, while link-JS-free apps key exactly as before and a
+node/browser pair still shares one cache entry. Like `LOCAL_PKGS`, the paths pass
+through a make var that is shell-split downstream, so they must not contain spaces.
+
 #### Runtime cache (build isolation)
 
 The runtime binary + package payload are fully determined by the **pinned
 upstream SHA**, a **hash of the delta** (`patches/` + `overlay/` +
-`overlay-local/`), the native-dep selection (**`WASM_DEPS`**), and the package
-set (**`PKGS`**) -- *not* by the page surface. `build/cache.rkt` hashes those
+`overlay-local/`), the native-dep selection (**`WASM_DEPS`**), the package
+set (**`PKGS`**), the **local packages** (`#:local-pkgs`, hashed by content),
+and — when an app supplies emcc link JS — that **JS's contents plus the surface
+it targets** -- *not* by the page surface. `build/cache.rkt` hashes those
 into a short **build-key** and caches the runtime set (`runtime-output-names`)
-under `.work/runtime-cache/<key>/`. `build-runtime` (`build/stages.rkt`) checks
-it first:
+under `.work/runtime-cache/<key>/`. (The link-JS component is omitted entirely
+when an app has none, so keys for link-JS-free apps are byte-identical to before
+the field existed.) `build-runtime` (`build/stages.rkt`) checks it first:
 
 - **cache hit** -- a config built before is reassembled by *copying from the
   cache*: no `make`, no relink, and no mutation of the shared clone. Two apps
