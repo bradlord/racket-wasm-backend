@@ -11,7 +11,7 @@
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
-;;   serve [port]              COOP/COEP server over dist/
+;;   serve <dir> [port]        COOP/COEP server over <dir> (e.g. an app's dist/)
 ;;   clean                     remove the cloned tree (.work/racket)
 ;;
 ;; build / rebuild-binary-catalog options:
@@ -43,13 +43,13 @@
          (when (null? (cdr as)) (error 'build "~a requires a value" a))
          (loop (cddr as) (hash-set h key (cadr as))))
        (case a
-         [("--pkgs")      (val 'pkgs)]
+         [("--pkgs") (val 'pkgs)]
          [("--wasm-deps") (val 'wasm-deps)]
-         [("--scheme")    (val 'scheme)]
-         [("--racket")    (val 'racket)]
-         [("--dest")      (val 'dest)]
+         [("--scheme") (val 'scheme)]
+         [("--racket") (val 'racket)]
+         [("--dest") (val 'dest)]
          ;; Boolean flag: bypass the runtime cache and force a real build.
-         [("--force")     (loop (cdr as) (hash-set h 'force? #t))]
+         [("--force") (loop (cdr as) (hash-set h 'force? #t))]
          [else (error 'build "unknown option: ~a" a)])])))
 
 ;; --- subcommands --------------------------------------------------------
@@ -65,7 +65,7 @@
 (define (cmd-build args)
   (define opts (parse-build-opts args))
   (run-app-manifest ide-app-dir
-                    #:dest   dist-dir
+                    #:dest dist-dir
                     #:scheme (hash-ref opts 'scheme #f)
                     #:racket (hash-ref opts 'racket #f)
                     #:force? (hash-ref opts 'force? #f)))
@@ -80,7 +80,7 @@
   (define dir (car args))
   (define opts (parse-build-opts (cdr args)))
   (run-app-manifest dir
-                    #:dest   (hash-ref opts 'dest #f)
+                    #:dest (hash-ref opts 'dest #f)
                     #:scheme (hash-ref opts 'scheme #f)
                     #:racket (hash-ref opts 'racket #f)
                     #:force? (hash-ref opts 'force? #f)))
@@ -92,16 +92,27 @@
   (pack-share-data)
   (collect-outputs))
 
+(define (parse-serve-args args)
+  (when (empty? args) (error "must specify directory to serve"))
+  (define path (car args))
+  (define port (if (>= (length args) 2)
+                   (car (cdr args))
+                   "8123"))
+
+  (values path port)
+  )
 (define (cmd-serve args)
-  (define port (if (pair? args) (car args) "8123"))
-  (unless (directory-exists? dist-dir)
-    (error 'serve "no ~a -- run `build` first" dist-dir))
+  (define-values (path port) (parse-serve-args args))
+  ; (define port (if (pair? args) (car args) "8123"))
+  ; (define path (build-path "apps" "ide" "dist"))
+  (unless (directory-exists? path)
+    (error 'serve "no ~a -- run `build` first" path))
   ;; serve.rkt is repo-side glue, not copied into dist/; run it in place with the
   ;; process cwd set to dist/ (it serves the current directory).
   (define serve.rkt (build-path runtime-glue-dir "serve.rkt"))
-  (info-msg "serving ~a on port ~a (COOP/COEP) -> http://127.0.0.1:~a/ide.html"
-            dist-dir port port)
-  (run "racket" #:dir dist-dir #:args (list (path->string serve.rkt) port)))
+  (info-msg "serving ~a on port ~a (COOP/COEP) -> http://127.0.0.1:~a/"
+            path port port)
+  (run "racket" #:dir path #:args (list (path->string serve.rkt) port)))
 
 (define (cmd-clean args)
   (when (directory-exists? clone-dir)
@@ -110,7 +121,7 @@
   (info-msg "clean done"))
 
 (define commands
-  (list (cons "sync"  cmd-sync)
+  (list (cons "sync" cmd-sync)
         (cons "apply" cmd-apply)
         (cons "build" cmd-build)
         (cons "app" cmd-app)

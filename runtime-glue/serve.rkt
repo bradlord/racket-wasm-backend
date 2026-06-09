@@ -16,7 +16,7 @@
 ;;
 ;;     racket serve.rkt [port]      # default port 8123
 ;;
-;; then open http://127.0.0.1:<port>/ide.html (the IDE).
+;; then open http://127.0.0.1:<port>/
 
 (require racket/cmdline
          racket/tcp
@@ -68,13 +68,6 @@
                       (cons "Content-Length" (bytes-length bytes))))
   (unless head? (write-bytes bytes out)))
 
-(define index-body
-  (string-append
-   "<!doctype html><meta charset=utf-8><title>Racket WASM</title>"
-   "<h1>Racket WASM</h1><ul>"
-   "<li><a href=\"ide.html\">ide.html</a> (the IDE)</li>"
-   "</ul>"))
-
 ;; Resolve a request target to a file under the serving root, or #f if it
 ;; escapes the root (a `..` traversal) or does not exist as a file.
 (define (resolve-path root target)
@@ -82,7 +75,7 @@
   (define decoded (uri-decode no-query))
   (define rel (string-trim decoded "/" #:right? #f))
   (cond
-    [(string=? rel "") 'index]
+    [(string=? rel "") (simplify-path (build-path root "index.html"))]
     [else
      (define p (simplify-path (build-path root rel) #f))
      (define root* (simplify-path (path->complete-path root) #f))
@@ -112,8 +105,6 @@
         [else
          (define resolved (resolve-path root target))
          (cond
-           [(eq? resolved 'index)
-            (send-text out 200 "OK" index-body #:head? head?)]
            [(path? resolved)
             (write-status out 200 "OK"
                           (list (cons "Content-Type" (guess-type resolved))
@@ -129,7 +120,6 @@
   (define root (current-directory))
   (define listener (tcp-listen port 512 #t "127.0.0.1"))
   (printf "Serving cross-origin-isolated on http://127.0.0.1:~a/\n" port)
-  (printf "Open http://127.0.0.1:~a/ide.html\n" port)
   (flush-output)
   (let loop ()
     (define-values (in out) (tcp-accept listener))
