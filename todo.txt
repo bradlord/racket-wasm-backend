@@ -70,3 +70,7 @@ hooks, finishing the wasm-shell/ extraction. (See annotations below.)
                       #local-pkgs local-pkgs
                       #wasm-libs libs)
     (copy-files "./web-repl/public" build-dir))
+
+- Some way to run racket code at different steps of the build process. 
+    - Before build: I can't think of anything right now, but I'll think more later.
+    - After build: Might generate html or js from racket and put in dist folder. Should accept path to dist folder as an argument to a function.

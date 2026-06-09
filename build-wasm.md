@@ -218,7 +218,10 @@ It wraps `build-runtime` (`build/stages.rkt`), differing only in the output
 `racket build/main.rkt app <dir>` builds into `<dir>/dist` (override `--dest`).
 `examples/hello/` is the minimal example: a non-IDE page that seeds a `main.rkt`
 into MEMFS, runs it (`argv ["-u" "/tmp/main.rkt"]`), and drains its stdout from
-the output ring -- the smallest counterpart to `ide.js`.
+the output ring -- the smallest counterpart to `ide.js`. `apps/node-repl/` is the
+node-target counterpart: a manifest-only app (`'target 'node`, no page surface)
+whose `dist/` is `scheme.{js,wasm,data}`, run directly as a Racket REPL with
+`node apps/node-repl/dist/scheme.js`.
 
 **The IDE is just an app (dogfood).** There is no bespoke IDE build:
 `racket build/main.rkt build` builds **`apps/ide`** through this same path
