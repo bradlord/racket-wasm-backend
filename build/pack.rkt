@@ -21,7 +21,7 @@
          "util.rkt")
 
 (provide write-data-package! share-preload-entries share-preload-files
-         pack-share-data)
+         pack-share-data extend-data-package! data-package-file-bytes)
 
 ;; --- the file list -------------------------------------------------------
 
@@ -133,6 +133,80 @@
   (call-with-output-file (build-path dest (string-append name ".js")) #:exists 'replace
     (lambda (out) (write-string js out)))
   (info-msg "packed ~a (~a files, ~a bytes) -> ~a" name (length files) size dest)
+  (values data-path size))
+
+;; --- extending an existing data package ----------------------------------
+
+;; Recover the loader's manifest (the `{files,remote_package_size}` JSON the
+;; loader passes to `loadPackage(...)`) from an already-generated `<name>.js`.
+;; The JSON is emitted on a single line by `write-data-package!`, terminated by
+;; `);` then the loader's `})();` tail -- anchor on that to bound the match.
+(define (read-data-package-manifest js-path)
+  (define txt (file->string js-path))
+  (define m (regexp-match #px"loadPackage\\((\\{.*\\})\\);\\s*\\}\\)\\(\\);" txt))
+  (unless m
+    (error 'extend-data-package "cannot find loadPackage(...) manifest in ~a" js-path))
+  (string->jsexpr (cadr m)))
+
+;; The bytes of one virtual-path file already packed in `existing-data`, located
+;; via the `existing-js` manifest -- or #f if that vpath isn't present. Lets the
+;; consume path read the runtime's current `/share/links.rktd` out of `share.data`
+;; so it can merge the new package's collection link.
+(define (data-package-file-bytes #:data existing-data #:js existing-js vpath)
+  (define files (hash-ref (read-data-package-manifest existing-js) 'files))
+  (define entry (for/or ([m (in-list files)])
+                  (and (equal? (hash-ref m 'filename) vpath) m)))
+  (and entry
+       (call-with-input-file existing-data
+         (lambda (in)
+           (file-position in (hash-ref entry 'start))
+           (read-bytes (- (hash-ref entry 'end) (hash-ref entry 'start)) in)))))
+
+;; Extend an existing `<name>`/`<name>.js` data package (e.g. a runtime's
+;; shipped `share.data`) with additional (virtual-path . real-path) files,
+;; writing a fresh pair into `dest`. Used by the cross-SDK consume path
+;; (build/consume.rkt) to fold a newly cross-compiled package into the runtime's
+;; package payload WITHOUT re-packing the whole tree (the consumer need not ship
+;; the full cross-root). New bytes are appended after the existing blob; an
+;; `add` vpath that already exists in the manifest is re-pointed to the new
+;; slice (the stale bytes become harmless dead space). `name` is e.g.
+;; "share.data". Returns (values new-data-path new-size).
+(define (extend-data-package! #:data existing-data #:js existing-js
+                              #:add add-files #:dest dest #:name [name "share.data"])
+  (define manifest (read-data-package-manifest existing-js))
+  (define old-files (hash-ref manifest 'files))
+  (define add-vpaths (for/hash ([e (in-list add-files)]) (values (car e) #t)))
+  ;; Drop any prior entry the add-set replaces (dedup on re-install).
+  (define kept (filter (lambda (m) (not (hash-ref add-vpaths (hash-ref m 'filename) #f)))
+                       old-files))
+  (make-directory* dest)
+  (define data-path (build-path dest name))
+  ;; New blob = existing bytes (verbatim, offsets preserved) ++ the added files.
+  (define base-bytes (file->bytes existing-data))
+  (define new-metas
+    (call-with-output-file data-path #:exists 'replace
+      (lambda (out)
+        (write-bytes base-bytes out)
+        (let loop ([fs add-files] [pos (bytes-length base-bytes)] [acc '()])
+          (cond
+            [(null? fs) (reverse acc)]
+            [else
+             (define bs (file->bytes (cdar fs)))
+             (write-bytes bs out)
+             (define end (+ pos (bytes-length bs)))
+             (loop (cdr fs) end
+                   (cons (hasheq 'filename (caar fs) 'start pos 'end end) acc))])))))
+  (define size (file-size data-path))
+  (define metas (append kept new-metas))
+  (define vpaths (map (lambda (m) (hash-ref m 'filename)) metas))
+  (define create-paths
+    (string-join (map fs-create-path-line (ancestor-dirs vpaths)) "\n"))
+  (define metadata
+    (jsexpr->string (hasheq 'files metas 'remote_package_size size)))
+  (call-with-output-file (build-path dest (string-append name ".js")) #:exists 'replace
+    (lambda (out) (write-string (loader-js name create-paths metadata) out)))
+  (info-msg "extended ~a (+~a files, ~a total, ~a bytes) -> ~a"
+            name (length add-files) (length metas) size dest)
   (values data-path size))
 
 ;; The loader source. Mirrors file_packager's contract: increments

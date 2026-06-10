@@ -13,6 +13,10 @@
 ;;   cross-sdk [<dir>] [opts]  emit a standalone cross-compiler SDK (retarget files
 ;;                             + tpb32l cross-root + .tar.gz) -- emsdk-free; lets a
 ;;                             same-version host racket cross-build new packages
+;;   cross-install --sdk <dir> --share-data <path> --dest <dir> [--racket <p>]
+;;                 <pkg-src>...  cross-compile new package(s) for tpb32l with a
+;;                             cross-SDK and fold them into a runtime's share.data
+;;                             (no clone, no emsdk)
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
@@ -39,7 +43,8 @@
          "stages.rkt"
          "pack.rkt"
          "pkgs.rkt"
-         "app.rkt")
+         "app.rkt"
+         "consume.rkt")
 
 ;; --- option parsing for build-like subcommands --------------------------
 
@@ -132,6 +137,32 @@
                           #:scheme (hash-ref opts 'scheme #f)
                           #:racket (hash-ref opts 'racket #f)))
 
+;; Cross-compile new package(s) for tpb32l with a cross-SDK and fold them into a
+;; runtime's share.data: `cross-install --sdk <dir> --share-data <path>
+;; --dest <dir> [--racket <p>] <pkg-src>...`. No clone, no emsdk -- just a
+;; same-version host racket + the SDK retarget files. See build/consume.rkt.
+(define (cmd-cross-install args)
+  (let loop ([as args] [sdk #f] [share-data #f] [dest #f] [racket #f] [work #f] [pkgs '()])
+    (define (val k) (when (null? (cdr as)) (error 'cross-install "~a requires a value" (car as))) (cadr as))
+    (cond
+      [(null? as)
+       (unless sdk (error 'cross-install "missing --sdk <dir>"))
+       (unless share-data (error 'cross-install "missing --share-data <path/share.data>"))
+       (unless dest (error 'cross-install "missing --dest <dir>"))
+       (when (null? pkgs) (error 'cross-install "no package source dirs given"))
+       (cross-install #:sdk sdk #:share-data share-data #:dest dest
+                      #:racket racket #:work work #:pkgs (reverse pkgs))]
+      [else
+       (case (car as)
+         [("--sdk")        (loop (cddr as) (val '_) share-data dest racket work pkgs)]
+         [("--share-data") (loop (cddr as) sdk (val '_) dest racket work pkgs)]
+         [("--dest")       (loop (cddr as) sdk share-data (val '_) racket work pkgs)]
+         [("--racket")     (loop (cddr as) sdk share-data dest (val '_) work pkgs)]
+         [("--work")       (loop (cddr as) sdk share-data dest racket (val '_) pkgs)]
+         [else
+          (when (string-prefix? (car as) "--") (error 'cross-install "unknown option: ~a" (car as)))
+          (loop (cdr as) sdk share-data dest racket work (cons (car as) pkgs))])])))
+
 ;; Repack only the browser package data file (share.data/share.data.js) from
 ;; the already-installed share/pkgs tree, then refresh dist/. The point of the
 ;; split: this avoids the emcc relink, so changing packages is cheap.
@@ -174,6 +205,7 @@
         (cons "app" cmd-app)
         (cons "package" cmd-package)
         (cons "cross-sdk" cmd-cross-sdk)
+        (cons "cross-install" cmd-cross-install)
         (cons "rebuild-binary-catalog" cmd-rebuild-catalog)
         (cons "pack-pkgs" cmd-pack-pkgs)
         (cons "serve" cmd-serve)

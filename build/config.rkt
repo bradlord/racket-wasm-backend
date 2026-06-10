@@ -141,6 +141,13 @@
           (build-path clone-dir "racket" "share" "pkgs"))
     (cons (build-path "cross-root" "share" "links.rktd")
           (build-path clone-dir "racket" "share" "links.rktd"))
+    ;; `lib/system.rktd` carries `target-machine tpb32l`; the consumer's running
+    ;; racket reads it (via the cross config's `find-lib-dir`) to know it must
+    ;; cross-compile for tpb32l rather than the host machine. Without it the
+    ;; cross-compile silently emits HOST bytecode -- see build/consume.rkt and
+    ;; build-wasm.md "Consuming the cross-compiler SDK".
+    (cons (build-path "cross-root" "lib" "system.rktd")
+          (build-path clone-dir "racket" "lib" "system.rktd"))
     ;; `-G` config the cross `raco setup` uses, and the SELF_ROOT build config.
     (cons (build-path "cross-root" "etc")
           (build-path clone-dir "racket" "etc"))
