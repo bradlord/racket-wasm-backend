@@ -85,6 +85,16 @@
 ;; The full set a build emits and the cache snapshots (both surfaces).
 (define runtime-output-names (append node-runtime-names web-runtime-names))
 
+;; The package-agnostic runtime BINARIES (everything the emcc link emits) vs the
+;; separable package PAYLOAD (share.data*, packed emsdk-free from the package
+;; tree). The runtime is built once with PKGS= and cached under a
+;; package-agnostic key; the payload is sourced from a cross-SDK cross-root and
+;; cached under the package key. See build/stages.rkt `build-runtime` and
+;; build-wasm.md "Package-agnostic runtime + packages via the cross-SDK".
+(define pkg-payload-names '("share.data" "share.data.js"))
+(define base-runtime-names
+  (filter (lambda (n) (not (member n pkg-payload-names))) runtime-output-names))
+
 ;; An app's `target` field: which surface it runs on. Default is browser.
 ;; `web` is accepted as an alias for `browser`.
 (define (normalize-target t)

@@ -97,18 +97,29 @@
 (define (collect-outputs #:dest        [dest dist-dir]
                          #:surface-dir [surface-dir (build-path ide-app-dir "public")]
                          #:target      [target 'browser]
-                         #:runtime-src [runtime-src (clone-wasm-out)])
-  (unless (directory-exists? runtime-src)
-    (error 'collect-outputs "no runtime output dir at ~a (did the link run / cache exist?)" runtime-src))
+                         #:runtime-src [runtime-src (clone-wasm-out)]
+                         #:runtime-srcs [runtime-srcs #f])
+  ;; The runtime files may come from one dir (the clone / a package) or be split
+  ;; across several (the package-agnostic binaries cache + the package payload
+  ;; cache). `runtime-srcs` (a search list) takes precedence; `runtime-src` is the
+  ;; single-dir shorthand. Each target file is taken from the first src that has it.
+  (define srcs (or runtime-srcs (list runtime-src)))
+  (for ([s (in-list srcs)])
+    (unless (directory-exists? s)
+      (error 'collect-outputs "no runtime output dir at ~a (did the link run / cache exist?)" s)))
   (make-directory* dest)
-  (define (copy-into from name)
+  (define (copy-from from name)
     (define s (build-path from name))
-    (when (file-exists? s)
-      (define d (build-path dest name))
-      (when (file-exists? d) (delete-file d))
-      (copy-file s d)))
-  ;; 1. Runtime binaries for this surface (from the clone's link output, or cache).
-  (for ([n (in-list (runtime-names-for-target target))]) (copy-into runtime-src n))
+    (and (file-exists? s)
+         (let ([d (build-path dest name)])
+           (when (file-exists? d) (delete-file d))
+           (copy-file s d)
+           #t)))
+  (define (copy-into _from name) ; surface/glue (single dir)
+    (copy-from _from name))
+  ;; 1. Runtime files for this surface, taken from whichever src holds each.
+  (for ([n (in-list (runtime-names-for-target target))])
+    (for/or ([s (in-list srcs)]) (copy-from s n)))
   ;; 2. Host-side glue (from the repo) -- browser only.
   (when (eq? (normalize-target target) 'browser)
     (for ([n (in-list browser-glue-files)]) (copy-into runtime-glue-dir n)))
@@ -165,16 +176,81 @@
   (write-metadata-into! dest (or pkg-key key) (hash-ref meta 'components components)
                         (hash-ref meta 'racket-version #f)))
 
-;; Core build sequence, parameterized by output destination and surface. Ensure
-;; the clone+delta, resolve host toolchains, run `make wasm`, pack the package
-;; payload, and assemble outputs into `dest` with `surface-dir` as the page.
-;; `pkgs`/`wasm-deps` are the make-var strings; scheme/racket are explicit paths
-;; or #f to resolve/build. This is the shared engine for both the CLI `build`
-;; (dist/ + the IDE surface) and the app API (`build/app.rkt` make-wasm-racket).
+(define (->path p) (if (path? p) p (string->path p)))
+
+(define (local-pkgs->string local-pkgs)
+  (string-join (map (lambda (p) (path->string (path->complete-path p))) local-pkgs) " "))
+
+;; --- the two build layers -----------------------------------------------
+;;
+;; The runtime is split into a package-AGNOSTIC binary layer (the emcc link
+;; products, built with PKGS=) and a package PAYLOAD layer (share.data*, the
+;; tpb32l package bytecode packed emsdk-free from a cross-SDK cross-root). Each
+;; caches under its own key, so changing the app's packages re-runs only the
+;; emsdk-free payload layer -- no emcc relink. See build-wasm.md.
+
+;; Build (or cache-hit) the package-agnostic binaries for (wasm-deps, link-js,
+;; target): `make wasm` with PKGS= and LOCAL_PKGS=. Returns the build's Racket
+;; version for the dist metadata. Needs the emsdk on a miss (the emcc link); a
+;; hit copies from cache with no build and no clone mutation.
+(define (ensure-base-runtime! base-key base-components
+                              #:wasm-deps wasm-deps #:target target
+                              #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
+                              #:scheme scheme-opt #:racket racket-opt #:force? force?)
+  (cond
+    [(and (not force?) (cache-complete? base-key base-runtime-names))
+     (info-msg "base runtime cache hit (~a): no emcc link" base-key)
+     (let ([m (read-build-metadata (cache-dir-for base-key))]) (and m (hash-ref m 'racket-version #f)))]
+    [else
+     (require-emsdk!)
+     (unless (directory-exists? (build-path clone-dir ".git")) (sync))
+     (apply-delta)
+     (define scheme (resolve-host-scheme scheme-opt))
+     (define racket (resolve-host-racket racket-opt))
+     (make-wasm #:scheme scheme #:racket racket #:pkgs "" #:wasm-deps wasm-deps
+                #:local-pkgs ""
+                #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
+                #:app-target target)
+     (snapshot-runtime! base-key (clone-wasm-out) base-runtime-names)
+     (define rv (host-racket-version racket))
+     (write-metadata-into! (cache-dir-for base-key) base-key base-components rv)
+     rv]))
+
+;; Build (or cache-hit) the package payload (share.data*) for (pkgs, wasm-deps,
+;; local-pkgs): cross-compile the package set to tpb32l in a cross-SDK cross-root
+;; (`make wasm-cross-sdk`) and pack it -- emsdk-FREE (no emcc link, no kernel; see
+;; the `sdk?` flavor). A hit copies from cache with no compile.
+(define (ensure-pkg-payload! pkg-key pkg-components
+                             #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
+                             #:scheme scheme-opt #:racket racket-opt #:force? force?)
+  (cond
+    [(and (not force?) (cache-complete? pkg-key pkg-payload-names))
+     (info-msg "package payload cache hit (~a): no cross-compile" pkg-key)]
+    [else
+     ;; No require-emsdk!: the cross-root + share.data are pure tpb32l.
+     (unless (directory-exists? (build-path clone-dir ".git")) (sync))
+     (apply-delta)
+     (define scheme (resolve-host-scheme scheme-opt))
+     (define racket (resolve-host-racket racket-opt))
+     (make-wasm #:target "wasm-cross-sdk" #:scheme scheme #:racket racket
+                #:pkgs pkgs #:wasm-deps wasm-deps
+                #:local-pkgs (local-pkgs->string local-pkgs))
+     ;; Pack share.data from the clone's now-populated package tree (base in-tree
+     ;; pkgs + the app's pkgs, all tpb32l).
+     (pack-share-data)
+     (snapshot-runtime! pkg-key (clone-wasm-out) pkg-payload-names)
+     (write-metadata-into! (cache-dir-for pkg-key) pkg-key pkg-components
+                           (host-racket-version racket))]))
+
+;; Core build sequence: assemble `dest` (with `surface-dir` as the page) from the
+;; two layers. The binaries come from the package-agnostic base cache (one emcc
+;; link, reused across apps); the package payload from the cross-SDK-sourced
+;; payload cache (emsdk-free). `pkgs`/`wasm-deps` are the make-var strings;
+;; scheme/racket are explicit host paths or #f to resolve. Shared engine for the
+;; CLI `build` and the app API (`build/app.rkt` make-wasm-racket).
 ;;
 ;; `runtime-pkg` (a prebuilt binary package dir) takes a separate path entirely:
-;; assemble against it with no clone/make/emsdk after a build-key check -- see
-;; `assemble-from-package`.
+;; assemble against it with no clone/make/emsdk after a build-key check.
 (define (build-runtime #:pkgs pkgs #:wasm-deps wasm-deps
                        #:local-pkgs [local-pkgs '()]
                        #:pre-js [pre-js '()] #:post-js [post-js '()]
@@ -185,56 +261,43 @@
                        #:target [target 'browser]
                        #:runtime-pkg [runtime-pkg #f]
                        #:force? [force? #f])
-  ;; The runtime is fully determined by (upstream-sha, delta, wasm-deps, pkgs,
-  ;; local-pkgs) plus, when present, the app's link JS + the surface it targets.
-  ;; If we've built this exact config before, assemble straight from the cache --
-  ;; no `make`, no relink, and crucially no mutation of the shared clone, so an
-  ;; app with a different config can't clobber this one (Phase 3).
   (define link-js (append extern-pre-js pre-js post-js))
-  (define components (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
-                                           #:local-pkgs local-pkgs
-                                           #:link-js link-js #:target target))
-  (define key (key-from-components components))
+  ;; Package-agnostic binary key (PKGS=/LOCAL_PKGS=); payload key (pkgs, no
+  ;; link-js/surface -- the payload is surface-independent); and the full config
+  ;; key the dist records for provenance / `--runtime` package matching.
+  (define base-components (build-key-components #:pkgs "" #:wasm-deps wasm-deps
+                                               #:local-pkgs '()
+                                               #:link-js link-js #:target target))
+  (define base-key (key-from-components base-components))
+  (define pkg-components (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
+                                              #:local-pkgs local-pkgs))
+  (define pkg-key (key-from-components pkg-components))
+  (define full-components (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
+                                               #:local-pkgs local-pkgs
+                                               #:link-js link-js #:target target))
+  (define full-key (key-from-components full-components))
+  (define browser? (eq? (normalize-target target) 'browser))
   (cond
     [runtime-pkg
-     (assemble-from-package (->path runtime-pkg) key components
+     (assemble-from-package (->path runtime-pkg) full-key full-components
                             #:dest dest #:surface-dir surface-dir
                             #:target target #:force? force?)]
-    [(and (not force?) (cache-complete? key))
-     (info-msg "runtime cache hit (~a): assembling from cache, no build" key)
-     (define rv (let ([m (read-build-metadata (cache-dir-for key))])
-                  (and m (hash-ref m 'racket-version #f))))
-     (collect-outputs #:dest dest #:surface-dir surface-dir #:target target
-                      #:runtime-src (cache-dir-for key))
-     (write-metadata-into! dest key components rv)]
     [else
-     (require-emsdk!)
-     ;; Ensure the clone exists and the delta is applied (idempotent; preserves
-     ;; build artifacts from a prior run -- only sync wipes the tree).
-     (unless (directory-exists? (build-path clone-dir ".git")) (sync))
-     (apply-delta)
-     (define scheme (resolve-host-scheme scheme-opt))
-     (define racket (resolve-host-racket racket-opt))
-     (make-wasm #:scheme scheme #:racket racket #:pkgs pkgs #:wasm-deps wasm-deps
-                #:local-pkgs (string-join (map (lambda (p) (path->string (path->complete-path p)))
-                                               local-pkgs)
-                                          " ")
-                #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
-                #:app-target target)
-     ;; Pack the browser package payload as a separate data file (the browser
-     ;; link no longer bakes it in); collect picks up share.data/share.data.js.
-     (pack-share-data)
-     ;; Cache the runtime set for this config so the next build of it is a copy.
-     (snapshot-runtime! key (clone-wasm-out))
-     (define rv (host-racket-version racket))
-     ;; Record provenance into the cache entry (so `package` and later hits can
-     ;; carry it) and into dist.
-     (write-metadata-into! (cache-dir-for key) key components rv)
+     (define rv (ensure-base-runtime! base-key base-components
+                                      #:wasm-deps wasm-deps #:target target
+                                      #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
+                                      #:scheme scheme-opt #:racket racket-opt #:force? force?))
+     ;; Only browser ships the separate package payload; node bakes its (now
+     ;; package-less) tree into scheme.data at link time.
+     (when browser?
+       (ensure-pkg-payload! pkg-key pkg-components #:pkgs pkgs #:wasm-deps wasm-deps
+                            #:local-pkgs local-pkgs #:scheme scheme-opt #:racket racket-opt
+                            #:force? force?))
      (collect-outputs #:dest dest #:surface-dir surface-dir #:target target
-                      #:runtime-src (clone-wasm-out))
-     (write-metadata-into! dest key components rv)]))
-
-(define (->path p) (if (path? p) p (string->path p)))
+                      #:runtime-srcs (if browser?
+                                         (list (cache-dir-for base-key) (cache-dir-for pkg-key))
+                                         (list (cache-dir-for base-key))))
+     (write-metadata-into! dest full-key full-components rv)]))
 
 ;; Build (or reuse the cache for) a config and emit a *distributable* binary
 ;; package into `dest`: the full runtime set (`runtime-output-names`, both
@@ -256,8 +319,15 @@
                                            #:local-pkgs local-pkgs
                                            #:link-js link-js #:target target))
   (define key (key-from-components components))
-  ;; Ensure the runtime set for this config is in the cache (build on a miss),
-  ;; without needing a surface -- assemble into a throwaway dir.
+  ;; The package's files now live in two caches: the package-agnostic binaries
+  ;; (base-key) and the package payload (pkg-key). Build both via build-runtime
+  ;; (into a throwaway dir, no surface), then gather the union from each cache.
+  (define base-key (key-from-components
+                    (build-key-components #:pkgs "" #:wasm-deps wasm-deps
+                                          #:local-pkgs '() #:link-js link-js #:target target)))
+  (define pkg-key (key-from-components
+                   (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
+                                         #:local-pkgs local-pkgs)))
   (define scratch (make-temporary-file "rktwasm-pkg-~a" 'directory))
   (dynamic-wind
    void
@@ -267,16 +337,19 @@
                     #:scheme scheme-opt #:racket racket-opt
                     #:dest scratch #:surface-dir #f #:target target #:force? force?))
    (lambda () (when (directory-exists? scratch) (delete-directory/files scratch))))
-  (define src (cache-dir-for key))
   (define pkg-dest (->path dest))
   (make-directory* pkg-dest)
-  (for ([n (in-list runtime-output-names)])
-    (define s (build-path src n))
-    (when (file-exists? s)
-      (define d (build-path pkg-dest n))
-      (when (file-exists? d) (delete-file d))
-      (copy-file s d)))
-  (define rv (let ([m (read-build-metadata src)]) (and m (hash-ref m 'racket-version #f))))
+  ;; Binaries (both surfaces) from the base cache, share.data* from the payload cache.
+  (define (gather! src names)
+    (for ([n (in-list names)])
+      (define s (build-path src n))
+      (when (file-exists? s)
+        (define d (build-path pkg-dest n))
+        (when (file-exists? d) (delete-file d))
+        (copy-file s d))))
+  (gather! (cache-dir-for base-key) base-runtime-names)
+  (gather! (cache-dir-for pkg-key) pkg-payload-names)
+  (define rv (let ([m (read-build-metadata (cache-dir-for base-key))]) (and m (hash-ref m 'racket-version #f))))
   (write-metadata-into! pkg-dest key components rv)
   ;; Single distributable artifact next to the dir: <name>.tar.gz of its contents.
   (define parent (path-only (path->complete-path (simplify-path pkg-dest))))

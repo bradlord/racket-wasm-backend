@@ -127,22 +127,25 @@
 
 (define (cache-dir-for key) (build-path cache-root key))
 
-;; A cache entry is usable only if every runtime file is present.
-(define (cache-complete? key)
+;; A cache entry is usable only if every file in `names` is present. `names`
+;; defaults to the full runtime set; the split build passes `base-runtime-names`
+;; (package-agnostic binaries) or `pkg-payload-names` (share.data*) so each layer
+;; caches under its own key independently.
+(define (cache-complete? key [names runtime-output-names])
   (define d (cache-dir-for key))
   (and (directory-exists? d)
-       (for/and ([n (in-list runtime-output-names)])
+       (for/and ([n (in-list names)])
          (file-exists? (build-path d n)))))
 
-;; Copy the runtime-output set from `src` (the clone's wasm out dir) into the
-;; cache for `key`.
-(define (snapshot-runtime! key src)
+;; Copy the files in `names` from `src` into the cache for `key`. `names`
+;; defaults to the full runtime set (see `cache-complete?`).
+(define (snapshot-runtime! key src [names runtime-output-names])
   (define d (cache-dir-for key))
   (make-directory* d)
-  (for ([n (in-list runtime-output-names)])
+  (for ([n (in-list names)])
     (define s (build-path src n))
     (when (file-exists? s)
       (define dst (build-path d n))
       (when (file-exists? dst) (delete-file dst))
       (copy-file s dst)))
-  (info-msg "runtime cached under ~a" d))
+  (info-msg "cached ~a file(s) under ~a" (length names) d))
