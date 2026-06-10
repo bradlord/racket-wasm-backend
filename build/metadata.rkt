@@ -18,6 +18,7 @@
 ;; the key (the key is determined by the delta + dep set; the host == target
 ;; version per CLAUDE.md, so it is informational provenance, not an input).
 (require racket/format
+         racket/file
          racket/list
          racket/string
          racket/date
@@ -25,7 +26,8 @@
 
 (provide build-metadata-filename
          make-build-metadata write-build-metadata! read-build-metadata
-         key-mismatch-report host-racket-version)
+         key-mismatch-report host-racket-version
+         host-scheme-version host-scheme-machine racket-version-gate-report)
 
 (define build-metadata-filename "racket-wasm.build.rktd")
 
@@ -40,13 +42,27 @@
 ;; Build the metadata hash. `components` is a build-key-components hash; `key`
 ;; its `key-from-components`; `runtime-files` the file names present alongside
 ;; this metadata; `racket-version` the build's Racket version (or #f).
+;;
+;; `kind` distinguishes artifacts: 'runtime (a binary package / dist, default)
+;; vs 'cross-sdk (a cross-compiler SDK). For an SDK, `host-machine` (the host
+;; Chez machine type, e.g. "tarm64osx") and `chez-version` are recorded and
+;; become a HARD compatibility gate on the consume side -- the retarget xpatch
+;; loads only into a same-arch, same-version host (unlike `racket-version` on a
+;; runtime package, which is informational). They are #f / omitted for runtime
+;; artifacts.
 (define (make-build-metadata #:key key #:components components
                              #:racket-version [racket-version #f]
-                             #:runtime-files [runtime-files '()])
+                             #:runtime-files [runtime-files '()]
+                             #:kind [kind 'runtime]
+                             #:host-machine [host-machine #f]
+                             #:chez-version [chez-version #f])
   (hash 'format-version 1
+        'kind           kind
         'build-key      key
         'components     components
         'racket-version racket-version
+        'host-machine   host-machine
+        'chez-version   chez-version
         'runtime-files  runtime-files
         'created        (iso-now)))
 
@@ -101,3 +117,37 @@
 (define (host-racket-version racket-path)
   (with-handlers ([exn:fail? (lambda (_) #f)])
     (string-trim (run/string racket-path #:args '("--version")))))
+
+;; Evaluate a one-form Chez expression in the host scheme and return its
+;; printed value (trimmed), or #f. Chez prints `--version` to stderr (which
+;; `run/string` drops), so query via `--script` instead, which writes to stdout.
+(define (scheme-eval->string scheme-path expr)
+  (with-handlers ([exn:fail? (lambda (_) #f)])
+    (define f (make-temporary-file "rktwasm-sch-~a.ss"))
+    (dynamic-wind
+     void
+     (lambda ()
+       (call-with-output-file f #:exists 'replace
+         (lambda (o) (fprintf o "(begin (display ~a) (newline))\n" expr)))
+       (string-trim (run/string scheme-path #:args (list "--script" (path->string f)))))
+     (lambda () (when (file-exists? f) (delete-file f))))))
+
+;; The host Chez machine type (e.g. "tarm64osx") and version -- recorded in a
+;; cross-SDK's metadata as the hard host-compatibility gate (the retarget
+;; xpatch loads only into a same-arch, same-version host).
+(define (host-scheme-machine scheme-path) (scheme-eval->string scheme-path "(machine-type)"))
+(define (host-scheme-version scheme-path) (scheme-eval->string scheme-path "(scheme-version)"))
+
+;; Consume-side gate: compare an SDK's recorded host `racket-version` against
+;; the consumer's host racket. Returns #f when compatible (or nothing to check),
+;; else a human-readable refusal message. (Used by the follow-on consume side;
+;; defined here so the rule lives with the metadata.)
+(define (racket-version-gate-report expected actual)
+  (cond
+    [(or (not expected) (not actual)) #f]
+    [(equal? expected actual) #f]
+    [else
+     (format (string-append "host Racket version mismatch: SDK was built with ~s, "
+                            "host racket is ~s.\nThe cross-compiler xpatch loads only "
+                            "into the exact same Racket version.")
+             expected actual)]))

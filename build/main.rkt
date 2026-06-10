@@ -10,6 +10,9 @@
 ;;   app <dir> [opts]          build a custom app from <dir>/app.rkt -> <dir>/dist
 ;;   package [<dir>] [opts]    emit a distributable binary package (runtime set +
 ;;                             metadata + .tar.gz) for <dir>'s config (default IDE)
+;;   cross-sdk [<dir>] [opts]  emit a standalone cross-compiler SDK (retarget files
+;;                             + tpb32l cross-root + .tar.gz) -- emsdk-free; lets a
+;;                             same-version host racket cross-build new packages
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
@@ -114,6 +117,21 @@
                         #:racket (hash-ref opts 'racket #f)
                         #:force? (hash-ref opts 'force? #f)))
 
+;; Emit a standalone cross-compiler SDK: `cross-sdk [<app-dir>] [--dest <dir>]
+;; [opts]`. Default app = the IDE; default dest = <app-dir>/cross-sdk. Builds the
+;; cross-compiler + tpb32l cross-root emsdk-free (no --runtime / --force: the SDK
+;; is its own from-scratch artifact) and writes the dir + a sibling .tar.gz.
+(define (cmd-cross-sdk args)
+  (define-values (dir rest)
+    (if (or (null? args) (string-prefix? (car args) "--"))
+        (values ide-app-dir args)
+        (values (car args) (cdr args))))
+  (define opts (parse-build-opts rest))
+  (cross-sdk-app-manifest dir
+                          #:dest (hash-ref opts 'dest #f)
+                          #:scheme (hash-ref opts 'scheme #f)
+                          #:racket (hash-ref opts 'racket #f)))
+
 ;; Repack only the browser package data file (share.data/share.data.js) from
 ;; the already-installed share/pkgs tree, then refresh dist/. The point of the
 ;; split: this avoids the emcc relink, so changing packages is cheap.
@@ -155,6 +173,7 @@
         (cons "build" cmd-build)
         (cons "app" cmd-app)
         (cons "package" cmd-package)
+        (cons "cross-sdk" cmd-cross-sdk)
         (cons "rebuild-binary-catalog" cmd-rebuild-catalog)
         (cons "pack-pkgs" cmd-pack-pkgs)
         (cons "serve" cmd-serve)

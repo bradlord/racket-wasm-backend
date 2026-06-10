@@ -1,8 +1,8 @@
 diff --git a/main.zuo b/main.zuo
-index 84c516d..557877d 100644
+index 84c516d..6a756ab 100644
 --- a/main.zuo
 +++ b/main.zuo
-@@ -195,12 +195,20 @@
+@@ -195,12 +195,31 @@
    (define (build-base subdir token [options (hash)])
      (define also? (hash-ref options 'also? #f))
      (define prefix (hash-ref options 'prefix #f))
@@ -10,6 +10,17 @@ index 84c516d..557877d 100644
 +    ;; default the configure wrapper to `emconfigure`, force cross mode,
 +    ;; and finish at the `wasm` emcc-link target instead of installing.
 +    (define wasm? (hash-ref options 'wasm? #f))
++    ;; Cross-compiler SDK: the same pb/tpb32l cross as `wasm?` but WITHOUT the
++    ;; emconfigure wrapper (native cc -- the patched configure presets the cross
++    ;; sizeof, so no emsdk is needed), and the flow stops after `wasm-setup`
++    ;; (cross-compiler + tpb32l .zo) instead of running `wasm-deps` + the emcc
++    ;; link. The cross-compiler and the tpb32l .zo are emscripten-INDEPENDENT, so
++    ;; the SDK builds with no emsdk at all. See build-wasm.md "Cross-compiler SDK".
++    (define sdk? (hash-ref options 'sdk? #f))
++    ;; Both flavors drive the same emscripten-configured cross tree (the
++    ;; `--host=...-emscripten` marker is what makes cs/c stop at boot images);
++    ;; they differ only in the emconfigure wrapper and the post-build steps.
++    (define wasm-cross? (or wasm? sdk?))
      (define msvc? (eq? 'windows (hash-ref (runtime-env) 'toolchain-type)))
      (define targets
        (configured-targets-at (hash
@@ -23,12 +34,12 @@ index 84c516d..557877d 100644
                                'inputs (list (at-source "racket/src" subdir "Makefile.in"))
                                'outputs (list (at-source "racket/src/build" subdir "Makefile"))
                                'configure-args (append
-@@ -216,6 +224,12 @@
+@@ -216,6 +235,12 @@
                                                 (if (hash-ref options 'server-compile-machine? #f)
                                                     '("--enable-crossany")
                                                     '())
 +                                               ;; WASM target: pb tpb32l cross to Emscripten
-+                                               (if wasm?
++                                               (if wasm-cross?
 +                                                   '("--enable-pb"
 +                                                     "--enable-mach=tpb32l"
 +                                                     "--host=wasm32-unknown-emscripten")
@@ -36,7 +47,7 @@ index 84c516d..557877d 100644
                                                 (shell->strings (lookup 'DISABLE_STATIC_LIBS))
                                                 (cond
                                                   [msvc?
-@@ -249,7 +263,22 @@
+@@ -249,7 +274,22 @@
                                        'PLT_SETUP_OPTIONS (build-shell
                                                            (if also? "-D" "")
                                                            (setup-options)
@@ -56,11 +67,11 @@ index 84c516d..557877d 100644
 +                                                          ;; and sets a non-zero exit. See
 +                                                          ;; build-wasm.md "Binary-only package
 +                                                          ;; preload".
-+                                                          (if wasm? "--no-pkg-deps" ""))
++                                                          (if wasm-cross? "--no-pkg-deps" ""))
                                        'DESTDIR (if prefix
                                                     (lookup 'DESTDIR "")
                                                     "")
-@@ -260,7 +289,26 @@
+@@ -260,7 +300,26 @@
                                        ;; `DESTDIR` fixes later:
                                        'SKIP_DESTDIR_FIX "skip"
                                        ;; Propagate `MAKE`
@@ -88,12 +99,12 @@ index 84c516d..557877d 100644
                                       ;; Propagate `RACKET` and similar if specified
                                       'RACKET (get-provided-racket)
                                       'BOOTFILE_RACKET (lookup 'BOOTFILE_RACKET)
-@@ -269,17 +317,38 @@
+@@ -269,17 +328,43 @@
                                                     (if (equal? s "")
                                                         ""
                                                         (build-path s "ChezScheme")))
 -                                     'CROSS_MODE (if (equal? (lookup 'CS_CROSS_SUFFIX) "-cross")
-+                                     'CROSS_MODE (if (or wasm?
++                                     'CROSS_MODE (if (or wasm-cross?
 +                                                         (equal? (lookup 'CS_CROSS_SUFFIX) "-cross"))
                                                       "cross"
                                                       "")))))
@@ -117,7 +128,7 @@ index 84c516d..557877d 100644
 +    ;; before `wasm` so the target .zo are present in `collects` when the
 +    ;; link preloads them.
 +    (cond
-+      [wasm?
++      [wasm-cross?
 +       ;; Install PKGS into share/pkgs (sources) before the cross setup,
 +       ;; so `wasm-setup`'s `raco setup` compiles them for tpb32l too.
 +       (build/dep (find-target build-config.rktd the-targets) token)
@@ -125,13 +136,18 @@ index 84c516d..557877d 100644
 +       (build (find-target "wasm-setup" targets) #f (build-options))
 +       (install-base-pkgs token (find-racket vm) #t)
 +       (build (find-target "wasm-setup" targets) #f (build-options))
-+       (build (find-target "wasm" targets) #f (build-options))]
++       ;; The cross-compiler + tpb32l cross-root now exist. `wasm?` goes on to
++       ;; the emcc link; `sdk?` stops here (no emsdk, no link) -- the SDK
++       ;; collector (build/stages.rkt) harvests the cross-compiler retarget
++       ;; files + cross-root from the tree.
++       (unless sdk?
++         (build (find-target "wasm" targets) #f (build-options)))]
 +      [else
 +       (build (find-target "install-again" targets) #f (build-options))]))
  
    (define (remove-early-load-dlls)
      ;; On Windows, remove DLLs that might be loaded by `raco` on startup,
-@@ -419,22 +488,78 @@
+@@ -419,22 +504,78 @@
      (define jobs (get-jobs))
  
      (unless also?
@@ -221,7 +237,7 @@ index 84c516d..557877d 100644
    (define (pkgs-catalog token vars)
      (racket vars
              (list "-U" "-G" (path-only build-config.rktd)
-@@ -840,6 +965,55 @@
+@@ -840,6 +981,62 @@
      (build-one "racket/src/expander/main.zuo" "expander")
      (build-one "racket/src/cs/main.zuo" "schemified"))
  
@@ -236,6 +252,13 @@ index 84c516d..557877d 100644
 +
 +  (define (wasm token)
 +    (build-base "cs/c" token (hash 'wasm? #t)))
++
++  ;; Cross-compiler SDK: configure + build the tpb32l cross-compiler and run the
++  ;; cross `raco setup` (cross-root tpb32l .zo), stopping before the emcc link --
++  ;; no emsdk, no wasm-deps. The orchestrator's SDK collector then harvests the
++  ;; retarget files + cross-root. See build-wasm.md "Cross-compiler SDK".
++  (define (wasm-cross-sdk token)
++    (build-base "cs/c" token (hash 'sdk? #t)))
 +
 +  ;; Standalone step (run manually after a bootstrap `make wasm`): strip the
 +  ;; already-cross-compiled in-tree packages into a cached binary-only
@@ -277,11 +300,12 @@ index 84c516d..557877d 100644
    ;; ------------------------------------------------------------
    ;; Targets
  
-@@ -872,6 +1046,9 @@
+@@ -872,6 +1069,10 @@
         [:target pb-stage () ,(lambda (token) (pb-manage 'stage))]
         [:target pb-push () ,(lambda (token) (pb-manage 'push))]
  
 +       [:target wasm () ,(lambda (token) (wasm token))]
++       [:target wasm-cross-sdk () ,(lambda (token) (wasm-cross-sdk token))]
 +       [:target wasm-binary-pkgs () ,(lambda (token) (wasm-binary-pkgs token))]
 +
         [:target pkgs-catalog () ,(lambda (token) (pkgs-catalog token (find-racket vars vm)))]

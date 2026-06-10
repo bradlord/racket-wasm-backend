@@ -17,7 +17,8 @@
          "metadata.rkt"
          "pack.rkt")
 
-(provide build-runtime build-package collect-outputs make-wasm)
+(provide build-runtime build-package collect-outputs make-wasm
+         build-cross-sdk package-cross-sdk)
 
 (define (emsdk-ready?)
   (and (find-executable-path "emcc")
@@ -286,3 +287,75 @@
        #:args (list "-czf" (path->string tgz) (path->string base)))
   (info-msg "binary package -> ~a (build-key ~a)\n    archive -> ~a"
             pkg-dest key tgz))
+
+;; --- cross-compiler SDK -------------------------------------------------
+;;
+;; A standalone artifact (NOT part of the runtime binary package): the
+;; cross-compiler retarget files + a cross-root of `tpb32l` dependency bytecode,
+;; enough for a host Racket of the same version to cross-compile NEW packages
+;; for `tpb32l` with no clone and no emsdk. Producing it is a normal Racket
+;; pb/`tpb32l` cross-compile (host Chez + host Racket) -- the cross-compiler and
+;; the `tpb32l` `.zo` are emscripten-INDEPENDENT, so emsdk is never needed (and
+;; `require-emsdk!` is deliberately NOT called). See build-wasm.md and
+;; config.rkt `cross-sdk-layout`.
+
+;; Copy one (dest-relative . clone-source) layout entry, file or tree.
+(define (copy-sdk-entry! dest-root dest-rel src)
+  (define dst (build-path dest-root dest-rel))
+  (define-values (base name dir?) (split-path dst))
+  (make-directory* base)
+  (cond
+    [(directory-exists? src) (copy-directory/files src dst)]
+    [(file-exists? src)      (copy-file src dst)]
+    [else (error 'cross-sdk "missing SDK input (did the cross build run?): ~a" src)]))
+
+;; Collect the cross-SDK file-set (config.rkt `cross-sdk-layout`) from the clone
+;; into `dest`, write the build-metadata sidecar (kind 'cross-sdk + the host
+;; arch/version gate), and create a sibling `<dest>.tar.gz`. The clone must
+;; already hold the cross build's output (`build-cross-sdk` ensures this).
+(define (package-cross-sdk #:key key #:components components #:dest dest
+                           #:scheme scheme #:racket racket)
+  (define dest* (->path dest))
+  (when (directory-exists? dest*) (delete-directory/files dest*))
+  (make-directory* dest*)
+  (for ([e (in-list (cross-sdk-layout))])
+    (copy-sdk-entry! dest* (car e) (cdr e)))
+  (write-build-metadata!
+   dest*
+   (make-build-metadata #:key key #:components components #:kind 'cross-sdk
+                        #:racket-version (host-racket-version racket)
+                        #:host-machine   (host-scheme-machine scheme)
+                        #:chez-version   (host-scheme-version scheme)))
+  (define parent (path-only (path->complete-path (simplify-path dest*))))
+  (define base (file-name-from-path (simplify-path (path->complete-path dest*))))
+  (define tgz (path-replace-extension (build-path parent base) ".tar.gz"))
+  (when (file-exists? tgz) (delete-file tgz))
+  (run "tar" #:dir parent
+       #:args (list "-czf" (path->string tgz) (path->string base)))
+  (info-msg "cross-compiler SDK -> ~a (build-key ~a, host ~a)\n    archive -> ~a"
+            dest* key (host-scheme-machine scheme) tgz))
+
+;; Build (emsdk-free) the cross-compiler + `tpb32l` cross-root for a config and
+;; emit a distributable SDK into `dest`. The key is computed from the package
+;; set only (no link JS / surface -- the SDK is surface-independent), so it
+;; matches the runtime package built from the same `pkgs`/`wasm-deps`/locals.
+(define (build-cross-sdk #:pkgs pkgs #:wasm-deps wasm-deps
+                         #:local-pkgs [local-pkgs '()]
+                         #:scheme [scheme-opt #f] #:racket [racket-opt #f]
+                         #:dest dest)
+  (define components (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
+                                           #:local-pkgs local-pkgs))
+  (define key (key-from-components components))
+  ;; No `require-emsdk!`: the SDK is pure `tpb32l`, no emcc anywhere.
+  (unless (directory-exists? (build-path clone-dir ".git")) (sync))
+  (apply-delta)
+  (define scheme (resolve-host-scheme scheme-opt))
+  (define racket (resolve-host-racket racket-opt))
+  (make-wasm #:target "wasm-cross-sdk" #:scheme scheme #:racket racket
+             #:pkgs pkgs #:wasm-deps wasm-deps
+             #:local-pkgs (string-join
+                           (map (lambda (p) (path->string (path->complete-path p)))
+                                local-pkgs)
+                           " "))
+  (package-cross-sdk #:key key #:components components #:dest dest
+                     #:scheme scheme #:racket racket))

@@ -99,3 +99,50 @@
   (case (normalize-target target)
     [(node) node-runtime-names]
     [(browser) web-runtime-names]))
+
+;; --- cross-compiler SDK -------------------------------------------------
+;;
+;; A standalone artifact, distributed SEPARATELY from the runtime binary
+;; package (build/stages.rkt `build-cross-sdk`): the cross-compiler retarget
+;; files + a cross-root of `tpb32l` dependency bytecode (sources + .zo), enough
+;; for a host Racket of the same version to cross-compile NEW raco packages for
+;; `tpb32l` with no clone and no emsdk. The cross-compiler and the `tpb32l` .zo
+;; are emscripten-INDEPENDENT (pure target bytecode); only the C runtime is
+;; emscripten. See build-wasm.md "Cross-compiler SDK".
+
+;; The clone dir that holds the cross-compiler retarget files; doubles as the
+;; `--cross-compiler tpb32l <dir>` plugin dir.
+(define (clone-cross-plugin-dir)
+  (build-path clone-dir "racket" "src" "build" "cs" "c"))
+
+;; The three retarget files (host-arch + Racket-version locked, target-machine
+;; tagged): the cross-compile server + the compile/library xpatches.
+(define cross-sdk-retarget-names
+  (list "cross-serve.so"
+        (format "compile-xpatch.~a" target-machine)
+        (format "library-xpatch.~a" target-machine)))
+
+;; The SDK's on-disk layout: a list of (dest-relative-path . clone-source-path).
+;; A source that is a directory is copied as a tree; a file is copied as a file.
+;; Single source of truth for the collector (build/stages.rkt) and the consume
+;; side (follow-on). The cross-root carries BOTH sources and the in-place
+;; `tpb32l` `.zo`: sources let the consumer's racket regenerate host shadows on
+;; demand (so `build/zo` is deliberately NOT shipped), the `.zo` are the target
+;; dependency bytecode a new package links against.
+(define (cross-sdk-layout)
+  (define plugin (clone-cross-plugin-dir))
+  (append
+   (for/list ([n (in-list cross-sdk-retarget-names)])
+     (cons (build-path "cross-compiler" n) (build-path plugin n)))
+   (list
+    (cons (build-path "cross-root" "collects")
+          (build-path clone-dir "racket" "collects"))
+    (cons (build-path "cross-root" "share" "pkgs")
+          (build-path clone-dir "racket" "share" "pkgs"))
+    (cons (build-path "cross-root" "share" "links.rktd")
+          (build-path clone-dir "racket" "share" "links.rktd"))
+    ;; `-G` config the cross `raco setup` uses, and the SELF_ROOT build config.
+    (cons (build-path "cross-root" "etc")
+          (build-path clone-dir "racket" "etc"))
+    (cons (build-path "cross-root" "config")
+          (build-path clone-dir "build" "config")))))

@@ -23,7 +23,8 @@
          "config.rkt"
          "stages.rkt")
 
-(provide make-wasm-racket run-app-manifest package-app-manifest read-app-manifest)
+(provide make-wasm-racket run-app-manifest package-app-manifest
+         cross-sdk-app-manifest read-app-manifest)
 
 ;; A list of symbols/strings -> the space-joined make-var string make-wasm wants.
 ;; '() / "" means "none" (libffi-only for wasm-libs; no extra packages).
@@ -178,3 +179,23 @@
    #:scheme        scheme
    #:racket        racket
    #:force?        force?))
+
+;; Load an app manifest and emit a standalone cross-compiler SDK (separate from
+;; the runtime binary package) for its package set into `dest` (default
+;; <app-dir>/cross-sdk): the cross-compiler retarget files + the `tpb32l`
+;; cross-root, built emsdk-free. The SDK is surface-independent, so only the
+;; manifest's `pkgs`/`wasm-libs`/`local-pkgs` matter (no link JS / target); its
+;; build-key matches the runtime package built from the same set.
+(define (cross-sdk-app-manifest app-dir
+                                #:dest [dest #f]
+                                #:scheme [scheme #f]
+                                #:racket [racket #f])
+  (define m (read-app-manifest app-dir))
+  (define (->paths xs) (map (lambda (p) (path->complete-path (->path p))) xs))
+  (build-cross-sdk
+   #:dest       (or dest (build-path (hash-ref m 'dir) "cross-sdk"))
+   #:pkgs       (->names (hash-ref m 'pkgs))
+   #:wasm-deps  (->names (hash-ref m 'wasm-libs))
+   #:local-pkgs (->paths (hash-ref m 'local-pkgs))
+   #:scheme     scheme
+   #:racket     racket))
