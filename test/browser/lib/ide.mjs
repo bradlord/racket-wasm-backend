@@ -55,11 +55,14 @@ async function submitMarker(page, cursor, timeout) {
   return removeFirst(txt, tok);
 }
 
-// Strip REPL noise from a captured transcript: the boot banner and the `> `
-// prompts the REPL prints while waiting for input (one or more can cluster at a
-// line start, e.g. "> > 4950"). Leaves program output and printed values.
+// Strip REPL noise from a captured transcript: the boot banner, the REPL init
+// "no readline support" warning (the wasm runtime has no libedit.so, so readline
+// init fails noisily -- harmless), and the `> ` prompts the REPL prints while
+// waiting for input (one or more can cluster at a line start, e.g. "> > 4950").
+// Leaves program output and printed values.
 function clean(s) {
   s = s.replace(/Welcome to Racket[^\n]*\n?/g, '');
+  s = s.replace(/;\s*Warning: no readline support[\s\S]*?\)\s*\n?/g, '');
   let prev;
   do {
     prev = s;
