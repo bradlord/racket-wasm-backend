@@ -6,7 +6,6 @@
 ;; toolchains, invoke `make wasm` with the buildit.sh-equivalent variables, and
 ;; collect the outputs into dist/.
 (require racket/file
-         racket/list
          racket/path
          racket/string
          "config.rkt"
@@ -15,9 +14,10 @@
          "patches.rkt"
          "toolchain.rkt"
          "cache.rkt"
-         "metadata.rkt")
+         "metadata.rkt"
+         "pack.rkt")
 
-(provide build-runtime build-package collect-outputs make-wasm pack-share-data)
+(provide build-runtime build-package collect-outputs make-wasm)
 
 (define (emsdk-ready?)
   (and (find-executable-path "emcc")
@@ -71,8 +71,8 @@
 ;; The runtime set (link products + the separate package payload share.data*)
 ;; is `runtime-output-names` (config.rkt) -- shared with the cache so the cached
 ;; set and the collected set can't drift. share.data / share.data.js are produced
-;; by `pack-share-data` (file_packager), not the link -- see that function and
-;; build-wasm.md "Packages as a separate data file".
+;; by `pack-share-data` (build/pack.rkt, a pure-Racket file_packager), not the
+;; link -- see that module and build-wasm.md "Packages as a separate data file".
 
 ;; Host-side glue for the *browser* surface, copied from the repo (runtime-glue/)
 ;; rather than staged by the link: shell-worker.js bootstraps the browser runtime
@@ -80,91 +80,12 @@
 ;; runtime-glue/ and is run in place by `serve` -- it is NOT copied into dist/.
 (define browser-glue-files '("shell-worker.js"))
 
-;; Parse a links.rktd for entries whose path resolves to /pkgs/<name> -- the
-;; `(up up #"pkgs" #"name")` form, which `up up` escapes /share to / before
-;; pkgs/name, i.e. in-tree packages linked in place. Mirrors `links-pkgs-roots`
-;; in racket/src/cs/c/build.zuo (keep the two in sync). Copied catalog packages
-;; instead use the `(#"pkgs" #"name")` form, which resolves under /share/pkgs
-;; and is covered by the wholesale share/pkgs preload -- so those are not
-;; returned here. Each links entry is `(<tag> <path> [<version-regexp>])`.
-(define (links-pkgs-roots links-file)
-  (filter values
-    (for/list ([e (in-list (call-with-input-file links-file read))])
-      (define path (and (pair? e) (pair? (cdr e)) (cadr e)))
-      (and (list? path)
-           (= (length path) 4)
-           (eq? (car path) 'up)
-           (eq? (cadr path) 'up)
-           (equal? (caddr path) #"pkgs")
-           (bytes->string/utf-8 (cadddr path))))))
-
-;; Locate Emscripten's file_packager.py: next to emcc (emsdk lays it out as
-;; <emscripten>/tools/file_packager.py while putting <emscripten> on PATH),
-;; falling back to $EMSDK.
-(define (file-packager-path)
-  (define emcc (find-executable-path "emcc"))
-  (define candidates
-    (append
-     (if emcc (list (build-path (path-only emcc) "tools" "file_packager.py")) '())
-     (let ([emsdk (getenv "EMSDK")])
-       (if emsdk
-           (list (build-path emsdk "upstream" "emscripten" "tools" "file_packager.py"))
-           '()))))
-  (or (for/or ([c (in-list candidates)]) (and (file-exists? c) c))
-      (error 'pack-share-data
-             "file_packager.py not found (looked next to emcc and under $EMSDK)")))
-
-;; Build the browser surface's package payload as a SEPARATE Emscripten data
-;; file (share.data + share.data.js) via file_packager, instead of baking the
-;; package tree into the emcc link. This decouples package changes from the
-;; (expensive) relink: re-install packages and re-run this, no emcc link needed.
-;; The preload set mirrors `share-preloads` in cs/c/build.zuo: the wholesale
-;; share/pkgs tree, the installation links file, and every in-tree /pkgs/<name>
-;; the links file points at. Outputs land in `dest` (the wasm out dir) next to
-;; scheme-web.*, ready for collect-outputs. Node (scheme.*) is unaffected -- it
-;; still bakes packages into scheme.data.
-(define (pack-share-data #:dest [dest (clone-wasm-out)])
-  (require-emsdk!)
-  (define fp (file-packager-path))
-  (define share-pkgs (build-path clone-dir "racket" "share" "pkgs"))
-  (define links (build-path clone-dir "racket" "share" "links.rktd"))
-  (unless (directory-exists? share-pkgs)
-    (error 'pack-share-data
-           "no installed package tree at ~a (run a build first)" share-pkgs))
-  (make-directory* dest)
-  (define (preload src dst)
-    (list "--preload" (string-append (path->string src) "@" dst)))
-  ;; In-tree packages linked in place (source bootstrap); empty for a
-  ;; binary-catalog consume where everything is copied under share/pkgs.
-  (define in-tree
-    (if (file-exists? links)
-        (append-map (lambda (name)
-                      (define src (build-path clone-dir "pkgs" name))
-                      (if (directory-exists? src)
-                          (preload src (string-append "/pkgs/" name))
-                          '()))
-                    (links-pkgs-roots links))
-        '()))
-  (define preloads
-    (append (preload share-pkgs "/share/pkgs")
-            (if (file-exists? links) (preload links "/share/links.rktd") '())
-            in-tree))
-  (info-msg "packing share.data via file_packager (~a preload entries) -> ~a"
-            (length (filter (lambda (s) (string=? s "--preload")) preloads))
-            dest)
-  ;; file_packager writes share.data + share.data.js into the cwd; run it in
-  ;; `dest`. Source paths are absolute, so the cwd does not affect them. One
-  ;; loader serves both surfaces (browser fetch / node readFileSync). We do
-  ;; NOT pass --use-preload-cache: the package payload is small (~10MB; the
-  ;; browser already caches the big core .data via the link's own
-  ;; --use-preload-cache and re-fetches share.data through the HTTP cache),
-  ;; and the cache path's IndexedDB probe throws under node, dumping a stack
-  ;; trace on every boot. Caching this tier buys little and isn't worth that.
-  (run "python3" #:dir dest
-       #:args (append
-               (list (path->string fp) "share.data")
-               preloads
-               (list "--js-output=share.data.js"))))
+;; The browser surface's package payload (share.data + share.data.js) is built
+;; as a SEPARATE data file by `pack-share-data` (build/pack.rkt) -- a pure-Racket
+;; file_packager, no emsdk -- instead of baking the package tree into the emcc
+;; link. This decouples package changes from the (expensive) relink: re-install
+;; packages and re-run pack, no emcc link needed. Node (scheme.*) is unaffected
+;; -- it still bakes packages into scheme.data.
 
 ;; Assemble dist/: the runtime binaries from the clone's link output, the
 ;; host-side glue from the repo, and a page surface from the repo. `target`

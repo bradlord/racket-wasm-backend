@@ -1517,9 +1517,9 @@ absent, `install-base-pkgs` falls back to the source install verbatim.
 The package tree is the part of the preload that changes most often (every
 `PKGS` edit), and re-linking just to repackage it is the slow step. So **both**
 surfaces ship the package payload as a **separate Emscripten data file** —
-`share.data` + its loader `share.data.js`, produced by `file_packager.py` —
-instead of baking it into the emcc link. Changing packages then means:
-re-install + repack (`pack-pkgs`), **no relink**.
+`share.data` + its loader `share.data.js` — instead of baking it into the emcc
+link. Changing packages then means: re-install + repack (`pack-pkgs`),
+**no relink** (and, since the packer is pure Racket, **no emsdk** either).
 
 The split (in `cs/c/build.zuo`, the `wasm` target): the link preloads only
 `core-preloads` (boot images + `/collects` + `/etc`, which change only on a
@@ -1527,15 +1527,34 @@ Racket-version rebuild) into the MEMFS, for both the node (`scheme.*`) and
 browser (`scheme-web.*`) surfaces. The package tree is no longer referenced in
 the link at all.
 
-The orchestrator's `pack-share-data` (`build/stages.rkt`) runs `file_packager.py`
-against the installed tree to emit `share.data`/`share.data.js` into the wasm
-out dir: the wholesale `/share/pkgs`, `/share/links.rktd`, and every in-tree
-`/pkgs/<name>` the links file points at (the `links-pkgs-roots` parse of
-`links.rktd` for `(up up #"pkgs" #"name")` entries — formerly in `build.zuo`,
-now living **only** here). It is wired into both `build` and
-`rebuild-binary-catalog` (after the link, before `collect-outputs`), and exposed
-standalone as `racket build/main.rkt pack-pkgs` for the repack-without-relink
-path.
+The orchestrator's `pack-share-data` (`build/pack.rkt`) is a **pure-Racket
+equivalent of `file_packager.py`** — it needs no emsdk, just racket. It emits
+`share.data`/`share.data.js` into the wasm out dir from the installed tree: the
+wholesale `/share/pkgs`, `/share/links.rktd`, and every in-tree `/pkgs/<name>`
+the links file points at (the `links-pkgs-roots` parse of `links.rktd` for
+`(up up #"pkgs" #"name")` entries — formerly in `build.zuo`, now living **only**
+here). The artifact is dead simple: `share.data` is the package files
+concatenated, and `share.data.js` carries each file's `[start,end)` + the
+directory tree and replays them into MEMFS via the documented preload ABI below.
+It is wired into both `build` and `rebuild-binary-catalog` (after the link,
+before `collect-outputs`), and exposed standalone as `racket build/main.rkt
+pack-pkgs` for the repack-without-relink path.
+
+> The pure packer was verified equivalent to `file_packager.py` three ways: the
+> two `share.data`s are byte-size-identical (same file set/bytes; only the
+> *order* within the blob differs — `.data` and `.data.js` are a matched pair, so
+> order is immaterial); executing **both** generated loaders against a mock
+> `Module` builds a byte-identical virtual FS (same paths, same per-file hashes);
+> and the real browser IDE boots on the pure `share.data` and loads packages from
+> it (`racket/draw`, `pict`, `datalog`). The browser test harness
+> (`test/browser`, `tools/eval.mjs`) drives that last check.
+>
+> One sharp edge the loader must respect: it does **all** FS work
+> (`FS_createPath`/`FS_createDataFile`) inside its `preRun` callback, never at
+> import time — `shell-worker.js` `importScripts`es it *before* `scheme-web.js`,
+> so the runtime and those hooks don't exist yet when the loader is first
+> evaluated. (A loader that calls `FS_createPath` at import silently hangs the
+> worker.)
 
 Both surfaces emit and share **one** `share.data`/`share.data.js` pair; the
 generated loader is environment-aware (browser `fetch` vs node `readFileSync`),
@@ -1566,9 +1585,10 @@ Two runtime methods the externally-loaded loader reaches by name —
 `FS_createPath` and `FS_createDataFile` — plus `addRunDependency` /
 `removeRunDependency` are added to each link's `-sEXPORTED_RUNTIME_METHODS` (the
 browser already exported the latter two for IDBFS; the in-link core loader uses
-minified locals and needs none exported). If `file_packager` emits a reference to
-a method not yet exported, boot aborts with an "X is not exported" error — add it
-to that list and rebuild.
+minified locals and needs none exported). If the loader references a method not
+yet exported, boot aborts with an "X is not exported" error — add it to that list
+and rebuild. (The pure packer deliberately uses only these four, the same set
+`file_packager` reached for, so the export list is unchanged.)
 
 ### A `web-repl` helper collection
 

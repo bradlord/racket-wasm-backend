@@ -75,7 +75,7 @@
 ;; selects which subset collect-outputs copies into dist/.
 ;;   node    -- scheme.{js,wasm,data}; packages are baked into scheme.data.
 ;;   browser -- scheme-web.{js,wasm,data} + the separate package payload
-;;              share.data/share.data.js (packed by file_packager, not the link).
+;;              share.data/share.data.js (packed by build/pack.rkt, not the link).
 ;; Glue/surface are repo-side and copied separately, so they are NOT in this set.
 (define node-runtime-names
   '("scheme.js" "scheme.wasm" "scheme.data"))

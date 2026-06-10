@@ -34,6 +34,7 @@
          "upstream.rkt"
          "patches.rkt"
          "stages.rkt"
+         "pack.rkt"
          "pkgs.rkt"
          "app.rkt")
 

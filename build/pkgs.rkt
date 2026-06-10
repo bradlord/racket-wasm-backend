@@ -12,6 +12,7 @@
          "patches.rkt"
          "toolchain.rkt"
          "stages.rkt"
+         "pack.rkt"
          "app.rkt")
 
 (provide rebuild-binary-catalog)

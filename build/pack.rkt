@@ -1,0 +1,196 @@
+#lang racket/base
+;; The package-payload packer: a pure-Racket equivalent of Emscripten's
+;; file_packager.py for share.data + share.data.js, so re-packing the package
+;; tree needs NO emsdk -- just racket. (It replaced the emsdk-backed packer once
+;; verified to build a byte-identical virtual FS and boot the real runtime.)
+;;
+;; The artifact is trivial: share.data is the package files concatenated
+;; back-to-back, and share.data.js is a loader that fetches it and replays each
+;; slice into the runtime's virtual FS via the *documented* Emscripten preload
+;; ABI the runtime already exports: FS_createPath / FS_createDataFile /
+;; addRunDependency / removeRunDependency. The loader does all FS work inside a
+;; `preRun` callback, never at import time -- shell-worker.js importScripts() this
+;; BEFORE scheme-web.js, so the runtime (and those hooks) don't exist yet at
+;; import. See build-wasm.md "Packages as a separate data file".
+(require racket/file
+         racket/path
+         racket/list
+         racket/string
+         json
+         "config.rkt"
+         "util.rkt")
+
+(provide write-data-package! share-preload-entries share-preload-files
+         pack-share-data)
+
+;; --- the file list -------------------------------------------------------
+
+;; The preload set, as (mountpoint . source-path) pairs, mirroring stages.rkt's
+;; `pack-share-data`: the whole installed share/pkgs tree, the links file, and
+;; any in-tree /pkgs/<name> the links file points at (the `(up up #"pkgs" ...)`
+;; form -- in-tree source-bootstrap packages; copied-catalog packages use the
+;; `(#"pkgs" #"name")` form under /share/pkgs and are covered by the wholesale
+;; preload instead. Mirrors `links-pkgs-roots` in racket/src/cs/c/build.zuo
+;; (keep the two in sync). A source path that is a directory is walked; a file
+;; maps to the mountpoint directly.
+(define (links-pkgs-roots links-file)
+  (filter values
+    (for/list ([e (in-list (call-with-input-file links-file read))])
+      (define path (and (pair? e) (pair? (cdr e)) (cadr e)))
+      (and (list? path) (= (length path) 4)
+           (eq? (car path) 'up) (eq? (cadr path) 'up)
+           (equal? (caddr path) #"pkgs")
+           (bytes->string/utf-8 (cadddr path))))))
+
+(define (share-preload-entries #:clone [clone clone-dir])
+  (define share-pkgs (build-path clone "racket" "share" "pkgs"))
+  (define links (build-path clone "racket" "share" "links.rktd"))
+  (unless (directory-exists? share-pkgs)
+    (error 'pack-share-data-pure "no installed package tree at ~a" share-pkgs))
+  (append
+   (list (cons "/share/pkgs" share-pkgs))
+   (if (file-exists? links) (list (cons "/share/links.rktd" links)) '())
+   (if (file-exists? links)
+       (for/list ([name (in-list (links-pkgs-roots links))]
+                  #:when (directory-exists? (build-path clone "pkgs" name)))
+         (cons (string-append "/pkgs/" name) (build-path clone "pkgs" name)))
+       '())))
+
+;; Expand the preload entries into a flat list of (virtual-path . real-path),
+;; one per file -- exactly the set file_packager would pack. A directory entry
+;; is walked recursively (its files mapped under the mountpoint); a file entry
+;; maps to the mountpoint itself.
+(define (share-preload-files #:clone [clone clone-dir])
+  (append-map
+   (lambda (e)
+     (define mount (car e))
+     (define src (cdr e))
+     (cond
+       [(file-exists? src) (list (cons mount src))]
+       [(directory-exists? src)
+        (define base (simplify-path (path->complete-path src)))
+        (for/list ([p (in-directory src)] #:when (file-exists? p))
+          (define rel (find-relative-path base (simplify-path (path->complete-path p))))
+          (cons (string-append mount "/"
+                               (string-join (map path->string (explode-path rel)) "/"))
+                p))]
+       [else '()]))
+   (share-preload-entries #:clone clone)))
+
+;; --- the data file + loader ----------------------------------------------
+
+;; Every ancestor directory of `vpaths` (absolute virtual paths), parents before
+;; children, for the FS_createPath preamble. "/" is implicit (never emitted).
+(define (ancestor-dirs vpaths)
+  (define seen (make-hash))
+  (for ([vp (in-list vpaths)])
+    (define comps (cdr (explode-path (string->path vp)))) ; drop leading "/"
+    (let loop ([acc '()] [cs (drop-right comps 1)])        ; drop the file name
+      (unless (null? cs)
+        (define here (append acc (list (path->string (car cs)))))
+        (hash-set! seen here #t)
+        (loop here (cdr cs)))))
+  (sort (hash-keys seen)
+        (lambda (a b) (or (< (length a) (length b))
+                          (and (= (length a) (length b)) (string<? (string-join a "/") (string-join b "/")))))))
+
+;; A single FS_createPath line: parent dir + new component.
+(define (fs-create-path-line comps)
+  (define parent (if (= (length comps) 1) "/" (string-append "/" (string-join (drop-right comps 1) "/"))))
+  (format "Module['FS_createPath'](~a, ~a, true, true);"
+          (jsexpr->string parent) (jsexpr->string (last comps))))
+
+;; Write <name>.data + <name>.data.js into `dest` for the given
+;; (virtual-path . real-path) file list. The data file is the concatenation of
+;; the real files; the loader carries each file's [start,end) and FS_createPath
+;; the directory tree. `name` is e.g. "share.data".
+(define (write-data-package! #:files files #:dest dest #:name [name "share.data"])
+  (make-directory* dest)
+  (define data-path (build-path dest name))
+  ;; 1. The data blob: concatenate, recording offsets. One pass, streamed.
+  (define metas
+    (call-with-output-file data-path #:exists 'replace
+      (lambda (out)
+        (let loop ([fs files] [pos 0] [acc '()])
+          (cond
+            [(null? fs) (reverse acc)]
+            [else
+             (define vp (caar fs))
+             (define rp (cdar fs))
+             (define bs (file->bytes rp))
+             (write-bytes bs out)
+             (define end (+ pos (bytes-length bs)))
+             (loop (cdr fs) end
+                   (cons (hasheq 'filename vp 'start pos 'end end) acc))])))))
+  (define size (file-size data-path))
+  ;; 2. The loader.
+  (define vpaths (map (lambda (m) (hash-ref m 'filename)) metas))
+  (define create-paths
+    (string-join (map fs-create-path-line (ancestor-dirs vpaths)) "\n"))
+  (define metadata
+    (jsexpr->string (hasheq 'files metas 'remote_package_size size)))
+  (define js (loader-js name create-paths metadata))
+  (call-with-output-file (build-path dest (string-append name ".js")) #:exists 'replace
+    (lambda (out) (write-string js out)))
+  (info-msg "packed ~a (~a files, ~a bytes) -> ~a" name (length files) size dest)
+  (values data-path size))
+
+;; The loader source. Mirrors file_packager's contract: increments
+;; expectedDataFileDownloads, fetches the .data (node readFileSync / browser
+;; fetch, honouring locateFile + getPreloadedPackage), FS_createPaths the dirs,
+;; gates run() with addRunDependency per file until the slices are written via
+;; FS_createDataFile, and runs in preRun so the FS exists. No emsdk internals --
+;; only the public Module hooks the runtime already provides.
+(define (loader-js name create-paths metadata)
+  (string-append "
+var Module = typeof Module != 'undefined' ? Module : {};
+if (!Module['expectedDataFileDownloads']) Module['expectedDataFileDownloads'] = 0;
+Module['expectedDataFileDownloads']++;
+(() => {
+  var isPthread = typeof ENVIRONMENT_IS_PTHREAD != 'undefined' && ENVIRONMENT_IS_PTHREAD;
+  var isWasmWorker = typeof ENVIRONMENT_IS_WASM_WORKER != 'undefined' && ENVIRONMENT_IS_WASM_WORKER;
+  if (isPthread || isWasmWorker) return;
+  var isNode = typeof globalThis.process == 'object' && globalThis.process.versions && globalThis.process.versions.node && globalThis.process.type != 'renderer';
+  function loadPackage(metadata) {
+    var PACKAGE_NAME = " (jsexpr->string name) ";
+    var REMOTE_PACKAGE_NAME = Module['locateFile'] ? Module['locateFile'](PACKAGE_NAME, '') : PACKAGE_NAME;
+    var REMOTE_PACKAGE_SIZE = metadata['remote_package_size'];
+    async function fetchRemotePackage(packageName) {
+      if (isNode) { return new Uint8Array(require('fs').readFileSync(packageName)).buffer; }
+      var response = await fetch(packageName);
+      if (!response.ok) throw new Error(response.status + ': ' + response.url);
+      return await response.arrayBuffer();
+    }
+    function runWithFS(Module) {
+      // The runtime (scheme-web.js) is instantiated AFTER this loader is
+      // imported, so FS_createPath / FS / addRunDependency only exist now, in
+      // preRun -- never at import time. (See shell-worker.js import order.)
+" create-paths "
+      for (var file of metadata['files']) Module['addRunDependency']('fp ' + file['filename']);
+      Module['addRunDependency']('datafile_' + PACKAGE_NAME);
+      function processPackageData(arrayBuffer) {
+        var byteArray = new Uint8Array(arrayBuffer);
+        for (var file of metadata['files']) {
+          var data = byteArray.subarray(file['start'], file['end']);
+          Module['FS_createDataFile'](file['filename'], null, data, true, true, true);
+          Module['removeRunDependency']('fp ' + file['filename']);
+        }
+        Module['removeRunDependency']('datafile_' + PACKAGE_NAME);
+      }
+      var fetched = Module['getPreloadedPackage'] ? Module['getPreloadedPackage'](REMOTE_PACKAGE_NAME, REMOTE_PACKAGE_SIZE) : null;
+      if (fetched) { processPackageData(fetched); }
+      else { fetchRemotePackage(REMOTE_PACKAGE_NAME).then(processPackageData); }
+    }
+    if (Module['calledRun']) { runWithFS(Module); }
+    else { (Module['preRun'] = Module['preRun'] || []).push(runWithFS); }
+  }
+  loadPackage(" metadata ");
+})();
+"))
+
+;; Pack the clone's installed package tree into `dest` (default the wasm out dir,
+;; next to scheme-web.*, ready for collect-outputs), with no emsdk. This is the
+;; build's `pack-share-data` -- both the full build (after a cache-miss `make`)
+;; and the standalone `pack-pkgs` repack call it.
+(define (pack-share-data #:dest [dest (clone-wasm-out)] #:clone [clone clone-dir])
+  (write-data-package! #:files (share-preload-files #:clone clone) #:dest dest))
