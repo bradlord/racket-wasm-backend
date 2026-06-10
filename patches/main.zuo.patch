@@ -1,5 +1,5 @@
 diff --git a/main.zuo b/main.zuo
-index 84c516d..6a756ab 100644
+index 84c516d..5f2dd99 100644
 --- a/main.zuo
 +++ b/main.zuo
 @@ -195,12 +195,31 @@
@@ -71,7 +71,7 @@ index 84c516d..6a756ab 100644
                                        'DESTDIR (if prefix
                                                     (lookup 'DESTDIR "")
                                                     "")
-@@ -260,7 +300,26 @@
+@@ -260,7 +300,29 @@
                                        ;; `DESTDIR` fixes later:
                                        'SKIP_DESTDIR_FIX "skip"
                                        ;; Propagate `MAKE`
@@ -86,6 +86,9 @@ index 84c516d..6a756ab 100644
 +                                      ;; `wasm-deps` target). libffi is always
 +                                      ;; built; this adds more (e.g. "draw").
 +                                      'WASM_DEPS (lookup 'WASM_DEPS "")
++                                      ;; Signals the cross-compiler SDK build to
++                                      ;; cs/c/build.zuo (skip the Chez C kernel).
++                                      'WASM_SDK (if sdk? "t" "")
 +                                      ;; App-supplied emcc link JS + the surface
 +                                      ;; it targets, consumed by cs/c/build.zuo's
 +                                      ;; `wasm` link. Space-joined absolute paths
@@ -99,7 +102,7 @@ index 84c516d..6a756ab 100644
                                       ;; Propagate `RACKET` and similar if specified
                                       'RACKET (get-provided-racket)
                                       'BOOTFILE_RACKET (lookup 'BOOTFILE_RACKET)
-@@ -269,17 +328,43 @@
+@@ -269,17 +331,43 @@
                                                     (if (equal? s "")
                                                         ""
                                                         (build-path s "ChezScheme")))
@@ -147,7 +150,7 @@ index 84c516d..6a756ab 100644
  
    (define (remove-early-load-dlls)
      ;; On Windows, remove DLLs that might be loaded by `raco` on startup,
-@@ -419,22 +504,78 @@
+@@ -419,22 +507,78 @@
      (define jobs (get-jobs))
  
      (unless also?
@@ -237,7 +240,7 @@ index 84c516d..6a756ab 100644
    (define (pkgs-catalog token vars)
      (racket vars
              (list "-U" "-G" (path-only build-config.rktd)
-@@ -840,6 +981,62 @@
+@@ -840,6 +984,62 @@
      (build-one "racket/src/expander/main.zuo" "expander")
      (build-one "racket/src/cs/main.zuo" "schemified"))
  
@@ -300,7 +303,7 @@ index 84c516d..6a756ab 100644
    ;; ------------------------------------------------------------
    ;; Targets
  
-@@ -872,6 +1069,10 @@
+@@ -872,6 +1072,10 @@
         [:target pb-stage () ,(lambda (token) (pb-manage 'stage))]
         [:target pb-push () ,(lambda (token) (pb-manage 'push))]
  

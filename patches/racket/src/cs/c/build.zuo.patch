@@ -1,8 +1,8 @@
 diff --git a/racket/src/cs/c/build.zuo b/racket/src/cs/c/build.zuo
-index b4e92ee..260cdd3 100644
+index b4e92ee..b85492a 100644
 --- a/racket/src/cs/c/build.zuo
 +++ b/racket/src/cs/c/build.zuo
-@@ -54,6 +54,24 @@
+@@ -54,6 +54,31 @@
    (define boot-files (list petite-chunked.boot scheme-chunked.boot racket-chunked.boot))
  
    (define cross? (equal? (lookup 'CROSS_MODE) "cross"))
@@ -12,6 +12,13 @@ index b4e92ee..260cdd3 100644
 +  ;; stops at the (pbchunk) boot images; the `wasm` link target consumes
 +  ;; them together with the in-tree kernel/rktio objects.
 +  (define emscripten? (equal? (lookup 'EMSCRIPTEN) "t"))
++  ;; Cross-compiler SDK build (main.zuo `sdk?` flavor, signalled via WASM_SDK):
++  ;; build only the cross-compiler inputs (boot/xpatch + the host CS-layer
++  ;; objects) and run the cross `raco setup`, but DON'T build the Chez C kernel
++  ;; -- it is a runtime/link input the SDK never ships, and (unlike the host
++  ;; cross-compiler pieces) its libffi headers come from the emsdk `wasm-deps`
++  ;; step, which the SDK skips. See build-wasm.md "Cross-compiler SDK".
++  (define sdk? (equal? (lookup 'WASM_SDK "") "t"))
 +  ;; WASM native library deps. libffi is always built (the Chez kernel's
 +  ;; ffi.c needs its headers); `WASM_DEPS` selects additional libraries
 +  ;; (recipe names, or the group alias `draw`). The `wasm-deps` target
@@ -27,7 +34,7 @@ index b4e92ee..260cdd3 100644
  
    (define scheme.exe+args
      (cond
-@@ -115,7 +133,26 @@
+@@ -115,7 +140,26 @@
                 'enablelibffi (lookup 'SCHEME_LIBFFI "no")
                 'disablecurses (lookup 'DISABLE_CURSES "no")
                 'disableiconv (lookup 'DISABLE_ICONV "no")
@@ -55,7 +62,7 @@ index b4e92ee..260cdd3 100644
  
    (define (add-scheme-boot-config config)
      (if (equal? (lookup 'ENABLE_EXTRA_CHECKS "no") "yes")
-@@ -174,6 +211,25 @@
+@@ -174,6 +218,25 @@
      (map .c->.o pbchunk-srcs))
  
    (define boot.o (at-dir (.c->.o "boot.c")))
@@ -81,7 +88,7 @@ index b4e92ee..260cdd3 100644
    (define boot-objs
      (append (list boot.o)
              (list (at-dir CS m "boot" m (.a "kernel")))
-@@ -407,10 +463,14 @@
+@@ -407,10 +470,14 @@
       `([:target build ()
                  ,(lambda (token)
                     (build/dep (find-target "build-racketcs" the-targets) token)
@@ -100,8 +107,17 @@ index b4e92ee..260cdd3 100644
                  :recur]
  
         [:target build-and-prepare ()
-@@ -447,7 +507,13 @@
-                    (build/dep (find-target "scheme" the-targets) token)
+@@ -444,10 +511,21 @@
+                                                   'vars (hash 'BOOTFILE_RACKET (lookup 'RACKET)))))
+                         (build (find-target "scheme" host-targets-at) token)]))
+                    (build/dep (find-target "bootfiles" the-targets) token)
+-                   (build/dep (find-target "scheme" the-targets) token)
++                   ;; `scheme` builds (for a cross target) the Chez C kernel,
++                   ;; whose libffi headers come from the emsdk `wasm-deps` step.
++                   ;; The SDK ships no kernel, so skip it -- the host CS-layer
++                   ;; objects + boot/xpatch below need only the host scheme.
++                   (unless sdk?
++                     (build/dep (find-target "scheme" the-targets) token))
                     (unless cross?
                       (build/dep (find-target racket.boot the-targets) token))
 -                   (build/dep (find-target racketcs the-targets) token))
@@ -115,7 +131,7 @@ index b4e92ee..260cdd3 100644
                  :recur]
  
         ,(if windows?
-@@ -672,13 +738,31 @@
+@@ -672,13 +750,31 @@
                           ,(at-source "../../ChezScheme/c/self-exe.c")
                           ,(at-source "path_replace.inc")
                           ,(at-source "boot.h")
@@ -148,7 +164,7 @@ index b4e92ee..260cdd3 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +775,273 @@
+@@ -691,6 +787,273 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -422,7 +438,7 @@ index b4e92ee..260cdd3 100644
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                  ,(lambda (path token)
                     (scheme "--script" (at-source "convert-to-boot.ss")
-@@ -765,7 +1116,11 @@
+@@ -765,7 +1128,11 @@
                                   token))])]
             [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                  (not (equal? (lookup 'RACKET) "")))
@@ -435,7 +451,7 @@ index b4e92ee..260cdd3 100644
              (when xpatch?
                (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
              `([:target bootfiles ()
-@@ -878,7 +1233,19 @@
+@@ -878,7 +1245,19 @@
                  ,(lambda (token)
                     (install #f)
                     (setup))]
@@ -456,7 +472,7 @@ index b4e92ee..260cdd3 100644
         [:target plain-install ()
                  ,(lambda (token)
                     (install #f))]
-@@ -1092,32 +1459,39 @@
+@@ -1092,32 +1471,39 @@
                   (list petite-v.boot scheme-v.boot racket-v.boot)
                   (list "petite.boot" "scheme.boot" "racket.boot")))])
  
@@ -519,7 +535,7 @@ index b4e92ee..260cdd3 100644
      (call-with-dest-racket
       (lambda (bindir dest-racket)
         (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
-@@ -1125,13 +1499,37 @@
+@@ -1125,13 +1511,37 @@
                                     (hash-set config 'copytree-prepared-setup-files #t)
                                     config))
         (maybe-copytree copytree-config dest-racket copytree-racket at-dir)

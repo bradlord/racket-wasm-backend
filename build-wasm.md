@@ -382,8 +382,18 @@ Production path: `make wasm-cross-sdk` (the `sdk?` flavor of `main.zuo`'s
 wrapper (native `cc` -- the patched configure presets the cross 32-bit sizeof so
 no `emcc` is needed) and the flow **stops after `wasm-setup`** instead of
 running `wasm-deps` + the emcc link. The `--host=...-emscripten` marker still
-makes `cs/c/build.zuo` stop at boot images (no native executable), so no extra
-`cs/c` change is needed.
+makes `cs/c/build.zuo` stop at boot images (no native executable). The one extra
+`cs/c` change is that `sdk?` (signalled via a `WASM_SDK` make var) **skips the
+`scheme` target's Chez C kernel** in `build-racketcs`: for a cross target that
+step compiles the kernel (`ChezScheme/<m>/c/*.o`, incl. `ffi.c`), whose libffi
+headers come from the emsdk `wasm-deps` step -- and the SDK ships no kernel (it's
+a runtime/link input). The cross-compiler pieces it *does* need -- the
+boot/xpatch (host `bootquick`) and the `library-xpatch` CS-layer `.host-m`
+objects (`racket.so`/`cs-targets`, host scheme) -- don't need the kernel, so a
+cold from-scratch SDK build runs with **no emsdk and no `emcc` at all**. (The
+cold cross-root, lacking the binary-only catalog, currently compiles the full
+source dep set incl. doc packages, so it's fatter than the runtime's stripped
+tree -- a future optimization could run the binary catalog first.)
 
 **Consuming the SDK** -- a host racket cross-installing a package into a
 consumer-local copy of the cross-root (mirroring `wasm-setup`'s `--cross-compiler
