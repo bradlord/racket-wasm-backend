@@ -216,31 +216,28 @@
      (write-metadata-into! (cache-dir-for base-key) base-key base-components rv)
      rv]))
 
-;; Build (or cache-hit) the package payload (share.data*) for (pkgs, wasm-deps,
-;; local-pkgs): cross-compile the package set to tpb32l in a cross-SDK cross-root
-;; (`make wasm-cross-sdk`) and pack it -- emsdk-FREE (no emcc link, no kernel; see
-;; the `sdk?` flavor). A hit copies from cache with no compile.
-(define (ensure-pkg-payload! pkg-key pkg-components
-                             #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
-                             #:scheme scheme-opt #:racket racket-opt #:force? force?)
+;; Build (or cache-hit) the package CROSS-ROOT (the tpb32l package tree) for
+;; (pkgs, wasm-deps, local-pkgs). The app's packages flow ONLY here, through the
+;; `wasm-install-pkgs` make target (the cross-install step): it installs +
+;; cross-compiles them onto the package-blank base cross-root, emsdk-FREE (no emcc
+;; link, no kernel -- the `sdk?` flavor). The result is cached clone-shaped for
+;; `pack-packages`; this step never packs `share.data`.
+(define (ensure-cross-root! pkg-key
+                            #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
+                            #:scheme scheme-opt #:racket racket-opt #:force? force?)
   (cond
-    [(and (not force?) (cache-complete? pkg-key pkg-payload-names))
-     (info-msg "package payload cache hit (~a): no cross-compile" pkg-key)]
+    [(and (not force?) (cross-root-cached? pkg-key))
+     (info-msg "package cross-root cache hit (~a): no cross-compile" pkg-key)]
     [else
-     ;; No require-emsdk!: the cross-root + share.data are pure tpb32l.
+     ;; No require-emsdk!: the cross-root is pure tpb32l.
      (unless (directory-exists? (build-path clone-dir ".git")) (sync))
      (apply-delta)
      (define scheme (resolve-host-scheme scheme-opt))
      (define racket (resolve-host-racket racket-opt))
-     (make-wasm #:target "wasm-cross-sdk" #:scheme scheme #:racket racket
+     (make-wasm #:target "wasm-install-pkgs" #:scheme scheme #:racket racket
                 #:pkgs pkgs #:wasm-deps wasm-deps
                 #:local-pkgs (local-pkgs->string local-pkgs))
-     ;; Pack share.data from the clone's now-populated package tree (base in-tree
-     ;; pkgs + the app's pkgs, all tpb32l).
-     (pack-share-data)
-     (snapshot-runtime! pkg-key (clone-wasm-out) pkg-payload-names)
-     (write-metadata-into! (cache-dir-for pkg-key) pkg-key pkg-components
-                           (host-racket-version racket))]))
+     (snapshot-cross-root! pkg-key)]))
 
 ;; Core build sequence: assemble `dest` (with `surface-dir` as the page) from the
 ;; two layers. The binaries come from the package-agnostic base cache (one emcc
@@ -269,9 +266,9 @@
                                                #:local-pkgs '()
                                                #:link-js link-js #:target target))
   (define base-key (key-from-components base-components))
-  (define pkg-components (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
-                                              #:local-pkgs local-pkgs))
-  (define pkg-key (key-from-components pkg-components))
+  (define pkg-key (key-from-components
+                   (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
+                                         #:local-pkgs local-pkgs)))
   (define full-components (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
                                                #:local-pkgs local-pkgs
                                                #:link-js link-js #:target target))
@@ -287,16 +284,16 @@
                                       #:wasm-deps wasm-deps #:target target
                                       #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
                                       #:scheme scheme-opt #:racket racket-opt #:force? force?))
-     ;; Only browser ships the separate package payload; node bakes its (now
-     ;; package-less) tree into scheme.data at link time.
-     (when browser?
-       (ensure-pkg-payload! pkg-key pkg-components #:pkgs pkgs #:wasm-deps wasm-deps
-                            #:local-pkgs local-pkgs #:scheme scheme-opt #:racket racket-opt
-                            #:force? force?))
+     ;; Binaries + surface from the package-agnostic base cache.
      (collect-outputs #:dest dest #:surface-dir surface-dir #:target target
-                      #:runtime-srcs (if browser?
-                                         (list (cache-dir-for base-key) (cache-dir-for pkg-key))
-                                         (list (cache-dir-for base-key))))
+                      #:runtime-srcs (list (cache-dir-for base-key)))
+     ;; Only browser ships the separate package payload: cross-install the app's
+     ;; packages (the only place PKGS flow), then derive share.data via
+     ;; pack-packages. Node bakes its (package-less under PKGS=) tree at link time.
+     (when browser?
+       (ensure-cross-root! pkg-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
+                           #:scheme scheme-opt #:racket racket-opt #:force? force?)
+       (pack-packages #:dest dest #:cross-root (cross-root-cache-dir-for pkg-key)))
      (write-metadata-into! dest full-key full-components rv)]))
 
 ;; Build (or reuse the cache for) a config and emit a *distributable* binary
@@ -339,16 +336,15 @@
    (lambda () (when (directory-exists? scratch) (delete-directory/files scratch))))
   (define pkg-dest (->path dest))
   (make-directory* pkg-dest)
-  ;; Binaries (both surfaces) from the base cache, share.data* from the payload cache.
-  (define (gather! src names)
-    (for ([n (in-list names)])
-      (define s (build-path src n))
-      (when (file-exists? s)
-        (define d (build-path pkg-dest n))
-        (when (file-exists? d) (delete-file d))
-        (copy-file s d))))
-  (gather! (cache-dir-for base-key) base-runtime-names)
-  (gather! (cache-dir-for pkg-key) pkg-payload-names)
+  ;; Binaries (both surfaces) from the base cache; share.data* derived from the
+  ;; package cross-root cache by pack-packages (both populated by build-runtime).
+  (for ([n (in-list base-runtime-names)])
+    (define s (build-path (cache-dir-for base-key) n))
+    (when (file-exists? s)
+      (define d (build-path pkg-dest n))
+      (when (file-exists? d) (delete-file d))
+      (copy-file s d)))
+  (pack-packages #:dest pkg-dest #:cross-root (cross-root-cache-dir-for pkg-key))
   (define rv (let ([m (read-build-metadata (cache-dir-for base-key))]) (and m (hash-ref m 'racket-version #f))))
   (write-metadata-into! pkg-dest key components rv)
   ;; Single distributable artifact next to the dir: <name>.tar.gz of its contents.
@@ -408,16 +404,14 @@
   (info-msg "cross-compiler SDK -> ~a (build-key ~a, host ~a)\n    archive -> ~a"
             dest* key (host-scheme-machine scheme) tgz))
 
-;; Build (emsdk-free) the cross-compiler + `tpb32l` cross-root for a config and
-;; emit a distributable SDK into `dest`. The key is computed from the package
-;; set only (no link JS / surface -- the SDK is surface-independent), so it
-;; matches the runtime package built from the same `pkgs`/`wasm-deps`/locals.
-(define (build-cross-sdk #:pkgs pkgs #:wasm-deps wasm-deps
-                         #:local-pkgs [local-pkgs '()]
+;; Build (emsdk-free) a *pure*, package-blank cross-compiler SDK into `dest`: the
+;; cross-compiler retarget files + the base `tpb32l` cross-root, with NO app
+;; packages (`PKGS=`). A consumer adds packages with `cross-install`. The key is
+;; (delta, wasm-deps) only, so one SDK serves every app on that native-dep profile.
+(define (build-cross-sdk #:wasm-deps wasm-deps
                          #:scheme [scheme-opt #f] #:racket [racket-opt #f]
                          #:dest dest)
-  (define components (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
-                                           #:local-pkgs local-pkgs))
+  (define components (build-key-components #:pkgs "" #:wasm-deps wasm-deps #:local-pkgs '()))
   (define key (key-from-components components))
   ;; No `require-emsdk!`: the SDK is pure `tpb32l`, no emcc anywhere.
   (unless (directory-exists? (build-path clone-dir ".git")) (sync))
@@ -425,10 +419,6 @@
   (define scheme (resolve-host-scheme scheme-opt))
   (define racket (resolve-host-racket racket-opt))
   (make-wasm #:target "wasm-cross-sdk" #:scheme scheme #:racket racket
-             #:pkgs pkgs #:wasm-deps wasm-deps
-             #:local-pkgs (string-join
-                           (map (lambda (p) (path->string (path->complete-path p)))
-                                local-pkgs)
-                           " "))
+             #:pkgs "" #:wasm-deps wasm-deps #:local-pkgs "")
   (package-cross-sdk #:key key #:components components #:dest dest
                      #:scheme scheme #:racket racket))

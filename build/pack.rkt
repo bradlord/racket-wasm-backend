@@ -21,7 +21,7 @@
          "util.rkt")
 
 (provide write-data-package! share-preload-entries share-preload-files
-         pack-share-data extend-data-package! data-package-file-bytes)
+         pack-share-data pack-packages extend-data-package! data-package-file-bytes)
 
 ;; --- the file list -------------------------------------------------------
 
@@ -268,3 +268,11 @@ Module['expectedDataFileDownloads']++;
 ;; and the standalone `pack-pkgs` repack call it.
 (define (pack-share-data #:dest [dest (clone-wasm-out)] #:clone [clone clone-dir])
   (write-data-package! #:files (share-preload-files #:clone clone) #:dest dest))
+
+;; `pack-packages`: the single, explicit producer of the `share.data` payload --
+;; pack the package cross-root (`cross-root`, a clone-shaped tree: cache entry or
+;; the live clone) into `dest`. No build step packs `share.data`; the orchestrator
+;; (build/stages.rkt `build-runtime`) and the `pack-pkgs` command call this. The
+;; binary-only variant (part 2) will hook in here.
+(define (pack-packages #:dest dest #:cross-root [cross-root clone-dir])
+  (pack-share-data #:dest dest #:clone cross-root))

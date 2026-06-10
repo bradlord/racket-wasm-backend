@@ -18,9 +18,15 @@
          "util.rkt")
 
 (provide build-key build-key-components key-from-components
-         cache-dir-for cache-complete? snapshot-runtime!)
+         cache-dir-for cache-complete? snapshot-runtime!
+         cross-root-cache-dir-for cross-root-cached? snapshot-cross-root!)
 
 (define cache-root (build-path work-dir "runtime-cache"))
+;; The package cross-root (the tpb32l package tree `pack-share-data` packs) is
+;; cached separately from the runtime binaries -- keyed by the package set
+;; (pkg-key) so it is reused across surfaces / link-JS variants, and re-derived
+;; into `share.data` by `pack-packages` on each build. See build/stages.rkt.
+(define cross-root-cache-root (build-path work-dir "cross-root-cache"))
 
 ;; sha1 of a directory tree's contents: sorted "<relpath>:<file-sha1>" lines,
 ;; hashed. "" when the dir is absent. Cheap on patches/overlay (modest size); the
@@ -149,3 +155,30 @@
       (when (file-exists? dst) (delete-file dst))
       (copy-file s dst)))
   (info-msg "cached ~a file(s) under ~a" (length names) d))
+
+;; --- the package cross-root cache ---------------------------------------
+;;
+;; A clone-shaped snapshot of the package tree `pack-share-data #:clone` reads:
+;; `racket/share/pkgs` + `racket/share/links.rktd` (the installed/cross-compiled
+;; packages) and the in-tree `pkgs/` (the `(up up #"pkgs" ...)` link roots). The
+;; cross-install step builds this in the clone; the orchestrator caches it here
+;; and `pack-packages` derives `share.data` from it -- no build step ever packs.
+(define (cross-root-cache-dir-for key) (build-path cross-root-cache-root key))
+
+(define (cross-root-cached? key)
+  (define d (cross-root-cache-dir-for key))
+  (and (directory-exists? (build-path d "racket" "share" "pkgs"))
+       (file-exists? (build-path d "racket" "share" "links.rktd"))))
+
+;; Snapshot the clone's package tree into the cross-root cache for `key`.
+(define (snapshot-cross-root! key)
+  (define d (cross-root-cache-dir-for key))
+  (when (directory-exists? d) (delete-directory/files d))
+  (make-directory* (build-path d "racket" "share"))
+  (copy-directory/files (build-path clone-dir "racket" "share" "pkgs")
+                        (build-path d "racket" "share" "pkgs"))
+  (copy-file (build-path clone-dir "racket" "share" "links.rktd")
+             (build-path d "racket" "share" "links.rktd"))
+  (when (directory-exists? (build-path clone-dir "pkgs"))
+    (copy-directory/files (build-path clone-dir "pkgs") (build-path d "pkgs")))
+  (info-msg "cross-root cached under ~a" d))

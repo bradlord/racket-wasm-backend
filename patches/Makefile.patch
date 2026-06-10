@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index c10c9e2..a6a6860 100644
+index c10c9e2..bbbe251 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -67,6 +67,34 @@ CONFIGURE_ARGS =
@@ -51,7 +51,7 @@ index c10c9e2..a6a6860 100644
               CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
               RACKET="$(RACKET)" \
               PLAIN_RACKET="$(PLAIN_RACKET)" \
-@@ -223,6 +258,39 @@ cs: $(ZUO)
+@@ -223,6 +258,46 @@ cs: $(ZUO)
  bc: $(ZUO)
  	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
  
@@ -78,6 +78,13 @@ index c10c9e2..a6a6860 100644
 +# orchestrator's `cross-sdk` collector harvests the result. See build-wasm.md.
 +wasm-cross-sdk: $(ZUO)
 +	$(RUN_ZUO) wasm-cross-sdk $(BUILD_VARS)
++
++# The cross-INSTALL step: same cross flow as wasm-cross-sdk, but this is the only
++# wasm target the orchestrator passes app PKGS/LOCAL_PKGS to -- it installs +
++# cross-compiles those packages to tpb32l onto the (package-blank) cross-root, so
++# `wasm` and `wasm-cross-sdk` stay package-agnostic. See build-wasm.md.
++wasm-install-pkgs: $(ZUO)
++	$(RUN_ZUO) wasm-install-pkgs $(BUILD_VARS)
 +
 +# Build a cached binary-only package catalog (racket/src/.wasm-pkgs-cache)
 +# for the WASM build: strip the already-cross-compiled in-tree packages to

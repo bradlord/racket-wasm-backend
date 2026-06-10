@@ -301,41 +301,46 @@ the build-key, so the cache self-invalidates. `--force` (CLI) / `#:force?`
 (`make-wasm-racket`) bypasses the cache and forces a real build. Entries are
 large (~100 MB each); they live under the disposable `.work/`.
 
-##### Two layers: package-agnostic binaries + a cross-SDK-sourced `share.data`
+##### Package-blank runtime/SDK; packages via a cross-install step
 
-`build-runtime` builds the runtime in **two independently cached layers** so that
-changing the app's *packages* never re-runs the (emsdk-only) emcc link:
+`build-runtime` keeps the runtime in **two independently cached layers**, and the
+make targets that build them -- `wasm` and `wasm-cross-sdk` -- are **always
+`PKGS=`** (package-agnostic). The app's packages are layered on by a distinct
+cross-install make target, and the `share.data` payload is produced only by
+`pack-packages` (no build step packs it):
 
 - **Base binaries** (`base-runtime-names` = `scheme*.{js,wasm,data}`,
-  `scheme-web.{js,wasm,data}`) -- `make wasm` with **`PKGS=` and `LOCAL_PKGS=`**.
-  The browser link bakes only boot images + collects into `scheme-web.data`;
-  packages are never in the link (they're the separate `share.data`, see
-  "Packages as a separate data file"), so the binaries are **package-agnostic**.
-  They cache under a key that **omits `pkgs`/`local-pkgs`** -- one emcc link, reused
-  by every app sharing the same (delta, `wasm-deps`, link-JS, target). Needs the
-  emsdk on a miss.
-- **Package payload** (`pkg-payload-names` = `share.data`/`share.data.js`) -- the
-  app's `pkgs`+`local-pkgs` are cross-compiled to `tpb32l` in a cross-SDK
-  cross-root (`make wasm-cross-sdk`, the `sdk?` flavor) and packed by
-  `build/pack.rkt` -- **emsdk-free** (no emcc, no kernel). Caches under the package
-  key (which the cross-SDK shares). On a hit, just copied in.
+  `scheme-web.{js,wasm,data}`) -- `make wasm` with **`PKGS=`/`LOCAL_PKGS=`**. The
+  browser link bakes only boot images + collects into `scheme-web.data`; packages
+  are never in the link (they're the separate `share.data`, see "Packages as a
+  separate data file"), so the binaries are package-agnostic. Cache key **omits
+  `pkgs`/`local-pkgs`** -- one emcc link, reused by every app on the same (delta,
+  `wasm-deps`, link-JS, target). Needs the emsdk on a miss.
+- **Package cross-root** -- `ensure-cross-root!` runs **`make wasm-install-pkgs`**
+  (the cross-install step -- the *only* wasm make the app's `PKGS`/`LOCAL_PKGS`
+  flow to; it `install-base-pkgs` + `wasm-setup`-compiles them to `tpb32l` onto the
+  package-blank cross-root, **emsdk-free**, the `sdk?` flow). The result is
+  snapshotted clone-shaped into `work-dir/cross-root-cache/<pkg-key>/`. No packing
+  here.
+- **`pack-packages`** (`build/pack.rkt`) packs the cached cross-root into
+  `dist/share.data`/`share.data.js`. It is the single, always-run payload producer
+  (the `pack-pkgs` command shares it), and the hook for the binary-only variant.
 
-`collect-outputs` assembles `dist/` by taking each surface file from whichever
-cache holds it (binaries from the base cache, `share.data*` from the payload
-cache). The upshot: **a package-only change is a base-runtime cache hit (no emcc
-relink) plus an emsdk-free payload rebuild** -- a full `build` of a package change
-runs with the emsdk entirely off `PATH`. The native deps (`wasm-libs`, e.g. the
-cairo/pango stack `draw` links) stay in the base build because they're linked
-*into* the wasm binary and can't be layered on. Node (`scheme.data`) bakes its
-tree at link time, so under `PKGS=` the node surface is package-less -- this split
-serves the browser surface.
+`collect-outputs` copies the binaries (base cache) + surface; `pack-packages`
+writes `share.data`. The upshot: **a package change is a base-runtime cache hit (no
+emcc relink) + an emsdk-free `wasm-install-pkgs` + a re-pack** -- a full `build` of a
+package change runs with the emsdk entirely off `PATH`. Native deps (`wasm-libs`,
+e.g. the cairo/pango stack `draw` links) stay in the base build (linked *into* the
+wasm binary, can't be layered on). The standalone `cross-sdk` command emits a
+**pure**, package-blank cross-compiler SDK (a consumer adds packages via
+`cross-install`). Node (`scheme.data`) bakes its tree at link time, so under
+`PKGS=` the node surface is package-less -- this serves the browser surface.
 
-> Clone hygiene: the package payload is packed from the clone's `share/pkgs`,
-> which `install-base-pkgs` extends *additively* on the source-install path -- a
-> package *dropped* from the manifest is not removed from a warm clone (it lingers
-> in `share.data`). Run `rebuild-binary-catalog` (which clears `share/pkgs` and
-> installs the stripped binary set) or `clean` for a faithful drop. This predates
-> the split.
+> Clone hygiene: the cross-root is packed from the clone's `share/pkgs`, which
+> `install-base-pkgs` extends *additively* on the source-install path -- a package
+> *dropped* from the manifest is not removed from a warm clone (it lingers in
+> `share.data`). Run `rebuild-binary-catalog` (clears `share/pkgs` + installs the
+> stripped binary set) or `clean` for a faithful drop.
 
 #### Build metadata + distributable binary packages
 

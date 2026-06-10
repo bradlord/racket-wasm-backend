@@ -167,7 +167,7 @@
 ;; the already-installed share/pkgs tree, then refresh dist/. The point of the
 ;; split: this avoids the emcc relink, so changing packages is cheap.
 (define (cmd-pack-pkgs args)
-  (pack-share-data)
+  (pack-packages #:dest (clone-wasm-out) #:cross-root clone-dir)
   (collect-outputs))
 
 (define (parse-serve-args args)
