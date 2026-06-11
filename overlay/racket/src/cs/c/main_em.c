@@ -57,8 +57,20 @@ int main(int argc, char **argv) {
   ba.k_file    = self;
 
   /* Mount the top-level Racket tree into MEMFS so the resolver can
-     find collections and config data using stable absolute paths. */
-  ba.collects_dir = "/collects";
+     find collections and config data using stable absolute paths.
+
+     collects_dir is NOT a plain C string: boot.c's parse_coldirs() reads
+     it as a NUL-separated *list* of paths terminated by a second NUL (see
+     start/config.inc's scheme_coldir: `INITIAL_COLLECTS_DIRECTORY "\0\0"`
+     -- 1st NUL ends the path, 2nd ends the list). The trailing "\0" below
+     supplies that list terminator (the literal's own implicit NUL ends the
+     path). Without it, parse_coldirs reads the byte past the path's
+     terminator out of bounds into adjacent rodata; when nonzero it takes
+     the multi-path branch and slurps the C string-constant pool (cairo PS
+     templates, glib paths, ...) as bogus collection dirs, which then
+     pollute (current-library-collection-paths). config_dir takes the plain
+     single-string path (Sbytevector), so it needs no terminator. */
+  ba.collects_dir = "/collects\0";
   ba.config_dir   = "/etc";
 
   /* segment_offset is for `-k` embedded bytecode, which we never

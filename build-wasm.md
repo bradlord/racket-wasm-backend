@@ -98,6 +98,18 @@ Open:
   the WASM runtime looks in a machine-specific `compiled` subdirectory
   instead of accidentally loading host-native fasls from plain
   `compiled/`.
+- `main_em.c`'s `ba.collects_dir` MUST be **double-NUL-terminated**
+  (`"/collects\0"`). `boot.c:parse_coldirs` treats it as a NUL-separated
+  *list* terminated by a second NUL (mirroring `start/config.inc`'s
+  `scheme_coldir = INITIAL_COLLECTS_DIRECTORY "\0\0"`); a plain
+  `"/collects"` literal makes it read the byte past the path's own
+  terminator out of bounds into adjacent rodata, and when nonzero it
+  walks the C string-constant pool (cairo PostScript/SVG templates, glib
+  paths, PS font keys) as bogus collection dirs — polluting
+  `(current-library-collection-paths)` with 190+ garbage entries (count
+  varies run-to-run; surfaces in any "collection not found" error's
+  search-path dump). `config_dir` is a plain single string and needs no
+  terminator. Fixed 2026-06-11; requires a runtime rebuild to take effect.
 - The browser shell boots much more slowly than node and downloads the
   larger (~26 MB wasm + ~87 MB data) assets; worth profiling/trimming
   there (compression, streaming, lazy `/collects`).
