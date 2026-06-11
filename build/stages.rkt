@@ -15,7 +15,8 @@
          "toolchain.rkt"
          "cache.rkt"
          "metadata.rkt"
-         "pack.rkt")
+         "pack.rkt"
+         "consume.rkt")
 
 (provide build-runtime build-package collect-outputs make-wasm
          build-cross-sdk package-cross-sdk)
@@ -178,9 +179,6 @@
 
 (define (->path p) (if (path? p) p (string->path p)))
 
-(define (local-pkgs->string local-pkgs)
-  (string-join (map (lambda (p) (path->string (path->complete-path p))) local-pkgs) " "))
-
 ;; --- the two build layers -----------------------------------------------
 ;;
 ;; The runtime is split into a package-AGNOSTIC binary layer (the emcc link
@@ -189,16 +187,20 @@
 ;; caches under its own key, so changing the app's packages re-runs only the
 ;; emsdk-free payload layer -- no emcc relink. See build-wasm.md.
 
-;; Build (or cache-hit) the package-agnostic binaries for (wasm-deps, link-js,
-;; target): `make wasm` with PKGS= and LOCAL_PKGS=. Returns the build's Racket
-;; version for the dist metadata. Needs the emsdk on a miss (the emcc link); a
-;; hit copies from cache with no build and no clone mutation.
+;; Build (or cache-hit) the package-agnostic runtime for (wasm-deps, link-js,
+;; target): `make wasm` with PKGS= and LOCAL_PKGS=, then pack the package-AGNOSTIC
+;; base `share.data` (the clone's core package tree, emsdk-free) alongside the
+;; binaries. Both are package-agnostic, so the whole set caches under base-key and
+;; serves every app on that native-dep/link profile -- the app's packages are
+;; layered on later by the clone-free consume (build/consume.rkt). Returns the
+;; build's Racket version for the dist metadata. Needs the emsdk on a miss (the
+;; emcc link); a hit copies from cache with no build and no clone mutation.
 (define (ensure-base-runtime! base-key base-components
                               #:wasm-deps wasm-deps #:target target
                               #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
                               #:scheme scheme-opt #:racket racket-opt #:force? force?)
   (cond
-    [(and (not force?) (cache-complete? base-key base-runtime-names))
+    [(and (not force?) (cache-complete? base-key))
      (info-msg "base runtime cache hit (~a): no emcc link" base-key)
      (let ([m (read-build-metadata (cache-dir-for base-key))]) (and m (hash-ref m 'racket-version #f)))]
     [else
@@ -211,33 +213,64 @@
                 #:local-pkgs ""
                 #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
                 #:app-target target)
-     (snapshot-runtime! base-key (clone-wasm-out) base-runtime-names)
+     ;; Pack the package-agnostic base share.data from the clone's core tree
+     ;; (emsdk-free; the consume extends THIS later). Then cache binaries + base
+     ;; payload together under base-key.
+     (pack-packages #:dest (clone-wasm-out) #:cross-root clone-dir)
+     (snapshot-runtime! base-key (clone-wasm-out))
      (define rv (host-racket-version racket))
      (write-metadata-into! (cache-dir-for base-key) base-key base-components rv)
      rv]))
 
-;; Build (or cache-hit) the package CROSS-ROOT (the tpb32l package tree) for
-;; (pkgs, wasm-deps, local-pkgs). The app's packages flow ONLY here, through the
-;; `wasm-install-pkgs` make target (the cross-install step): it installs +
-;; cross-compiles them onto the package-blank base cross-root, emsdk-FREE (no emcc
-;; link, no kernel -- the `sdk?` flavor). The result is cached clone-shaped for
-;; `pack-packages`; this step never packs `share.data`.
-(define (ensure-cross-root! pkg-key
-                            #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
-                            #:scheme scheme-opt #:racket racket-opt #:force? force?)
+;; Build (or cache-hit) the pure cross-compiler SDK for (delta, wasm-deps): the
+;; `cross-sdk` artifact (retarget files + tpb32l cross-root + in-tree pkgs), built
+;; emsdk-free via `build-cross-sdk` and cached under sdk-key. The app's packages
+;; are NOT in it -- they are cross-installed against it. Returns the SDK dir.
+;; Needs a warm clone (the cross-sdk cannot cold-bootstrap); the preceding base
+;; build warms it.
+(define (ensure-sdk! sdk-key #:wasm-deps wasm-deps
+                     #:scheme scheme-opt #:racket racket-opt #:force? force?)
+  (define sdk-dir (sdk-cache-dir-for sdk-key))
   (cond
-    [(and (not force?) (cross-root-cached? pkg-key))
-     (info-msg "package cross-root cache hit (~a): no cross-compile" pkg-key)]
+    [(and (not force?) (sdk-cached? sdk-key))
+     (info-msg "cross-SDK cache hit (~a): no cross build" sdk-key)
+     sdk-dir]
     [else
-     ;; No require-emsdk!: the cross-root is pure tpb32l.
-     (unless (directory-exists? (build-path clone-dir ".git")) (sync))
-     (apply-delta)
-     (define scheme (resolve-host-scheme scheme-opt))
-     (define racket (resolve-host-racket racket-opt))
-     (make-wasm #:target "wasm-install-pkgs" #:scheme scheme #:racket racket
-                #:pkgs pkgs #:wasm-deps wasm-deps
-                #:local-pkgs (local-pkgs->string local-pkgs))
-     (snapshot-cross-root! pkg-key)]))
+     (build-cross-sdk #:wasm-deps wasm-deps #:scheme scheme-opt #:racket racket-opt
+                      #:dest sdk-dir)
+     sdk-dir]))
+
+;; Build (or cache-hit) the app PAYLOAD (the base `share.data` extended with the
+;; app's packages) for (pkgs, wasm-deps, local-pkgs), into the app-payload cache.
+;; The app's packages flow ONLY here, through the clone-free consume: fetch +
+;; cross-compile them against the pure SDK and fold their tpb32l `.zo` into the
+;; base share.data -- emsdk-FREE, no clone-bound install. `base-key` locates the
+;; base share.data the consume extends.
+(define (ensure-app-payload! pkg-key sdk-key base-key
+                             #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
+                             #:scheme scheme-opt #:racket racket-opt #:force? force?)
+  (cond
+    [(and (not force?) (app-payload-cached? pkg-key))
+     (info-msg "app payload cache hit (~a): no cross-install" pkg-key)]
+    [else
+     (define sdk-dir (ensure-sdk! sdk-key #:wasm-deps wasm-deps
+                                  #:scheme scheme-opt #:racket racket-opt #:force? force?))
+     (cross-install #:sdk sdk-dir
+                    #:share-data (build-path (cache-dir-for base-key) "share.data")
+                    #:dest (app-payload-cache-dir-for pkg-key)
+                    #:pkgs (string-split pkgs)
+                    #:local-pkgs (map (lambda (p) (path->string (path->complete-path p))) local-pkgs)
+                    #:racket racket-opt
+                    #:work (consume-work-dir-for sdk-key))]))
+
+;; Copy a payload cache's share.data{,.js} into `dest`, overwriting.
+(define (copy-payload! payload-dir dest)
+  (for ([n (in-list pkg-payload-names)])
+    (define s (build-path payload-dir n))
+    (when (file-exists? s)
+      (define d (build-path dest n))
+      (when (file-exists? d) (delete-file d))
+      (copy-file s d))))
 
 ;; Core build sequence: assemble `dest` (with `surface-dir` as the page) from the
 ;; two layers. The binaries come from the package-agnostic base cache (one emcc
@@ -259,13 +292,16 @@
                        #:runtime-pkg [runtime-pkg #f]
                        #:force? [force? #f])
   (define link-js (append extern-pre-js pre-js post-js))
-  ;; Package-agnostic binary key (PKGS=/LOCAL_PKGS=); payload key (pkgs, no
-  ;; link-js/surface -- the payload is surface-independent); and the full config
-  ;; key the dist records for provenance / `--runtime` package matching.
+  ;; Package-agnostic binary+base-payload key (PKGS=/LOCAL_PKGS=); the SDK key
+  ;; (delta, wasm-deps -- the SDK is link/surface-agnostic too); the app-payload
+  ;; key (pkgs+locals, no link-js/surface -- the payload is surface-independent);
+  ;; and the full config key the dist records for provenance / `--runtime` match.
   (define base-components (build-key-components #:pkgs "" #:wasm-deps wasm-deps
                                                #:local-pkgs '()
                                                #:link-js link-js #:target target))
   (define base-key (key-from-components base-components))
+  (define sdk-key (key-from-components
+                   (build-key-components #:pkgs "" #:wasm-deps wasm-deps #:local-pkgs '())))
   (define pkg-key (key-from-components
                    (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
                                          #:local-pkgs local-pkgs)))
@@ -274,6 +310,7 @@
                                                #:link-js link-js #:target target))
   (define full-key (key-from-components full-components))
   (define browser? (eq? (normalize-target target) 'browser))
+  (define has-pkgs? (or (not (string=? pkgs "")) (pair? local-pkgs)))
   (cond
     [runtime-pkg
      (assemble-from-package (->path runtime-pkg) full-key full-components
@@ -284,16 +321,21 @@
                                       #:wasm-deps wasm-deps #:target target
                                       #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
                                       #:scheme scheme-opt #:racket racket-opt #:force? force?))
-     ;; Binaries + surface from the package-agnostic base cache.
+     ;; Binaries + surface + the package-agnostic BASE share.data from the base
+     ;; cache.
      (collect-outputs #:dest dest #:surface-dir surface-dir #:target target
                       #:runtime-srcs (list (cache-dir-for base-key)))
-     ;; Only browser ships the separate package payload: cross-install the app's
-     ;; packages (the only place PKGS flow), then derive share.data via
-     ;; pack-packages. Node bakes its (package-less under PKGS=) tree at link time.
-     (when browser?
-       (ensure-cross-root! pkg-key #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
-                           #:scheme scheme-opt #:racket racket-opt #:force? force?)
-       (pack-packages #:dest dest #:cross-root (cross-root-cache-dir-for pkg-key)))
+     ;; Only the browser ships the separate package payload, and only when the app
+     ;; adds packages: cross-install them (the only place PKGS flow) against the
+     ;; pure SDK and fold into the base share.data, emsdk-free; then overwrite
+     ;; dist's base share.data with the extended one. With no app packages the base
+     ;; share.data already shipped by collect-outputs is final. Node bakes its
+     ;; (package-less under PKGS=) tree at link time.
+     (when (and browser? has-pkgs?)
+       (ensure-app-payload! pkg-key sdk-key base-key
+                            #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
+                            #:scheme scheme-opt #:racket racket-opt #:force? force?)
+       (copy-payload! (app-payload-cache-dir-for pkg-key) dest))
      (write-metadata-into! dest full-key full-components rv)]))
 
 ;; Build (or reuse the cache for) a config and emit a *distributable* binary
@@ -325,6 +367,7 @@
   (define pkg-key (key-from-components
                    (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
                                          #:local-pkgs local-pkgs)))
+  (define has-pkgs? (or (not (string=? pkgs "")) (pair? local-pkgs)))
   (define scratch (make-temporary-file "rktwasm-pkg-~a" 'directory))
   (dynamic-wind
    void
@@ -336,15 +379,17 @@
    (lambda () (when (directory-exists? scratch) (delete-directory/files scratch))))
   (define pkg-dest (->path dest))
   (make-directory* pkg-dest)
-  ;; Binaries (both surfaces) from the base cache; share.data* derived from the
-  ;; package cross-root cache by pack-packages (both populated by build-runtime).
+  ;; Binaries (both surfaces) from the base cache; share.data* from the app-payload
+  ;; cache (the cross-installed packages) when the app adds any, else the base
+  ;; share.data -- both populated by build-runtime above.
   (for ([n (in-list base-runtime-names)])
     (define s (build-path (cache-dir-for base-key) n))
     (when (file-exists? s)
       (define d (build-path pkg-dest n))
       (when (file-exists? d) (delete-file d))
       (copy-file s d)))
-  (pack-packages #:dest pkg-dest #:cross-root (cross-root-cache-dir-for pkg-key))
+  (copy-payload! (if has-pkgs? (app-payload-cache-dir-for pkg-key) (cache-dir-for base-key))
+                 pkg-dest)
   (define rv (let ([m (read-build-metadata (cache-dir-for base-key))]) (and m (hash-ref m 'racket-version #f))))
   (write-metadata-into! pkg-dest key components rv)
   ;; Single distributable artifact next to the dir: <name>.tar.gz of its contents.

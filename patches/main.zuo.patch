@@ -1,5 +1,5 @@
 diff --git a/main.zuo b/main.zuo
-index 84c516d..c3df219 100644
+index 84c516d..5f2dd99 100644
 --- a/main.zuo
 +++ b/main.zuo
 @@ -195,12 +195,31 @@
@@ -240,7 +240,7 @@ index 84c516d..c3df219 100644
    (define (pkgs-catalog token vars)
      (racket vars
              (list "-U" "-G" (path-only build-config.rktd)
-@@ -840,6 +984,71 @@
+@@ -840,6 +984,62 @@
      (build-one "racket/src/expander/main.zuo" "expander")
      (build-one "racket/src/cs/main.zuo" "schemified"))
  
@@ -261,15 +261,6 @@ index 84c516d..c3df219 100644
 +  ;; no emsdk, no wasm-deps. The orchestrator's SDK collector then harvests the
 +  ;; retarget files + cross-root. See build-wasm.md "Cross-compiler SDK".
 +  (define (wasm-cross-sdk token)
-+    (build-base "cs/c" token (hash 'sdk? #t)))
-+
-+  ;; The cross-INSTALL step: the same cross flow as `wasm-cross-sdk`, but this is
-+  ;; the ONLY wasm target the orchestrator passes app `PKGS`/`LOCAL_PKGS` to. It
-+  ;; `install-base-pkgs` + `wasm-setup`-compiles those packages to tpb32l onto the
-+  ;; (otherwise package-blank) cross-root. Keeping it a distinct target lets
-+  ;; `wasm` and `wasm-cross-sdk` stay package-agnostic (always `PKGS=`); the app's
-+  ;; packages are layered on here. See build-wasm.md "Package-blank runtime/SDK".
-+  (define (wasm-install-pkgs token)
 +    (build-base "cs/c" token (hash 'sdk? #t)))
 +
 +  ;; Standalone step (run manually after a bootstrap `make wasm`): strip the
@@ -312,13 +303,12 @@ index 84c516d..c3df219 100644
    ;; ------------------------------------------------------------
    ;; Targets
  
-@@ -872,6 +1081,11 @@
+@@ -872,6 +1072,10 @@
         [:target pb-stage () ,(lambda (token) (pb-manage 'stage))]
         [:target pb-push () ,(lambda (token) (pb-manage 'push))]
  
 +       [:target wasm () ,(lambda (token) (wasm token))]
 +       [:target wasm-cross-sdk () ,(lambda (token) (wasm-cross-sdk token))]
-+       [:target wasm-install-pkgs () ,(lambda (token) (wasm-install-pkgs token))]
 +       [:target wasm-binary-pkgs () ,(lambda (token) (wasm-binary-pkgs token))]
 +
         [:target pkgs-catalog () ,(lambda (token) (pkgs-catalog token (find-racket vars vm)))]

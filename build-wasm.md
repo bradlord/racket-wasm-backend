@@ -301,46 +301,58 @@ the build-key, so the cache self-invalidates. `--force` (CLI) / `#:force?`
 (`make-wasm-racket`) bypasses the cache and forces a real build. Entries are
 large (~100 MB each); they live under the disposable `.work/`.
 
-##### Package-blank runtime/SDK; packages via a cross-install step
+##### Package-blank runtime/SDK; packages via the clone-free consume
 
-`build-runtime` keeps the runtime in **two independently cached layers**, and the
-make targets that build them -- `wasm` and `wasm-cross-sdk` -- are **always
-`PKGS=`** (package-agnostic). The app's packages are layered on by a distinct
-cross-install make target, and the `share.data` payload is produced only by
-`pack-packages` (no build step packs it):
+`build-runtime` keeps the runtime in **three independently cached layers**. Only
+the base needs the clone+emsdk; the app's packages are added **clone-free** by
+cross-installing them against a pure SDK (the same path an external consumer uses
+-- the full dogfood). The two clone-bound make targets -- `wasm` and
+`wasm-cross-sdk` -- are **always `PKGS=`/`LOCAL_PKGS=`** (package-agnostic):
 
-- **Base binaries** (`base-runtime-names` = `scheme*.{js,wasm,data}`,
-  `scheme-web.{js,wasm,data}`) -- `make wasm` with **`PKGS=`/`LOCAL_PKGS=`**. The
-  browser link bakes only boot images + collects into `scheme-web.data`; packages
-  are never in the link (they're the separate `share.data`, see "Packages as a
-  separate data file"), so the binaries are package-agnostic. Cache key **omits
-  `pkgs`/`local-pkgs`** -- one emcc link, reused by every app on the same (delta,
-  `wasm-deps`, link-JS, target). Needs the emsdk on a miss.
-- **Package cross-root** -- `ensure-cross-root!` runs **`make wasm-install-pkgs`**
-  (the cross-install step -- the *only* wasm make the app's `PKGS`/`LOCAL_PKGS`
-  flow to; it `install-base-pkgs` + `wasm-setup`-compiles them to `tpb32l` onto the
-  package-blank cross-root, **emsdk-free**, the `sdk?` flow). The result is
-  snapshotted clone-shaped into `work-dir/cross-root-cache/<pkg-key>/`. No packing
-  here.
-- **`pack-packages`** (`build/pack.rkt`) packs the cached cross-root into
-  `dist/share.data`/`share.data.js`. It is the single, always-run payload producer
-  (the `pack-pkgs` command shares it), and the hook for the binary-only variant.
+- **Base runtime** (`ensure-base-runtime!`, clone+emsdk) -- `make wasm` with
+  `PKGS=`, then `pack-packages` packs the package-agnostic **base `share.data`**
+  (the clone's core tree, emsdk-free). The browser link bakes only boot images +
+  collects into `scheme-web.data`; packages are never in the link (they're the
+  separate `share.data`, see "Packages as a separate data file"). Binaries + base
+  `share.data` cache together under **base-key** (omits `pkgs`/`local-pkgs`) -- one
+  emcc link + one base pack, reused by every app on the same (delta, `wasm-deps`,
+  link-JS, target). Needs the emsdk on a miss.
+- **Pure SDK** (`ensure-sdk!`, clone, emsdk-free) -- `build-cross-sdk` runs `make
+  wasm-cross-sdk` `PKGS=` + `package-cross-sdk` to emit the `cross-sdk` artifact
+  (retarget files + `tpb32l` cross-root + the in-tree `pkgs/`). Keyed by **(delta,
+  `wasm-deps`)** -- one SDK serves every app on that native-dep profile. Needs a
+  **warm clone** (the cross-sdk can't cold-bootstrap), which the preceding base
+  build provides.
+- **App payload** (`ensure-app-payload!` -> `cross-install`, **clone-free,
+  emsdk-free**) -- the only place the app's `pkgs`/`local-pkgs` flow. It fetches
+  (catalog) + cross-compiles them to `tpb32l` against the SDK and folds their
+  bytecode into the base `share.data` (`extend-data-package!`), writing the
+  extended `share.data`/`share.data.js` into `work-dir/app-payload-cache/<pkg-key>/`.
+  `build-runtime` copies that over dist's base `share.data`. With **no** app
+  packages, the base `share.data` collect-outputs already shipped is final.
 
-`collect-outputs` copies the binaries (base cache) + surface; `pack-packages`
-writes `share.data`. The upshot: **a package change is a base-runtime cache hit (no
-emcc relink) + an emsdk-free `wasm-install-pkgs` + a re-pack** -- a full `build` of a
-package change runs with the emsdk entirely off `PATH`. Native deps (`wasm-libs`,
-e.g. the cairo/pango stack `draw` links) stay in the base build (linked *into* the
-wasm binary, can't be layered on). The standalone `cross-sdk` command emits a
-**pure**, package-blank cross-compiler SDK (a consumer adds packages via
-`cross-install`). Node (`scheme.data`) bakes its tree at link time, so under
-`PKGS=` the node surface is package-less -- this serves the browser surface.
+The consume (`build/consume.rkt`) runs `raco pkg install` under a custom `-G`
+config whose `pkgs-dir`/`links-file`/`lib-dir` point at the SDK cross-root (so the
+**base package set registers as installed** and only the app's delta is fetched +
+compiled) while `collects` stays on the host racket (host-form expansion). It is
+host-safe by construction: `PLTADDONDIR` confines new packages to a throwaway
+addon, and `-MCR <hostzo>:<xtgt>` (no in-place root) keeps every `.zo` out of the
+host trees. `lib-dir`'s `system.rktd` makes the cross target `tpb32l`. The
+hostzo/xtgt compile shadows persist per-SDK (`consume-work-cache`) so a repeat
+consume only compiles the new packages.
 
-> Clone hygiene: the cross-root is packed from the clone's `share/pkgs`, which
-> `install-base-pkgs` extends *additively* on the source-install path -- a package
-> *dropped* from the manifest is not removed from a warm clone (it lingers in
-> `share.data`). Run `rebuild-binary-catalog` (clears `share/pkgs` + installs the
-> stripped binary set) or `clean` for a faithful drop.
+The upshot: **a package change is a base + SDK cache hit + an emsdk-free
+`cross-install`** -- a full `build` of a package change runs with the emsdk
+entirely off `PATH` and **no clone mutation**. Native deps (`wasm-libs`, e.g. the
+cairo/pango stack `draw` links) stay in the base build (linked *into* the wasm
+binary, can't be layered on). Node (`scheme.data`) bakes its tree at link time, so
+under `PKGS=` the node surface is package-less -- this serves the browser surface.
+
+> First-consume cost: with empty hostzo/xtgt, the consume regenerates the host-form
+> + target compile shadows of the new packages' dependency closure (draw/pict are
+> sizable). The `consume-work-cache` makes subsequent consumes incremental. A lean
+> SDK that pre-ships those shadows is a follow-on (the SDK ships sources, not
+> shadows, today).
 
 #### Build metadata + distributable binary packages
 
@@ -411,6 +423,12 @@ The SDK contains (`build/config.rkt` `cross-sdk-layout`, collected by
   demand, so the ~143M `build/zo` (host-arch bytecode keyed by *absolute host
   paths*, non-portable) and `build/cs/c/compiled` are deliberately **not**
   shipped -- they rebuild on the consumer.
+- **`pkgs/`** (a SIBLING of `cross-root`, ~24M) -- the in-tree bootstrap packages
+  (racket-lib, base, net-lib, ...) the cross-root's `links.rktd` references as
+  `(up up #"pkgs" X)`, which resolve relative to `<cross-root>/share` to
+  `<sdk>/pkgs`. The consume points the install's `links-file` at the cross-root,
+  so these must be present for the base packages to register as installed (else
+  the whole base closure re-fetches). Mirrors `pack.rkt` `links-pkgs-roots`.
 - **metadata** (`kind: 'cross-sdk`) recording the `build-key` (matching the
   runtime package for the same package set), plus `host-machine` + `chez-version`
   + `racket-version` as the **hard** host-compatibility gate.
@@ -435,44 +453,60 @@ source dep set incl. doc packages, so it's fatter than the runtime's stripped
 tree -- a future optimization could run the binary catalog first.)
 
 **Consuming the SDK** -- `racket build/main.rkt cross-install --sdk <dir>
---share-data <runtime/share.data> --dest <out> [--racket <p>] <pkg-src>...`
-(`build/consume.rkt`). It cross-compiles new package(s) for `tpb32l` with the
-SDK's retarget files -- a same-version host racket, **no emsdk and no clone** --
-and folds their `tpb32l` `.zo` (plus sources and an updated `/share/links.rktd`)
-into a runtime's `share.data` package payload, writing a fresh
-`share.data`/`share.data.js` into `<out>`.
+--share-data <runtime/share.data> --dest <out> [--racket <p>] [--local <dir>]...
+<catalog-name>...` (`build/consume.rkt`). It **fetches** packages (catalog by
+name, and/or local source dirs via `--local`) and **cross-compiles** them for
+`tpb32l` with the SDK's retarget files -- a same-version host racket, **no emsdk
+and no clone** -- folding their `tpb32l` `.zo` (plus sources and an updated
+`/share/links.rktd`) into a runtime's `share.data`, writing a fresh
+`share.data`/`share.data.js` into `<out>`. This is the path `build`'s package
+layer dogfoods (`ensure-app-payload!`); the IDE's full 63-package closure
+(draw/pict/datalog + the local `web-repl`) is cross-installed this way and boots.
 
-The cross-compile invocation (proven host-safe):
+The fetch + cross-compile invocation (proven host-safe):
 ```
-<host-racket> -G <xcfg/etc> -MCR <hostzo>:<xtgt> \
-  --cross-compiler tpb32l <sdk>/cross-compiler -l- raco make <pkg>/<m>.rkt
+PLTADDONDIR=<addon> <host-racket> -G <xcfg/etc> -MCR <hostzo>:<xtgt> \
+  --cross-compiler tpb32l <sdk>/cross-compiler \
+  -l- raco pkg install --scope user --no-docs --deps search-auto \
+      --skip-installed <names...>            # locals: a separate --copy <dir> each
 ```
-`-MCR` expands to `-M -C -R <hostzo>:<xtgt>`, which engages **cross-multi mode**
-(`compiler/private/cm-minimal.rkt cross-multi-compile?`): `-C` sets
-cross-installation, `-M` machine-independent, and the two compiled-file roots
-split the output -- **host form to the first root (`hostzo`), `tpb32l` form to the
-second (`xtgt`)**. Both roots are *explicit* (no in-place `:` root), so nothing is
-ever written next to the source; this matters because cross-multi otherwise writes
-the target `.zo` into whatever in-place `compiled/` dir resolves -- and pointed at
-the host racket's own collects (`raco pkg install -i`, or `-X cross-root` with an
-empty shadow) it will **silently overwrite host bytecode with `tpb32l` and brick
-the host racket**. `system.rktd` (shipped at `<sdk>/cross-root/lib`, read via the
-cross config's `find-lib-dir`) is what tells the running racket the target is
-`tpb32l`; without it the compile silently emits *host* bytecode.
+The crux is the custom `-G <xcfg>` config, which makes the SDK's **base package
+set count as already installed** so only the app's *delta* is fetched + compiled:
+```
+#hash((pkgs-dir   . "<cross-root>/share/pkgs")   ; base pkgs register as installed
+      (links-file . "<cross-root>/share/links.rktd")
+      (lib-dir    . "<cross-root>/lib")           ; system.rktd -> target tpb32l
+      (catalogs   . (#f)))                         ; network, for the app's NEW pkgs
+```
+`collects` stays on the **host racket** (host-form expansion). Setting only the
+config etc-dir is *not* enough -- `find-pkgs-dir` then still resolves to the host's
+`share/pkgs` and the whole base closure reinstalls; `pkgs-dir`/`links-file` are what
+redirect it. The cross-root's links reference base pkgs as `(static-root (up up
+#"pkgs" X))`, resolving to `<sdk>/pkgs` (a sibling of cross-root), so the SDK
+**ships the in-tree `pkgs/`** (`cross-sdk-layout`); without it those links fail and
+the base reinstalls. `lib-dir`'s `system.rktd` makes the cross target `tpb32l`
+(without it the compile silently emits *host* bytecode); the running host racket
+keeps its own machine identity regardless.
 
-`cross-install` then **harvests** only the `xtgt` artifacts under its staging tree
-(never the recompiled host-collects deps `xtgt` also holds) back in place, and
-calls `build/pack.rkt`'s new `extend-data-package!` to append the new files after
-the existing `share.data` blob and rewrite the loader manifest -- so the consumer
-need not ship or re-pack the whole cross-root. The host racket uses its **own**
-collects for host-side expansion, so this works directly for packages whose deps
-are in base Racket (or already in the host); a package depending on a *bundled* lib
-the host lacks in host form (e.g. `pict` when the host racket doesn't have it) still
-needs that lib's host-form expansion shadow -- regenerated from the cross-root
-sources, or installed into the host racket from the SDK's `share/pkgs/<lib>` -- a
-remaining design point. (End-to-end verified: a cross-installed `tpb32l` `.zo` lands
-at the right vpath with its collection link registered; booting the resulting
-runtime to confirm `(require <pkg>)` at runtime is the last validation.)
+`-MCR` expands to `-M -C -R <hostzo>:<xtgt>` -- **cross-multi mode**
+(`compiler/private/cm-minimal.rkt cross-multi-compile?`): two compiled-file roots,
+**host form to `hostzo`, `tpb32l` form to `xtgt`**. Both roots are *explicit* (no
+in-place `:` root) and `--scope user` + `PLTADDONDIR` confine the new packages to a
+throwaway addon, so nothing is written to the host trees -- the discipline that
+keeps the consume host-safe (cross-multi pointed at the host's own collects, e.g.
+`raco pkg install -i` or `-X cross-root` with an empty shadow, would **silently
+overwrite host bytecode with `tpb32l` and brick the host racket**).
+
+`cross-install` then **harvests** only the `xtgt` artifacts under the addon package
+tree (never the recompiled host-collects deps `xtgt` also holds), **verifies** each
+requested package actually produced `tpb32l` `.zo`, and calls `build/pack.rkt`'s
+`extend-data-package!` to append the new files after the existing `share.data` blob
+and rewrite the loader manifest -- so the consumer never re-packs the whole tree.
+`raco pkg install`'s host-side launcher step fails benignly (the cross `lib-dir`
+lacks the `starter-sh` template); the consume tolerates *only* that signature
+(`packages installed, although setup reported errors`) and the post-harvest `.zo`
+verification catches any real compile failure. The `hostzo`/`xtgt` shadows persist
+per-SDK (`consume-work-cache`) so a repeat consume only compiles the new packages.
 
 `wasm-setup` (a `cs/c/build.zuo` target) assembles the cross-compiler
 xpatch (`compile-xpatch.tpb32l`/`library-xpatch.tpb32l`, via the shared

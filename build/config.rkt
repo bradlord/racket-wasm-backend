@@ -135,7 +135,7 @@
 ;; The SDK's on-disk layout: a list of (dest-relative-path . clone-source-path).
 ;; A source that is a directory is copied as a tree; a file is copied as a file.
 ;; Single source of truth for the collector (build/stages.rkt) and the consume
-;; side (follow-on). The cross-root carries BOTH sources and the in-place
+;; side (build/consume.rkt). The cross-root carries BOTH sources and the in-place
 ;; `tpb32l` `.zo`: sources let the consumer's racket regenerate host shadows on
 ;; demand (so `build/zo` is deliberately NOT shipped), the `.zo` are the target
 ;; dependency bytecode a new package links against.
@@ -151,6 +151,15 @@
           (build-path clone-dir "racket" "share" "pkgs"))
     (cons (build-path "cross-root" "share" "links.rktd")
           (build-path clone-dir "racket" "share" "links.rktd"))
+    ;; The in-tree bootstrap packages (racket-lib, base, net-lib, ...) the
+    ;; cross-root's links reference as `(up up #"pkgs" X)`. Resolved relative to
+    ;; <cross-root>/share, that is `<sdk>/pkgs` -- a SIBLING of cross-root. The
+    ;; consume (build/consume.rkt) points the install's `links-file` at the
+    ;; cross-root, so these dirs MUST be present for the base packages to register
+    ;; as installed (else `raco pkg install` re-fetches the whole base closure).
+    ;; Mirrors `pack.rkt` `links-pkgs-roots`, which packs the same dirs.
+    (cons (build-path "pkgs")
+          (build-path clone-dir "pkgs"))
     ;; `lib/system.rktd` carries `target-machine tpb32l`; the consumer's running
     ;; racket reads it (via the cross config's `find-lib-dir`) to know it must
     ;; cross-compile for tpb32l rather than the host machine. Without it the

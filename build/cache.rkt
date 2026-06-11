@@ -19,14 +19,11 @@
 
 (provide build-key build-key-components key-from-components
          cache-dir-for cache-complete? snapshot-runtime!
-         cross-root-cache-dir-for cross-root-cached? snapshot-cross-root!)
+         sdk-cache-dir-for sdk-cached?
+         app-payload-cache-dir-for app-payload-cached?
+         consume-work-dir-for)
 
 (define cache-root (build-path work-dir "runtime-cache"))
-;; The package cross-root (the tpb32l package tree `pack-share-data` packs) is
-;; cached separately from the runtime binaries -- keyed by the package set
-;; (pkg-key) so it is reused across surfaces / link-JS variants, and re-derived
-;; into `share.data` by `pack-packages` on each build. See build/stages.rkt.
-(define cross-root-cache-root (build-path work-dir "cross-root-cache"))
 
 ;; sha1 of a directory tree's contents: sorted "<relpath>:<file-sha1>" lines,
 ;; hashed. "" when the dir is absent. Cheap on patches/overlay (modest size); the
@@ -156,29 +153,39 @@
       (copy-file s dst)))
   (info-msg "cached ~a file(s) under ~a" (length names) d))
 
-;; --- the package cross-root cache ---------------------------------------
+;; --- the clone-free package layer caches --------------------------------
 ;;
-;; A clone-shaped snapshot of the package tree `pack-share-data #:clone` reads:
-;; `racket/share/pkgs` + `racket/share/links.rktd` (the installed/cross-compiled
-;; packages) and the in-tree `pkgs/` (the `(up up #"pkgs" ...)` link roots). The
-;; cross-install step builds this in the clone; the orchestrator caches it here
-;; and `pack-packages` derives `share.data` from it -- no build step ever packs.
-(define (cross-root-cache-dir-for key) (build-path cross-root-cache-root key))
+;; The app's packages no longer flow through a clone-bound cross-root. Instead a
+;; pure cross-compiler SDK is built once per (delta, wasm-deps) and the app's
+;; packages are cross-installed against it into the base `share.data`
+;; (build/consume.rkt). Three regenerable caches under .work/ replace the old
+;; cross-root cache:
 
-(define (cross-root-cached? key)
-  (define d (cross-root-cache-dir-for key))
-  (and (directory-exists? (build-path d "racket" "share" "pkgs"))
-       (file-exists? (build-path d "racket" "share" "links.rktd"))))
+;; The pure cross-compiler SDK, keyed by (delta, wasm-deps) -- one SDK serves
+;; every app on that native-dep profile. `sdk-cached?` checks the pieces the
+;; consume needs: the retarget files, the tpb32l `system.rktd`, and the in-tree
+;; pkgs (so the base packages register as installed).
+(define sdk-cache-root (build-path work-dir "sdk-cache"))
+(define (sdk-cache-dir-for key) (build-path sdk-cache-root key))
+(define (sdk-cached? key)
+  (define d (sdk-cache-dir-for key))
+  (and (directory-exists? (build-path d "cross-compiler"))
+       (file-exists? (build-path d "cross-root" "lib" "system.rktd"))
+       (directory-exists? (build-path d "pkgs"))))
 
-;; Snapshot the clone's package tree into the cross-root cache for `key`.
-(define (snapshot-cross-root! key)
-  (define d (cross-root-cache-dir-for key))
-  (when (directory-exists? d) (delete-directory/files d))
-  (make-directory* (build-path d "racket" "share"))
-  (copy-directory/files (build-path clone-dir "racket" "share" "pkgs")
-                        (build-path d "racket" "share" "pkgs"))
-  (copy-file (build-path clone-dir "racket" "share" "links.rktd")
-             (build-path d "racket" "share" "links.rktd"))
-  (when (directory-exists? (build-path clone-dir "pkgs"))
-    (copy-directory/files (build-path clone-dir "pkgs") (build-path d "pkgs")))
-  (info-msg "cross-root cached under ~a" d))
+;; The cross-installed app payload: the base `share.data` extended with the app's
+;; packages, keyed by the package set (pkg-key) so it is reused across surfaces /
+;; link-JS variants. `build-runtime` copies it into dist/.
+(define app-payload-cache-root (build-path work-dir "app-payload-cache"))
+(define (app-payload-cache-dir-for key) (build-path app-payload-cache-root key))
+(define (app-payload-cached? key)
+  (define d (app-payload-cache-dir-for key))
+  (and (file-exists? (build-path d "share.data"))
+       (file-exists? (build-path d "share.data.js"))))
+
+;; A persistent scratch dir for the cross-install's host-form/target compile
+;; shadows (hostzo/xtgt), keyed by the SDK (delta, wasm-deps). Reused across
+;; consumes so only the NEW packages compile after the first (the addon is wiped
+;; fresh each consume; see build/consume.rkt). Purely a speed cache.
+(define consume-work-root (build-path work-dir "consume-work"))
+(define (consume-work-dir-for key) (build-path consume-work-root key))

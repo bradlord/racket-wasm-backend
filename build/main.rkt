@@ -14,9 +14,11 @@
 ;;                             + tpb32l cross-root + .tar.gz) -- emsdk-free; lets a
 ;;                             same-version host racket cross-build new packages
 ;;   cross-install --sdk <dir> --share-data <path> --dest <dir> [--racket <p>]
-;;                 <pkg-src>...  cross-compile new package(s) for tpb32l with a
+;;                 [--local <dir>]... <catalog-name>...
+;;                             fetch + cross-compile package(s) for tpb32l with a
 ;;                             cross-SDK and fold them into a runtime's share.data
-;;                             (no clone, no emsdk)
+;;                             (no clone, no emsdk). Bare args = catalog names;
+;;                             --local <dir> = a local package source dir
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
@@ -137,31 +139,37 @@
                           #:scheme (hash-ref opts 'scheme #f)
                           #:racket (hash-ref opts 'racket #f)))
 
-;; Cross-compile new package(s) for tpb32l with a cross-SDK and fold them into a
-;; runtime's share.data: `cross-install --sdk <dir> --share-data <path>
-;; --dest <dir> [--racket <p>] <pkg-src>...`. No clone, no emsdk -- just a
-;; same-version host racket + the SDK retarget files. See build/consume.rkt.
+;; Fetch + cross-compile new package(s) for tpb32l with a cross-SDK and fold them
+;; into a runtime's share.data: `cross-install --sdk <dir> --share-data <path>
+;; --dest <dir> [--racket <p>] [--work <d>] [--local <dir>]... <catalog-name>...`.
+;; Bare args are catalog package names; `--local <dir>` adds a local source dir.
+;; No clone, no emsdk -- just a same-version host racket + the SDK. See
+;; build/consume.rkt.
 (define (cmd-cross-install args)
-  (let loop ([as args] [sdk #f] [share-data #f] [dest #f] [racket #f] [work #f] [pkgs '()])
+  (let loop ([as args] [sdk #f] [share-data #f] [dest #f] [racket #f] [work #f]
+                       [pkgs '()] [locals '()])
     (define (val k) (when (null? (cdr as)) (error 'cross-install "~a requires a value" (car as))) (cadr as))
     (cond
       [(null? as)
        (unless sdk (error 'cross-install "missing --sdk <dir>"))
        (unless share-data (error 'cross-install "missing --share-data <path/share.data>"))
        (unless dest (error 'cross-install "missing --dest <dir>"))
-       (when (null? pkgs) (error 'cross-install "no package source dirs given"))
+       (when (and (null? pkgs) (null? locals))
+         (error 'cross-install "nothing to install (give catalog names and/or --local <dir>)"))
        (cross-install #:sdk sdk #:share-data share-data #:dest dest
-                      #:racket racket #:work work #:pkgs (reverse pkgs))]
+                      #:racket racket #:work work
+                      #:pkgs (reverse pkgs) #:local-pkgs (reverse locals))]
       [else
        (case (car as)
-         [("--sdk")        (loop (cddr as) (val '_) share-data dest racket work pkgs)]
-         [("--share-data") (loop (cddr as) sdk (val '_) dest racket work pkgs)]
-         [("--dest")       (loop (cddr as) sdk share-data (val '_) racket work pkgs)]
-         [("--racket")     (loop (cddr as) sdk share-data dest (val '_) work pkgs)]
-         [("--work")       (loop (cddr as) sdk share-data dest racket (val '_) pkgs)]
+         [("--sdk")        (loop (cddr as) (val '_) share-data dest racket work pkgs locals)]
+         [("--share-data") (loop (cddr as) sdk (val '_) dest racket work pkgs locals)]
+         [("--dest")       (loop (cddr as) sdk share-data (val '_) racket work pkgs locals)]
+         [("--racket")     (loop (cddr as) sdk share-data dest (val '_) work pkgs locals)]
+         [("--work")       (loop (cddr as) sdk share-data dest racket (val '_) pkgs locals)]
+         [("--local")      (loop (cddr as) sdk share-data dest racket work pkgs (cons (val '_) locals))]
          [else
           (when (string-prefix? (car as) "--") (error 'cross-install "unknown option: ~a" (car as)))
-          (loop (cdr as) sdk share-data dest racket work (cons (car as) pkgs))])])))
+          (loop (cdr as) sdk share-data dest racket work (cons (car as) pkgs) locals)])])))
 
 ;; Repack only the browser package data file (share.data/share.data.js) from
 ;; the already-installed share/pkgs tree, then refresh dist/. The point of the
