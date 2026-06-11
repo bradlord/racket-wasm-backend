@@ -22,13 +22,12 @@
 ;;                             args = catalog names; --local <dir> = a local package
 ;;                             source dir; --catalog <d> = the persistent built-
 ;;                             package catalog dir (default: under --work).
-;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
 ;;   serve <dir> [port]        COOP/COEP server over <dir> (e.g. an app's dist/)
 ;;   clean                     remove the cloned tree (.work/racket)
 ;;
-;; build / rebuild-binary-catalog options:
+;; build options:
 ;;   --pkgs "<p1 p2 ...>"   packages to install (default from config.rkt)
 ;;   --wasm-deps "<d ...>"  native dep selection ("draw" alias) (default from config)
 ;;   --scheme <path>        native threaded host Chez (else resolve/build)
@@ -47,7 +46,6 @@
          "patches.rkt"
          "stages.rkt"
          "pack.rkt"
-         "pkgs.rkt"
          "app.rkt"
          "consume.rkt")
 
@@ -95,8 +93,6 @@
                     #:racket (hash-ref opts 'racket #f)
                     #:runtime-pkg (hash-ref opts 'runtime #f)
                     #:force? (hash-ref opts 'force? #f)))
-
-(define (cmd-rebuild-catalog args) (rebuild-binary-catalog (parse-build-opts args)))
 
 ;; Build a custom app: `app <dir> [--dest <dir>] [--scheme <p>] [--racket <p>]`.
 ;; <dir>/app.rkt provides `app` (a hash); output lands in <dir>/dist (or --dest).
@@ -218,7 +214,6 @@
         (cons "package" cmd-package)
         (cons "cross-sdk" cmd-cross-sdk)
         (cons "cross-install" cmd-cross-install)
-        (cons "rebuild-binary-catalog" cmd-rebuild-catalog)
         (cons "pack-pkgs" cmd-pack-pkgs)
         (cons "serve" cmd-serve)
         (cons "clean" cmd-clean)))

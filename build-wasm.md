@@ -12,7 +12,6 @@
 > |---|---|
 > | edit/checkout the Racket tree | `racket build/main.rkt sync apply` (-> `.work/racket`) |
 > | `make wasm SCHEME=.. RACKET=.. PKGS=.. WASM_DEPS=..` | `racket build/main.rkt build [--scheme ..] [--racket ..] [--pkgs ..] [--wasm-deps ..]` |
-> | `make wasm-binary-pkgs` (4-stage catalog; superseded by the SDK catalog) | `racket build/main.rkt rebuild-binary-catalog` (dead) |
 > | serve the output dir | `racket build/main.rkt serve <dir> [port]` (e.g. `dist`) |
 >
 > Everything below — architecture, stages, dep recipes, traps — is unchanged and
@@ -228,10 +227,8 @@ whose `dist/` is `scheme.{js,wasm,data}`, run directly as a Racket REPL with
 (`cmd-build` -> `run-app-manifest ide-app-dir` -> `make-wasm-racket`). The IDE's
 package / native-dep / surface config lives in `apps/ide/app.rkt` (the single
 source of truth -- `build/config.rkt` no longer hardcodes a default package
-set), and its page is `apps/ide/public/{index.html,ide.js}`. The binary-catalog
-rebuild (`build/pkgs.rkt`) reads the same manifest, so the IDE's package set is
-defined in exactly one place. To ship a different surface or dep set, write an
-app and `build` it -- the IDE has no privileged path.
+set), and its page is `apps/ide/public/{index.html,ide.js}`. To ship a different
+surface or dep set, write an app and `build` it -- the IDE has no privileged path.
 
 **Local app packages (`#:local-pkgs`).** Catalog packages come from `#:pkgs`
 (by name); an app's own packages are passed as **source dirs** in
@@ -248,9 +245,8 @@ Their contents feed the build-key, so editing a local package rebuilds.
 The repo's own `web-repl` helper package is itself a `#:local-pkgs` entry now:
 it lives at `packages/web-repl` (no longer `overlay-local/`, no longer in the
 clone), and the default IDE build ships it via `default-local-pkgs`
-(`build/config.rkt`). The binary-catalog path still injects it into the stripped
-catalog (`inject-local-packages!`, `build/pkgs.rkt`), since that flow installs
-from the catalog rather than via `LOCAL_PKGS`.
+(`build/config.rkt`). The clone-free consume keeps it on the `--copy` (source)
+path -- only catalog packages are stripped into the binary catalog.
 
 **App-supplied link JS (`#:pre-js` / `#:post-js` / `#:extern-pre-js`).** An app
 can contribute its own JS to the emcc link via the manifest fields `'pre-js`,
@@ -1610,15 +1606,20 @@ automatic in `'binary-lib`: with the local binary catalog as the install source,
 (`racket-doc`, `scribble-lib`, `rackunit-lib`, …) are never fetched -- the general
 replacement for per-package vendoring (the old `datalog` hand-trim, long removed).
 
-**Superseded clone-bound path.** The earlier mechanism -- `make wasm-binary-pkgs`
-(`racket/src/build-wasm-binary-pkgs.rkt`) producing `.wasm-pkgs-cache/catalog`,
-consumed by `main.zuo`'s `install-base-pkgs`, driven by `build/pkgs.rkt`'s
-`rebuild-binary-catalog` (`racket build/main.rkt rebuild-binary-catalog`) -- did
-the same strip inside the clone. It is redundant with the SDK-keyed catalog and is
-now **dead** (kept this change for reference; removable once the catalog path is
-proven). Its `build/zo`-root trick (a machine-independent host-loadable mirror so
-`get-info/full` can run each `info.rkt` while the in-place `compiled/` is tpb32l)
-addressed the same host-trap as this section's `strip-binary-compile-info #f`.
+**Removed clone-bound path.** An earlier mechanism did the same strip *inside*
+the clone -- `make wasm-binary-pkgs` (`racket/src/build-wasm-binary-pkgs.rkt`)
+produced a `.wasm-pkgs-cache/catalog` that `main.zuo`'s `install-base-pkgs`
+consumed, driven by `build/pkgs.rkt`'s `rebuild-binary-catalog`. The SDK-keyed
+catalog made it redundant, so it has been **removed** (the make target, the
+overlay strip script, the `install-base-pkgs` binary branch, and the orchestrator
+command + module). Its `build/zo`-root trick (a machine-independent host-loadable
+mirror so `get-info/full` could run each `info.rkt` while the in-place `compiled/`
+was tpb32l) addressed the same host-trap as this section's
+`strip-binary-compile-info #f` + the `harvest!` `info_rkt.zo` skip. NOTE: the
+removal hand-edits `patches/main.zuo.patch` + `patches/Makefile.patch`, so a
+re-run of `build/extract-from-fork.rkt` against an *unmodified* fork would
+reintroduce the make target (the overlay script is guarded by the extractor's
+skip list); reconcile by cleaning the fork if you ever re-extract.
 
 **Notes / traps (catalog path):**
 
@@ -1659,9 +1660,9 @@ the links file points at (the `links-pkgs-roots` parse of `links.rktd` for
 here). The artifact is dead simple: `share.data` is the package files
 concatenated, and `share.data.js` carries each file's `[start,end)` + the
 directory tree and replays them into MEMFS via the documented preload ABI below.
-It is wired into both `build` and `rebuild-binary-catalog` (after the link,
-before `collect-outputs`), and exposed standalone as `racket build/main.rkt
-pack-pkgs` for the repack-without-relink path.
+It is wired into `build` (the base-runtime pack, before `collect-outputs`) and
+exposed standalone as `racket build/main.rkt pack-pkgs` for the
+repack-without-relink path.
 
 > The pure packer was verified equivalent to `file_packager.py` three ways: the
 > two `share.data`s are byte-size-identical (same file set/bytes; only the

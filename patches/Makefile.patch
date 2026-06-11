@@ -1,5 +1,5 @@
 diff --git a/Makefile b/Makefile
-index c10c9e2..a6a6860 100644
+index c10c9e2..850a79b 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -67,6 +67,34 @@ CONFIGURE_ARGS =
@@ -51,7 +51,7 @@ index c10c9e2..a6a6860 100644
               CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
               RACKET="$(RACKET)" \
               PLAIN_RACKET="$(PLAIN_RACKET)" \
-@@ -223,6 +258,39 @@ cs: $(ZUO)
+@@ -223,6 +258,30 @@ cs: $(ZUO)
  bc: $(ZUO)
  	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
  
@@ -78,15 +78,6 @@ index c10c9e2..a6a6860 100644
 +# orchestrator's `cross-sdk` collector harvests the result. See build-wasm.md.
 +wasm-cross-sdk: $(ZUO)
 +	$(RUN_ZUO) wasm-cross-sdk $(BUILD_VARS)
-+
-+# Build a cached binary-only package catalog (racket/src/.wasm-pkgs-cache)
-+# for the WASM build: strip the already-cross-compiled in-tree packages to
-+# .zo-only, build-deps removed. Run this AFTER a bootstrap `make wasm`; a
-+# subsequent `make wasm` then clean-installs PKGS from the catalog so the
-+# image ships .zo-only with build-deps pruned. RACKET must match the tree
-+# version. See build-wasm.md "Binary-only package preload".
-+wasm-binary-pkgs: $(ZUO)
-+	$(RUN_ZUO) wasm-binary-pkgs $(BUILD_VARS)
 +
  both: $(ZUO)
  	$(RUN_ZUO) both $(BUILD_VARS)

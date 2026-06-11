@@ -50,8 +50,13 @@
   (list "racket/collects/setup/setup-core.rkt"))
 
 (define group-c-native
-  ;; Top-level files that live natively in racket-wasm, not in the clone.
-  (list "CLAUDE.md" "build-wasm.md" "buildit.sh" "rebuild-binary-catalog.sh"))
+  ;; Top-level files that live natively in racket-wasm, not in the clone, plus
+  ;; files deliberately DROPPED from the delta (so a re-extract doesn't resurrect
+  ;; them). build-wasm-binary-pkgs.rkt + rebuild-binary-catalog.sh were the old
+  ;; clone-bound binary-catalog strip, superseded by the SDK-keyed catalog in
+  ;; build/consume.rkt -- see build-wasm.md "Binary-only packages via the catalog".
+  (list "CLAUDE.md" "build-wasm.md" "buildit.sh" "rebuild-binary-catalog.sh"
+        "racket/src/build-wasm-binary-pkgs.rkt"))
 
 ;; The fork ships web-repl under racket/collects; this repo instead manages it as
 ;; a *package* (overlay-local/pkgs/web-repl/, with an info.rkt depending on

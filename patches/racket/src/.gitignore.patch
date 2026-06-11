@@ -1,8 +1,8 @@
 diff --git a/racket/src/.gitignore b/racket/src/.gitignore
-index 94e85ee13a..8c6f3851fe 100644
+index 94e85ee..402357e 100644
 --- a/racket/src/.gitignore
 +++ b/racket/src/.gitignore
-@@ -1,2 +1,14 @@
+@@ -1,2 +1,11 @@
  # the conventional directory to run builds in
  /build/
 +
@@ -10,10 +10,7 @@ index 94e85ee13a..8c6f3851fe 100644
 +# pb32l/tpb32l Racket-CS layers, optional cross-compiled deps (libffi
 +# plus the Cairo/Pango/etc. stack, driven by cs/c/wasm-deps/deps/), and any
 +# build-cs-* attempts at different machine-type configurations. Tarball
-+# downloads cache in .wasm-cache/. The cached binary-only package catalog
-+# (build-wasm-binary-pkgs.rkt -> "Binary-only package preload") lives in
-+# .wasm-pkgs-cache/.
++# downloads cache in .wasm-cache/.
 +/build-cs-*/
 +/build-*-em/
 +/.wasm-cache/
-+/.wasm-pkgs-cache/

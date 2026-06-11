@@ -93,9 +93,9 @@
 ;; 'local-pkgs (absolute paths), 'public (absolute path or #f), 'target
 ;; ('browser/'node, default browser), 'pre-js / 'post-js / 'extern-pre-js
 ;; (absolute paths to app-supplied emcc link JS), 'dir. This is
-;; the single source of truth for an app's build config, shared by the build
-;; (`run-app-manifest`) and the binary-catalog rebuild (`build/pkgs.rkt`), so
-;; the IDE's package/dep set lives in one place: apps/ide/app.rkt.
+;; the single source of truth for an app's build config (used by
+;; `run-app-manifest`), so the IDE's package/dep set lives in one place:
+;; apps/ide/app.rkt.
 (define (read-app-manifest app-dir)
   ;; Absolute + simplified, so it works as a base for app-relative paths whether
   ;; the caller passed an absolute (ide-app-dir) or relative (CLI `app <dir>`) one.
