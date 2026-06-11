@@ -1683,11 +1683,23 @@ repack-without-relink path.
 Both surfaces emit and share **one** `share.data`/`share.data.js` pair; the
 generated loader is environment-aware (browser `fetch` vs node `readFileSync`),
 and `Module.locateFile` resolves `share.data` next to the script in either case.
-It is **not** built with `--use-preload-cache`: the package payload is small
-(~10MB — the browser already caches the big core `.data` via the link's own
-`--use-preload-cache`, and re-fetches `share.data` through the ordinary HTTP
-cache), and the IndexedDB cache path throws under node (no `indexedDB`), dumping
-a stack trace on every boot. Caching this tier buys little and isn't worth that.
+
+The loader reproduces emscripten's **`--use-preload-cache`** (ported from
+`tools/file_packager.py`'s `if options.use_preload_cache:` branch — the
+`openDatabase`/`checkCachedPackage`/`fetchCachedPackage`/`cacheRemotePackage`
+helpers and the try/catch preload flow, trimmed to this loader's FS-replay
+shape). After the first download `share.data` is cached in IndexedDB
+(`EM_PRELOAD_CACHE`, the upstream DB name/schema/64MB-chunking) keyed on a
+content hash — `package_uuid`, embedded in the loader's manifest by
+`data-package-uuid` in `build/pack.rkt`. A matching cache entry is served from
+IndexedDB with no network; a mismatch (the bytes changed) re-fetches and
+re-caches. The cache path is **browser-only and guarded**: the node and
+`getPreloadedPackage` paths bypass it, a missing `indexedDB` falls straight
+through to a plain `fetch`, and any IDB error is caught and falls back to a
+direct fetch — so loading never *depends* on the cache and node never hits the
+`indexedDB`-undefined throw. (file_packager uses sha256 for the uuid; Racket
+ships no built-in sha256 and the value is an opaque equality token, so the pure
+packer uses sha1, prefixed `sha1-` to keep the scheme explicit.)
 
 Runtime wiring loads `share.data.js` so its loader pushes onto `Module.preRun`
 and gates `run()` via `addRunDependency` until `share.data` is in MEMFS — so

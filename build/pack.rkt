@@ -16,6 +16,7 @@
          racket/path
          racket/list
          racket/string
+         file/sha1
          json
          "config.rkt"
          "util.rkt")
@@ -94,6 +95,15 @@
         (lambda (a b) (or (< (length a) (length b))
                           (and (= (length a) (length b)) (string<? (string-join a "/") (string-join b "/")))))))
 
+;; The content-addressed cache key for a packed `.data` blob -- the loader's
+;; IndexedDB preload cache (file_packager's --use-preload-cache) keys the stored
+;; payload on this so it survives across rebuilds when the bytes don't change and
+;; is invalidated the moment they do. file_packager uses sha256; Racket ships no
+;; built-in sha256, and the value is an opaque equality token (never interpreted
+;; client-side), so sha1 is exactly as good -- prefixed so the scheme is explicit.
+(define (data-package-uuid data-path)
+  (string-append "sha1-" (call-with-input-file data-path sha1)))
+
 ;; A single FS_createPath line: parent dir + new component.
 (define (fs-create-path-line comps)
   (define parent (if (= (length comps) 1) "/" (string-append "/" (string-join (drop-right comps 1) "/"))))
@@ -128,7 +138,8 @@
   (define create-paths
     (string-join (map fs-create-path-line (ancestor-dirs vpaths)) "\n"))
   (define metadata
-    (jsexpr->string (hasheq 'files metas 'remote_package_size size)))
+    (jsexpr->string (hasheq 'files metas 'remote_package_size size
+                            'package_uuid (data-package-uuid data-path))))
   (define js (loader-js name create-paths metadata))
   (call-with-output-file (build-path dest (string-append name ".js")) #:exists 'replace
     (lambda (out) (write-string js out)))
@@ -202,7 +213,8 @@
   (define create-paths
     (string-join (map fs-create-path-line (ancestor-dirs vpaths)) "\n"))
   (define metadata
-    (jsexpr->string (hasheq 'files metas 'remote_package_size size)))
+    (jsexpr->string (hasheq 'files metas 'remote_package_size size
+                            'package_uuid (data-package-uuid data-path))))
   (call-with-output-file (build-path dest (string-append name ".js")) #:exists 'replace
     (lambda (out) (write-string (loader-js name create-paths metadata) out)))
   (info-msg "extended ~a (+~a files, ~a total, ~a bytes) -> ~a"
@@ -215,6 +227,17 @@
 ;; gates run() with addRunDependency per file until the slices are written via
 ;; FS_createDataFile, and runs in preRun so the FS exists. No emsdk internals --
 ;; only the public Module hooks the runtime already provides.
+;;
+;; The IndexedDB block reproduces emscripten's --use-preload-cache: after the
+;; first download the `.data` blob is cached in IndexedDB keyed on PACKAGE_UUID
+;; (a content hash, see `data-package-uuid`), and subsequent loads serve it from
+;; the cache, skipping the network. Ported from tools/file_packager.py's
+;; `if options.use_preload_cache:` branch (the openDatabase / checkCachedPackage
+;; / fetchCachedPackage / cacheRemotePackage helpers + the try/catch preload
+;; flow), trimmed to this loader's FS-replay shape and to the browser (the node
+;; and getPreloadedPackage paths bypass the cache). DB schema, store names, the
+;; 64MB chunking, and the EM_PRELOAD_CACHE database name match upstream so an
+;; emscripten-packed payload and this one share a cache layout.
 (define (loader-js name create-paths metadata)
   (string-append "
 var Module = typeof Module != 'undefined' ? Module : {};
@@ -235,6 +258,93 @@ Module['expectedDataFileDownloads']++;
       if (!response.ok) throw new Error(response.status + ': ' + response.url);
       return await response.arrayBuffer();
     }
+
+    // --- IndexedDB preload cache (emscripten file_packager --use-preload-cache) -
+    var PACKAGE_UUID = metadata['package_uuid'];
+    // Cache key: the path the package lives at, so two pages on the same origin
+    // serving different payloads don't collide. Mirrors file_packager's PACKAGE_PATH.
+    var PACKAGE_PATH = '';
+    if (typeof window === 'object') {
+      PACKAGE_PATH = window['encodeURIComponent'](window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/')) + '/');
+    } else if (typeof location !== 'undefined') {
+      PACKAGE_PATH = encodeURIComponent(location.pathname.substring(0, location.pathname.lastIndexOf('/')) + '/');
+    }
+    var IDB_RO = 'readonly', IDB_RW = 'readwrite';
+    var DB_NAME = 'EM_PRELOAD_CACHE', DB_VERSION = 1;
+    var METADATA_STORE_NAME = 'METADATA', PACKAGE_STORE_NAME = 'PACKAGES';
+    // Chromium caps per-entry IndexedDB size, so payloads are stored in 64MB chunks.
+    var CHUNK_SIZE = 64 * 1024 * 1024;
+    function openDatabase() {
+      return new Promise((resolve, reject) => {
+        if (typeof indexedDB == 'undefined') { reject(new Error('no IndexedDB')); return; }
+        var openRequest = indexedDB.open(DB_NAME, DB_VERSION);
+        openRequest.onupgradeneeded = (event) => {
+          var db = event.target.result;
+          if (db.objectStoreNames.contains(PACKAGE_STORE_NAME)) db.deleteObjectStore(PACKAGE_STORE_NAME);
+          db.createObjectStore(PACKAGE_STORE_NAME);
+          if (db.objectStoreNames.contains(METADATA_STORE_NAME)) db.deleteObjectStore(METADATA_STORE_NAME);
+          db.createObjectStore(METADATA_STORE_NAME);
+        };
+        openRequest.onsuccess = (event) => resolve(event.target.result);
+        openRequest.onerror = reject;
+      });
+    }
+    function checkCachedPackage(db, packageName) {
+      return new Promise((resolve, reject) => {
+        var transaction = db.transaction([METADATA_STORE_NAME], IDB_RO);
+        var getRequest = transaction.objectStore(METADATA_STORE_NAME).get('metadata/' + packageName);
+        getRequest.onsuccess = (event) => {
+          var result = event.target.result;
+          resolve(result && PACKAGE_UUID === result['uuid'] ? result : null);
+        };
+        getRequest.onerror = reject;
+      });
+    }
+    function fetchCachedPackage(db, packageName, meta) {
+      return new Promise((resolve, reject) => {
+        var transaction = db.transaction([PACKAGE_STORE_NAME], IDB_RO);
+        var packages = transaction.objectStore(PACKAGE_STORE_NAME);
+        var chunkCount = meta['chunkCount'], chunksDone = 0, totalSize = 0, chunks = new Array(chunkCount);
+        for (var chunkId = 0; chunkId < chunkCount; chunkId++) {
+          (function (chunkId) {
+            var getRequest = packages.get('package/' + packageName + '/' + chunkId);
+            getRequest.onsuccess = (event) => {
+              if (!event.target.result) { reject('CachedPackageNotFound for: ' + packageName); return; }
+              if (chunkCount == 1) { resolve(event.target.result); return; }
+              chunks[chunkId] = event.target.result;
+              totalSize += event.target.result.byteLength;
+              if (++chunksDone == chunkCount) {
+                var tempTyped = new Uint8Array(totalSize), byteOffset = 0;
+                for (var i = 0; i < chunkCount; i++) { tempTyped.set(new Uint8Array(chunks[i]), byteOffset); byteOffset += chunks[i].byteLength; }
+                resolve(tempTyped.buffer);
+              }
+            };
+            getRequest.onerror = reject;
+          })(chunkId);
+        }
+      });
+    }
+    function cacheRemotePackage(db, packageName, packageData, packageMeta) {
+      return new Promise((resolve, reject) => {
+        var packages = db.transaction([PACKAGE_STORE_NAME], IDB_RW).objectStore(PACKAGE_STORE_NAME);
+        var chunkCount = Math.ceil(packageData.byteLength / CHUNK_SIZE), finishedChunks = 0, sliceStart = 0;
+        for (var chunkId = 0; chunkId < chunkCount; chunkId++) {
+          var nextSliceStart = sliceStart + CHUNK_SIZE;
+          var putRequest = packages.put(packageData.slice(sliceStart, nextSliceStart), 'package/' + packageName + '/' + chunkId);
+          sliceStart = nextSliceStart;
+          putRequest.onsuccess = (event) => {
+            if (++finishedChunks == chunkCount) {
+              var meta = db.transaction([METADATA_STORE_NAME], IDB_RW).objectStore(METADATA_STORE_NAME);
+              var putMeta = meta.put({ 'uuid': packageMeta.uuid, 'chunkCount': chunkCount }, 'metadata/' + packageName);
+              putMeta.onsuccess = () => resolve(packageData);
+              putMeta.onerror = reject;
+            }
+          };
+          putRequest.onerror = reject;
+        }
+      });
+    }
+
     function runWithFS(Module) {
       // The runtime (scheme-web.js) is instantiated AFTER this loader is
       // imported, so FS_createPath / FS / addRunDependency only exist now, in
@@ -252,8 +362,32 @@ Module['expectedDataFileDownloads']++;
         Module['removeRunDependency']('datafile_' + PACKAGE_NAME);
       }
       var fetched = Module['getPreloadedPackage'] ? Module['getPreloadedPackage'](REMOTE_PACKAGE_NAME, REMOTE_PACKAGE_SIZE) : null;
-      if (fetched) { processPackageData(fetched); }
-      else { fetchRemotePackage(REMOTE_PACKAGE_NAME).then(processPackageData); }
+      if (fetched) { processPackageData(fetched); return; }
+      // Node and any browser without IndexedDB: plain fetch, no cache.
+      if (isNode || typeof indexedDB == 'undefined' || !PACKAGE_UUID) {
+        fetchRemotePackage(REMOTE_PACKAGE_NAME).then(processPackageData);
+        return;
+      }
+      // Browser: serve from the IndexedDB preload cache, populating it on a miss.
+      // Any cache error falls back to a direct fetch so loading never depends on IDB.
+      var cacheKey = PACKAGE_PATH + PACKAGE_NAME;
+      (async () => {
+        try {
+          var db = await openDatabase();
+          var pkgMeta = await checkCachedPackage(db, cacheKey);
+          if (pkgMeta) {
+            processPackageData(await fetchCachedPackage(db, cacheKey, pkgMeta));
+          } else {
+            var packageData = await fetchRemotePackage(REMOTE_PACKAGE_NAME);
+            try { processPackageData(await cacheRemotePackage(db, cacheKey, packageData, { uuid: PACKAGE_UUID })); }
+            catch (e) { console.error(e); processPackageData(packageData); }
+          }
+        } catch (e) {
+          console.error(e);
+          console.error('falling back to default preload behavior');
+          processPackageData(await fetchRemotePackage(REMOTE_PACKAGE_NAME));
+        }
+      })();
     }
     if (Module['calledRun']) { runWithFS(Module); }
     else { (Module['preRun'] = Module['preRun'] || []).push(runWithFS); }
