@@ -261,7 +261,12 @@
                     #:pkgs (string-split pkgs)
                     #:local-pkgs (map (lambda (p) (path->string (path->complete-path p))) local-pkgs)
                     #:racket racket-opt
-                    #:work (consume-work-dir-for sdk-key))]))
+                    #:work (consume-work-dir-for sdk-key)
+                    ;; The persistent built-package catalog is SDK-keyed (its
+                    ;; tpb32l .zo match the delta+wasm-deps); the consume stages
+                    ;; the app's packages into it then installs the app's closure
+                    ;; back out. See build/consume.rkt `refresh-pkg-catalog!`.
+                    #:catalog-dir (pkg-catalog-dir-for sdk-key))]))
 
 ;; Copy a payload cache's share.data{,.js} into `dest`, overwriting.
 (define (copy-payload! payload-dir dest)

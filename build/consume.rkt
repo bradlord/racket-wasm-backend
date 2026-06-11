@@ -30,6 +30,7 @@
          racket/string
          racket/list
          racket/port
+         racket/runtime-path
          setup/getinfo
          "config.rkt"
          "util.rkt"
@@ -38,6 +39,19 @@
          "pack.rkt")
 
 (provide cross-install)
+
+;; The subprocess strip helper (run under the host racket + cross flags so
+;; `binary-lib`'s `fixup-zo` can read tpb32l `.zo`). See build/strip-catalog.rkt.
+(define-runtime-path strip-catalog-helper "strip-catalog.rkt")
+
+;; Strip mode for the built-package catalog (pkg/strip's `generate-stripped-
+;; directory`). `'binary-lib` is the lean ship: drops source/docs (`.zo`-only) and
+;; prunes `build-deps`. `'built` keeps source + `.zo` (same payload size) and never
+;; reads a `.zo` -- a host-safe way to validate the pipeline. Either way the strip
+;; runs in the cross subprocess (build/strip-catalog.rkt), so `binary-lib`'s
+;; `fixup-zo`/`info` `.zo` reads decode tpb32l via the cross xpatch. See
+;; build-wasm.md "Binary-only packages via the catalog".
+(define STRIP-MODE 'binary-lib)
 
 (define (->path p) (if (path? p) p (string->path p)))
 (define (real p) (simplify-path (path->complete-path (->path p))))
@@ -59,11 +73,21 @@
 ;; the target form of any HOST-collects module the build recompiled (the new
 ;; package's dependency closure); copying those back would overwrite the host
 ;; racket's bytecode with tpb32l. Returns the count.
+;;
+;; `info_rkt.zo`/`.dep` are deliberately SKIPPED: `get-info/full` (called by
+;; `pkg-link-entry`, the strip, and `create-dirs-catalog`) would LOAD an in-place
+;; `compiled/info_rkt.zo`, and a tpb32l (or wrong-version) one traps the host
+;; orchestrator (`fasl-read: incompatible ... machine-type 'tpb32l`). With it
+;; absent, `get-info` falls back to the always-present SOURCE `info.rkt` --
+;; host-safe under any orchestrator version. `info.rkt` is setup/pkg metadata, not
+;; loaded at program runtime, so the payload doesn't need its `.zo` (the final
+;; cross `raco setup` regenerates it for tpb32l if anything wants it).
 (define (harvest! xtgt scope)
   (define scope-str (string-append (path->string scope) "/"))
   (for/sum ([p (in-directory xtgt)]
             #:when (and (file-exists? p)
-                        (regexp-match? #rx"\\.(zo|dep)$" (path->string p))))
+                        (regexp-match? #rx"\\.(zo|dep)$" (path->string p))
+                        (not (regexp-match? #rx"/info_rkt\\.(zo|dep)$" (path->string p)))))
     (define dest (build-path "/" (find-relative-path (real xtgt) (real p))))
     (cond
       [(string-prefix? (path->string dest) scope-str)
@@ -83,21 +107,151 @@
     [(null? cands) #f]
     [else (car cands)]))
 
-;; Fetch + cross-compile the catalog packages `pkg-names` and the local package
-;; dirs `local-pkgs` for tpb32l using the SDK at `sdk-dir`, then extend the runtime
-;; `share.data` at `existing-data` with the newly installed packages' bytecode +
-;; sources + an updated `/share/links.rktd`, writing the new `share.data`/
-;; `share.data.js` pair into `dest`. `racket` is an explicit host Racket path (else
-;; resolved); it MUST match the SDK's recorded racket-version. `work` is a scratch
-;; dir (kept if supplied -- e.g. to reuse the hostzo/xtgt compile shadows across
-;; consumes; see build/stages.rkt).
+;; Write the base-as-installed cross config into `etc-dir`/config.rktd: the SDK
+;; cross-root is seen as ALREADY INSTALLED (pkgs-dir/links-file) and the cross
+;; target is tpb32l (lib-dir's system.rktd), while `collects` stays on the host
+;; racket (host-form expansion). `catalogs` chooses where NEW packages are fetched
+;; from: `(list #f)` is the default network catalog (the staging pass); `(list
+;; <local> #f)` prefers a local built-package catalog then the network (the final
+;; consume pass).
+(define (write-xconfig! etc-dir #:pkgs-dir pkgs-dir #:links links #:lib lib #:catalogs catalogs)
+  (make-directory* etc-dir)
+  (call-with-output-file (build-path etc-dir "config.rktd") #:exists 'replace
+    (lambda (o)
+      (write (hash 'pkgs-dir   (path->string pkgs-dir)
+                   'links-file (path->string links)
+                   'lib-dir    (path->string lib)
+                   'catalogs   catalogs)
+             o))))
+
+;; Run `raco pkg install` host-safely (`-MCR hostzo:xtgt` -> target form to
+;; `xtgt`, host form to `hostzo`, nothing in place; new pkgs confined to the
+;; `addon` user scope via PLTADDONDIR), capturing merged output to a logfile under
+;; `work` and teeing it. `raco setup`'s launcher step needs host launcher
+;; templates (`starter-sh`) absent from the cross `lib-dir`, so it exits non-zero
+;; with a benign "packages installed, although setup reported errors" AFTER the
+;; packages are fetched + compiled -- tolerate ONLY that signature; any other
+;; failure raises. Shared by the staging install and the final consume.
+(define (run-install #:racket racket #:cc-dir cc-dir #:config-etc config-etc
+                     #:hostzo hostzo #:xtgt xtgt #:addon addon #:work work
+                     #:src-args src-args #:what what)
+  (info-msg "cross-installing ~a for ~a (host racket ~a, no emsdk)" what target-machine racket)
+  (define args
+    (append (list "-G" (path->string config-etc)
+                  "-MCR" (format "~a:~a" (path->string hostzo) (path->string xtgt))
+                  "--cross-compiler" target-machine (path->string cc-dir)
+                  "-l-" "raco" "pkg" "install"
+                  "--scope" "user" "--batch" "--no-docs" "--deps" "search-auto")
+            src-args))
+  (define logf (build-path work "install.log"))
+  (define code
+    (parameterize ([current-environment-variables
+                    (let ([e (environment-variables-copy (current-environment-variables))])
+                      (environment-variables-set! e #"PLTADDONDIR"
+                                                  (string->bytes/utf-8 (path->string addon)))
+                      e)])
+      (call-with-output-file logf #:exists 'replace
+        (lambda (port)
+          (define-values (sp _o in _e)
+            (apply subprocess port #f 'stdout (->path racket) args))
+          (close-output-port in)
+          (subprocess-wait sp)
+          (subprocess-status sp)))))
+  (define out (file->string logf))
+  (display out)
+  (cond
+    [(zero? code) (void)]
+    [(regexp-match? #rx"packages installed, although setup reported errors" out)
+     (info-msg "note: raco setup reported non-fatal errors (host launcher templates absent in the cross lib-dir); packages installed + cross-compiled")]
+    [else
+     (error 'cross-install "raco pkg install failed (exit ~a) for ~a -- see output above" code what)]))
+
+;; Strip each staged (in-place tpb32l-compiled) package under `staged` into
+;; `cat-pkgs` and (re)build the dirs-catalog index at `cat-index`, by running the
+;; strip helper as a host-racket subprocess WITH the cross flags (so `binary-lib`'s
+;; `fixup-zo` can read tpb32l `.zo` -- see build/strip-catalog.rkt). A package is
+;; stripped once and reused; a STRIP-MODE change (recorded in `.strip-mode`)
+;; rebuilds the catalog package dirs + index.
+(define (strip-into-catalog! #:racket racket #:cc-dir cc-dir #:config-etc config-etc
+                             #:hostzo hostzo #:xtgt xtgt
+                             #:staged staged #:cat-pkgs cat-pkgs #:cat-index cat-index)
+  (define build-catalog (path-only cat-pkgs))
+  (define mode-file (build-path build-catalog ".strip-mode"))
+  (define mode-str (symbol->string STRIP-MODE))
+  (define prev (and (file-exists? mode-file) (string-trim (file->string mode-file))))
+  (when (and prev (not (equal? prev mode-str)))
+    (info-msg "strip mode changed ~a -> ~a; rebuilding catalog package dirs" prev mode-str)
+    (when (directory-exists? cat-pkgs) (delete-directory/files cat-pkgs))
+    (when (directory-exists? cat-index) (delete-directory/files cat-index)))
+  (make-directory* cat-pkgs)
+  (make-directory* cat-index)
+  (run (if (path? racket) (path->string racket) racket)
+       #:args (list "-G" (path->string config-etc)
+                    "-MCR" (format "~a:~a" (path->string hostzo) (path->string xtgt))
+                    "--cross-compiler" target-machine (path->string cc-dir)
+                    (path->string strip-catalog-helper)
+                    (path->string staged) (path->string cat-pkgs)
+                    mode-str (path->string cat-index)))
+  (call-with-output-file mode-file #:exists 'replace (lambda (o) (display mode-str o))))
+
+;; (Steps 1-4) Build/refresh the persistent, SDK-keyed built-package catalog at
+;; `catalog-dir` for the catalog packages `pkg-names`: stage-install them (+ their
+;; non-base dependency closure) for tpb32l from the network, harvest the `.zo` in
+;; place, strip each into `build-catalog/pkgs`, and (re)build the dirs-catalog
+;; index. The staging tree + compile shadows persist across runs (`--skip-installed`
+;; -> incremental) so the catalog ACCUMULATES. Returns a `file://` catalog URL, or
+;; #f when there are no catalog packages. `cross-*` are the SDK cross-root dirs.
+(define (refresh-pkg-catalog! #:catalog-dir catalog-dir #:racket racket #:cc-dir cc-dir
+                              #:cross-pkgs cross-pkgs #:cross-links cross-links
+                              #:cross-lib cross-lib #:pkg-names pkg-names)
+  (cond
+    [(null? pkg-names) #f]
+    [else
+     (define install-root (build-path catalog-dir "install"))  ; PLTADDONDIR (user scope)
+     (define hostzo (build-path catalog-dir "hostzo"))
+     (define xtgt   (build-path catalog-dir "xtgt"))
+     (define xcfg   (build-path catalog-dir "xcfg" "etc"))
+     (define build-catalog (build-path catalog-dir "build-catalog"))
+     (define cat-pkgs  (build-path build-catalog "pkgs"))
+     (define cat-index (build-path build-catalog "catalog"))
+     (for ([d (list install-root hostzo xtgt cat-pkgs cat-index)]) (make-directory* d))
+     (write-xconfig! xcfg #:pkgs-dir cross-pkgs #:links cross-links #:lib cross-lib
+                     #:catalogs (list #f))
+     ;; Stage-install the requested packages + their closure for tpb32l.
+     (run-install #:racket racket #:cc-dir cc-dir #:config-etc xcfg
+                  #:hostzo hostzo #:xtgt xtgt #:addon install-root #:work catalog-dir
+                  #:src-args (cons "--skip-installed" pkg-names)
+                  #:what (format "~a catalog package(s) [staging]" (length pkg-names)))
+     ;; Harvest tpb32l .zo into the staged tree (in place) so the strip archives
+     ;; compiled code, then strip each into the catalog + rebuild the index.
+     (define ap (addon-pkgs-dir install-root))
+     (unless ap (error 'refresh-pkg-catalog! "no packages staged under ~a" install-root))
+     (define harvested (harvest! xtgt ap))
+     (info-msg "staged ~a tpb32l artifact(s); stripping into the catalog (~a)" harvested STRIP-MODE)
+     (strip-into-catalog! #:racket racket #:cc-dir cc-dir #:config-etc xcfg
+                          #:hostzo hostzo #:xtgt xtgt
+                          #:staged ap #:cat-pkgs cat-pkgs #:cat-index cat-index)
+     (string-append "file://" (path->string (real cat-index)))]))
+
+;; Fetch + cross-compile the app's packages for tpb32l and fold their tpb32l `.zo`
+;; into the runtime `share.data`, emsdk-free. Two passes: (1) `refresh-pkg-catalog!`
+;; builds/extends the SDK-keyed built-package catalog at `catalog-dir` for the
+;; catalog packages `pkg-names`; (2) a final consume installs `pkg-names` FROM that
+;; catalog (selecting just this app's closure) plus the local package dirs
+;; `local-pkgs` by `--copy` (locals stay source), harvests the tpb32l delta, and
+;; extends `existing-data`'s bytecode + `/share/links.rktd` into `dest`/
+;; share.data{,.js}. `racket` is an explicit host Racket (else resolved) and MUST
+;; match the SDK's recorded racket-version. `work` is the final-pass scratch (kept
+;; if supplied, to reuse the hostzo/xtgt compile shadows). `catalog-dir` is the
+;; persistent catalog (defaults under `work`). See build/stages.rkt.
 (define (cross-install #:sdk sdk-dir
                        #:share-data existing-data
                        #:dest dest
                        #:pkgs [pkg-names '()]
                        #:local-pkgs [local-pkgs '()]
                        #:racket [racket-opt #f]
-                       #:work [work-opt #f])
+                       #:work [work-opt #f]
+                       #:catalog-dir [catalog-dir-opt #f])
   (when (and (null? pkg-names) (null? local-pkgs))
     (error 'cross-install "nothing to install (need #:pkgs and/or #:local-pkgs)"))
   (define sdk (real sdk-dir))
@@ -127,77 +281,45 @@
                                           (host-racket-version racket))])
     (when gate
       (error 'cross-install "host racket is incompatible with this SDK:\n~a" gate)))
-  ;; --- scratch layout -----------------------------------------------------
+  ;; --- scratch layout (final consume pass) --------------------------------
   (define work (if work-opt (real work-opt) (make-temporary-file "rktwasm-consume-~a" 'directory)))
-  (define addon  (build-path work "addon"))            ; user scope (new pkgs only)
-  (define hostzo (build-path work "hostzo"))           ; host-form shadow (reusable)
-  (define xtgt   (build-path work "xtgt"))             ; tpb32l target root (reusable)
-  (define xcfg   (build-path work "xcfg"))             ; cross config (base-as-installed)
+  (define catalog-dir (real (let ([d (or catalog-dir-opt (build-path work "pkg-catalog"))])
+                              (make-directory* d) d)))
+  (define addon  (build-path work "final-addon"))      ; user scope (this app's pkgs)
+  (define hostzo (build-path work "final-hostzo"))     ; host-form shadow (reusable)
+  (define xtgt   (build-path work "final-xtgt"))       ; tpb32l target root (reusable)
+  (define xcfg   (build-path work "final-xcfg" "etc")) ; cross config (catalog-as-source)
+  ;; --- pass 1: build/refresh the SDK-keyed built-package catalog ----------
+  (define cat-url
+    (refresh-pkg-catalog! #:catalog-dir catalog-dir #:racket racket #:cc-dir cc-dir
+                          #:cross-pkgs cross-pkgs #:cross-links cross-links
+                          #:cross-lib cross-lib #:pkg-names pkg-names))
+  ;; --- pass 2: final consume into share.data ------------------------------
   ;; The addon is the delta we harvest, so it must be FRESH (a reused `work` keeps
   ;; only the hostzo/xtgt compile shadows, for speed). hostzo/xtgt persist.
   (when (directory-exists? addon) (delete-directory/files addon))
-  (for ([d (list addon hostzo xtgt (build-path xcfg "etc"))]) (make-directory* d))
-  ;; The config that makes the SDK base count as installed (pkgs-dir/links-file)
-  ;; and the cross target tpb32l (lib-dir's system.rktd), while leaving `collects`
-  ;; on the host racket. `catalogs (#f)` = the default network catalog, for the
-  ;; app's new packages (the base is already installed, so it is never fetched).
-  (call-with-output-file (build-path xcfg "etc" "config.rktd") #:exists 'replace
-    (lambda (o)
-      (write (hash 'pkgs-dir   (path->string cross-pkgs)
-                   'links-file (path->string cross-links)
-                   'lib-dir    (path->string cross-lib)
-                   'catalogs   (list #f))
-             o)))
-  ;; --- fetch + cross-compile (host-safe: target -> xtgt, host -> hostzo) ---
-  ;; Run `raco pkg install` capturing merged output, then tee it. `raco setup`'s
-  ;; launcher step needs host launcher templates (`starter-sh`) under the cross
-  ;; `lib-dir`, which the cross-root lacks -- so it exits non-zero with a benign
-  ;; "packages installed, although setup reported errors" AFTER the packages have
-  ;; been fetched + compiled (the launcher is a host-side convenience, irrelevant
-  ;; to the wasm runtime). Tolerate ONLY that signature; any other failure raises.
-  (define (run-install src-args what)
-    (info-msg "cross-installing ~a for ~a (host racket ~a, no emsdk)" what target-machine racket)
-    (define args
-      (append (list "-G" (path->string (build-path xcfg "etc"))
-                    "-MCR" (format "~a:~a" (path->string hostzo) (path->string xtgt))
-                    "--cross-compiler" target-machine (path->string cc-dir)
-                    "-l-" "raco" "pkg" "install"
-                    "--scope" "user" "--batch" "--no-docs" "--deps" "search-auto")
-              src-args))
-    (define logf (build-path work "install.log"))
-    (define code
-      (parameterize ([current-environment-variables
-                      (let ([e (environment-variables-copy (current-environment-variables))])
-                        (environment-variables-set! e #"PLTADDONDIR"
-                                                    (string->bytes/utf-8 (path->string addon)))
-                        e)])
-        (call-with-output-file logf #:exists 'replace
-          (lambda (port)
-            (define-values (sp _o in _e)
-              (apply subprocess port #f 'stdout (->path racket) args))
-            (close-output-port in)
-            (subprocess-wait sp)
-            (subprocess-status sp)))))
-    (define out (file->string logf))
-    (display out)
-    (cond
-      [(zero? code) (void)]
-      [(regexp-match? #rx"packages installed, although setup reported errors" out)
-       (info-msg "note: raco setup reported non-fatal errors (host launcher templates absent in the cross lib-dir); packages installed + cross-compiled")]
-      [else
-       (error 'cross-install "raco pkg install failed (exit ~a) for ~a -- see output above" code what)]))
-  ;; Catalog names: `--skip-installed` makes it idempotent and a no-op for any
-  ;; name already in the base scope (those are already in `share.data`).
+  (for ([d (list addon hostzo xtgt)]) (make-directory* d))
+  ;; Prefer the local built-package catalog, then the network (a local app pkg's
+  ;; dep absent from the catalog/base falls back to a source fetch).
+  (write-xconfig! xcfg #:pkgs-dir cross-pkgs #:links cross-links #:lib cross-lib
+                  #:catalogs (if cat-url (list cat-url #f) (list #f)))
+  ;; Catalog names from the local built catalog (`--skip-installed` -> a no-op for
+  ;; any name already in the base scope, i.e. already in `share.data`).
   (unless (null? pkg-names)
-    (run-install (cons "--skip-installed" pkg-names)
-                 (format "~a catalog package(s)" (length pkg-names))))
+    (run-install #:racket racket #:cc-dir cc-dir #:config-etc xcfg
+                 #:hostzo hostzo #:xtgt xtgt #:addon addon #:work work
+                 #:src-args (cons "--skip-installed" pkg-names)
+                 #:what (format "~a catalog package(s)" (length pkg-names))))
   ;; Local packages install with `--copy` (a `--link` would record an absolute
-  ;; host path absent from the runtime FS); one call each, like the clone build's
-  ;; install-base-pkgs loop. They resolve their own deps from the base + catalog.
+  ;; host path absent from the runtime FS); one call each. They resolve their own
+  ;; deps from the base + catalog (+ network fallback).
   (for ([d (in-list local-pkgs)])
     (define d* (real d))
     (unless (directory-exists? d*) (error 'cross-install "local package source not a dir: ~a" d*))
-    (run-install (list "--copy" (path->string d*)) (format "local package ~a" d*)))
+    (run-install #:racket racket #:cc-dir cc-dir #:config-etc xcfg
+                 #:hostzo hostzo #:xtgt xtgt #:addon addon #:work work
+                 #:src-args (list "--copy" (path->string d*))
+                 #:what (format "local package ~a" d*)))
   ;; --- harvest the tpb32l delta -------------------------------------------
   (define ap (addon-pkgs-dir addon))
   (unless ap (error 'cross-install "no packages landed in the addon scope under ~a" addon))

@@ -21,7 +21,7 @@
          cache-dir-for cache-complete? snapshot-runtime!
          sdk-cache-dir-for sdk-cached?
          app-payload-cache-dir-for app-payload-cached?
-         consume-work-dir-for)
+         consume-work-dir-for pkg-catalog-dir-for)
 
 (define cache-root (build-path work-dir "runtime-cache"))
 
@@ -189,3 +189,11 @@
 ;; fresh each consume; see build/consume.rkt). Purely a speed cache.
 (define consume-work-root (build-path work-dir "consume-work"))
 (define (consume-work-dir-for key) (build-path consume-work-root key))
+
+;; The persistent built-package catalog the consume installs from, keyed by the
+;; SDK (delta, wasm-deps) so its `tpb32l` `.zo` always match what is being built.
+;; ACCUMULATING (never wiped): each app's packages are staged + stripped into it
+;; once and reused; the final consume selects an app's closure out of it. See
+;; build/consume.rkt `refresh-pkg-catalog!`.
+(define pkg-catalog-root (build-path work-dir "pkg-catalog"))
+(define (pkg-catalog-dir-for key) (build-path pkg-catalog-root key))

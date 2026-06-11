@@ -14,11 +14,14 @@
 ;;                             + tpb32l cross-root + .tar.gz) -- emsdk-free; lets a
 ;;                             same-version host racket cross-build new packages
 ;;   cross-install --sdk <dir> --share-data <path> --dest <dir> [--racket <p>]
-;;                 [--local <dir>]... <catalog-name>...
+;;                 [--work <d>] [--catalog <d>] [--local <dir>]... <catalog-name>...
 ;;                             fetch + cross-compile package(s) for tpb32l with a
-;;                             cross-SDK and fold them into a runtime's share.data
-;;                             (no clone, no emsdk). Bare args = catalog names;
-;;                             --local <dir> = a local package source dir
+;;                             cross-SDK, stage them into a built-package catalog,
+;;                             then install the app's closure from it and fold into
+;;                             a runtime's share.data (no clone, no emsdk). Bare
+;;                             args = catalog names; --local <dir> = a local package
+;;                             source dir; --catalog <d> = the persistent built-
+;;                             package catalog dir (default: under --work).
 ;;   rebuild-binary-catalog    4-stage clean rebuild of the binary pkg catalog
 ;;   pack-pkgs                 repack the browser package data file (share.data)
 ;;                             from the already-installed tree -- no emcc relink
@@ -147,7 +150,7 @@
 ;; build/consume.rkt.
 (define (cmd-cross-install args)
   (let loop ([as args] [sdk #f] [share-data #f] [dest #f] [racket #f] [work #f]
-                       [pkgs '()] [locals '()])
+                       [catalog #f] [pkgs '()] [locals '()])
     (define (val k) (when (null? (cdr as)) (error 'cross-install "~a requires a value" (car as))) (cadr as))
     (cond
       [(null? as)
@@ -157,19 +160,20 @@
        (when (and (null? pkgs) (null? locals))
          (error 'cross-install "nothing to install (give catalog names and/or --local <dir>)"))
        (cross-install #:sdk sdk #:share-data share-data #:dest dest
-                      #:racket racket #:work work
+                      #:racket racket #:work work #:catalog-dir catalog
                       #:pkgs (reverse pkgs) #:local-pkgs (reverse locals))]
       [else
        (case (car as)
-         [("--sdk")        (loop (cddr as) (val '_) share-data dest racket work pkgs locals)]
-         [("--share-data") (loop (cddr as) sdk (val '_) dest racket work pkgs locals)]
-         [("--dest")       (loop (cddr as) sdk share-data (val '_) racket work pkgs locals)]
-         [("--racket")     (loop (cddr as) sdk share-data dest (val '_) work pkgs locals)]
-         [("--work")       (loop (cddr as) sdk share-data dest racket (val '_) pkgs locals)]
-         [("--local")      (loop (cddr as) sdk share-data dest racket work pkgs (cons (val '_) locals))]
+         [("--sdk")        (loop (cddr as) (val '_) share-data dest racket work catalog pkgs locals)]
+         [("--share-data") (loop (cddr as) sdk (val '_) dest racket work catalog pkgs locals)]
+         [("--dest")       (loop (cddr as) sdk share-data (val '_) racket work catalog pkgs locals)]
+         [("--racket")     (loop (cddr as) sdk share-data dest (val '_) work catalog pkgs locals)]
+         [("--work")       (loop (cddr as) sdk share-data dest racket (val '_) catalog pkgs locals)]
+         [("--catalog")    (loop (cddr as) sdk share-data dest racket work (val '_) pkgs locals)]
+         [("--local")      (loop (cddr as) sdk share-data dest racket work catalog pkgs (cons (val '_) locals))]
          [else
           (when (string-prefix? (car as) "--") (error 'cross-install "unknown option: ~a" (car as)))
-          (loop (cdr as) sdk share-data dest racket work (cons (car as) pkgs) locals)])])))
+          (loop (cdr as) sdk share-data dest racket work catalog (cons (car as) pkgs) locals)])])))
 
 ;; Repack only the browser package data file (share.data/share.data.js) from
 ;; the already-installed share/pkgs tree, then refresh dist/. The point of the
