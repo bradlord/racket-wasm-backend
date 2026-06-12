@@ -79,6 +79,22 @@ wasm_dep_manifest_hash() {
   { printf '%s\n' "$DEP_VERSION" "$DEP_SOURCE_SHA256" "$DEP_INSTALL_LIB"
     printf '%s\n' "$DEP_BUILD_SYSTEM"
     printf '%s\n' "${DEP_BUILD_ARGS[@]+"${DEP_BUILD_ARGS[@]}"}"
+    # The recipe file itself + any sibling patch it applies in wasm_dep_patch
+    # (e.g. glib's glib-fpcast.patch). Without this, editing a recipe's
+    # wasm_dep_patch does NOT rebuild the dep -- the bug that once linked a
+    # stale (unpatched) glib. `$DEP_NAME*` catches `<dep>.sh` and
+    # `<dep>-*.patch`. NOTE: this only tracks a dep's OWN recipe; a patch to a
+    # dependency's HEADERS (e.g. glib's gtype.h) does not auto-rebuild its
+    # consumers (pango) -- force those manually. See build-wasm.md "Text / Pango".
+    local rdir="${WASM_SHELL_DIR:-}/deps"
+    if [ -d "$rdir" ]; then
+      # `if`, not `[ -f ] && cat`: an unmatched glob makes the test fail, and a
+      # trailing failed `&&` list aborts under `set -e`. Deps with no sibling
+      # patch (the common case) would otherwise kill the whole run.
+      for f in "$rdir/$DEP_NAME".sh "$rdir/$DEP_NAME"*.patch; do
+        if [ -f "$f" ]; then cat "$f"; fi
+      done
+    fi
   } | shasum -a 256 | awk '{print $1}'
 }
 

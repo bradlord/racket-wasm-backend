@@ -40,6 +40,11 @@
 ;; to cs/c/build.zuo's `wasm-deps` target via the WASM_DEPS_SRC_DIR make var.
 ;; Also folded into the delta-hash (the recipes determine the linked dep libs).
 (define wasm-deps-src-dir (at-root "wasm-deps"))
+;; Repo-side source patches applied to CATALOG packages during the clone-free
+;; consume (build/consume.rkt `discover-pkg-patches`): `package-patches/<pkg>/
+;; *.patch`. Folded into the delta-hash so editing one yields a fresh SDK/catalog
+;; (its tpb32l .zo depend on the patch). See build-wasm.md "Text / Pango".
+(define package-patches-dir (at-root "package-patches"))
 
 ;; The repo's canonical app: the DrRacket-like IDE / web-repl. `build` builds
 ;; this app (through the generic make-wasm-racket path -- it is the dogfood, not

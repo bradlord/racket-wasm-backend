@@ -168,7 +168,7 @@ index b4e92ee..fb294f4 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +791,289 @@
+@@ -691,6 +791,297 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -330,7 +330,15 @@ index b4e92ee..fb294f4 100644
 +                             (preload scheme-chunked.boot "scheme.boot")
 +                             (preload racket-chunked.boot "racket.boot")
 +                             (preload (at-source "../../../collects") "/collects")
-+                             (preload (at-source "../../../etc") "/etc")))
++                             (preload (at-source "../../../etc") "/etc")
++                             ;; Fontconfig assets (racket/draw -> Pango). Ship one
++                             ;; font + a minimal config so font init resolves a face
++                             ;; instead of returning a NULL config (which hung the
++                             ;; browser worker). See overlay wasm-fonts/ and the
++                             ;; FONTCONFIG_* / HOME setenv in main_em.c; build-wasm.md
++                             ;; "Text / Pango".
++                             (preload (at-source "wasm-fonts/fonts.conf") "/etc/fonts/fonts.conf")
++                             (preload (at-source "wasm-fonts/DejaVuSans.ttf") "/share/fonts/DejaVuSans.ttf")))
 +                   ;; Built-in link JS glue (idbfs-init.js, shell-tty.js,
 +                   ;; node-*.js) lives outside the tree, in the racket-wasm
 +                   ;; orchestrator's runtime-glue/ dir, passed via the

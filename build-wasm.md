@@ -2008,32 +2008,17 @@ megabytes of static code). `make-bitmap` returns a real `bitmap%`,
 software backend without error. The wasm grew from ~26 MB to ~32 MB
 and the .data from ~87 MB to ~95 MB.
 
-> **Text rendering -- see branch `wasm-text-fonts-wip`.** Drawing
-> (geometry) works as above, but *text* (`get-text-extent`, `draw-text`,
-> `pict`'s `text`) is a separate, harder story explored on that branch.
-> It is **not merged** here because it does not fully land in the browser,
-> but the investigation is substantial and worth not losing. Summary of
-> progress there:
->
-> - **Root-caused and fixed three independent function-pointer / signature
->   mismatches** -- all tolerated by native ABIs, all rejected by wasm's
->   typed `call_indirect`, each hidden behind the previous: GObject
->   `class_init` cast (GLib; fixed via a backport of the Fluendo glib WASM
->   fork's fpcast patch), GObject `iface_init` cast (GLib; a `gtype.c`
->   call-site patch), and `cairo_font_options_copy` mis-bound 2-arg vs 1
->   (draw-lib; a genuine latent upstream Racket bug). After these, text
->   *executes*.
-> - **Provisioned fontconfig** (a `fonts.conf` + DejaVu Sans + the
->   `FONTCONFIG_*`/`HOME` env), so **under node text renders reliably**.
-> - **Still hangs in the browser**, and *not* for a signature reason: the
->   font path makes GLib spawn a helper thread and `g_cond_wait`s for it,
->   but `shell-worker.js` runs the module inside a Web Worker that then
->   blocks synchronously, so Emscripten can never spawn/handshake the child
->   thread (node can, hence node works). `-sPTHREAD_POOL_SIZE` made it
->   worse (startup hang). The real fixes are architectural
->   (`-sPROXY_TO_PTHREAD`, or de-threading GLib on the font path) and are
->   the open work. The branch's `build-wasm.md` has the full write-up,
->   symbolicated stacks, and the per-fix detail.
+> **Text rendering -- node works, browser hangs.** Drawing (geometry)
+> works as above. *Text* (`get-text-extent`, `draw-text`, `pict`'s `text`)
+> required three function-pointer/signature fixes plus fontconfig
+> provisioning; with them, **text renders reliably under node**. The fixes
+> are now **merged into this repo's delta** (re-homed from the old fork
+> branch `wasm-text-fonts-wip`) -- see the "Text / Pango" section just below
+> for the full write-up and where each fix lives. It **still hangs in the
+> *browser*** (a GLib helper-thread deadlock in `shell-worker.js`, not a
+> signature bug); that is **open follow-on work**, so the browser/IDE
+> examples stay geometry-only and the browser text story remains the
+> Canvas-2D path (`web-repl/text`).
 
 A handful of libm / libc essentials (fmod, pow, sqrt, sin/cos/tan,
 atan2, exp/log, floor/ceil/round/trunc, fabs) are registered in
@@ -2049,6 +2034,118 @@ free_aligned_sized, pthread_setname_np, pthread_getaffinity_np,
 __sched_cpucount, posix_spawnp, res_query, g_inotify_file_monitor_get_type,
 getprogname. None get called on the drawing path; they exist so
 wasm-ld can satisfy references.
+
+### Text / Pango: three function-pointer-cast traps + fontconfig (node)
+
+Text -- `racket/draw`'s `get-text-extent`/`draw-text`, and anything on them
+(`pict`'s `text`) -- used to die with `RuntimeError: null function or
+function signature mismatch`. Pure geometry was always fine; only the font
+path trapped. All three root causes are the **same class of bug**: a function
+pointer called through a signature that doesn't match the callee's real wasm
+type. Native ABIs tolerate this; WebAssembly's `call_indirect` is strictly
+type-checked and traps. Empirically only an **argument-count** mismatch traps
+(a return-type-only mismatch does not). The trap surfaced at three layers,
+peeled one at a time:
+
+1. **GObject `class_init`** (GLib). The first font call,
+   `pango_cairo_font_map_new` -> `g_object_new`, registers the font-map's
+   GObject type hierarchy; GLib's `GTypeInfo`/`G_DEFINE_TYPE` cast a narrowly
+   typed `class_init` (`void (SomeClass*)`, wasm `vi`) to the generic
+   `GClassInitFunc` (`void (gpointer, gpointer)`, wasm `vii`). **Fix:**
+   backport the gobject subset of the Fluendo glib WASM fork's "Fix function
+   pointer cast issues" commit as `wasm-deps/deps/glib-fpcast.patch`, applied
+   in `wasm-deps/deps/glib.sh`'s `wasm_dep_patch` (idempotent, guarded on the
+   new `class_data` arg). Pango's own types, compiled against the patched
+   `gtype.h`, are fixed too. No `-sEMULATE_FUNCTION_POINTER_CASTS`.
+2. **GObject `iface_init`** (GLib). `G_IMPLEMENT_INTERFACE` only drops the
+   cast; it can't adapt a consumer's 1-arg `iface_init`, so `gtype.c`'s
+   `type_iface_vtable_iface_init_Wm` still called it as a 2-arg
+   `GInterfaceInitFunc`. Every `iface_init` on this stack is genuinely 1-arg,
+   so `glib.sh` additionally `sed`s `gtype.c`'s call site to invoke it through
+   its real 1-arg signature (covers all consumers without patching them).
+3. **`cairo_font_options_copy`** (draw-lib, a genuine upstream Racket bug). It
+   is `cairo_font_options_t* (const cairo_font_options_t*)` -- **one** arg
+   returning a pointer -- but `cairo.rkt` declared it
+   `(_cfun _cfo _cfo -> _void)` (two args, void). `set-font-antialias` calls
+   it only `(when o ...)` where `o` is the context's existing font options;
+   that is usually NULL (so it never bit native or a fresh context) but is
+   non-null on the real dc path. **Fix:** rebind it 1-arg `-> _cfo` with the
+   `allocator` wrap (like `cairo_font_options_create`), and in `dc.rkt` use
+   `(if o (cairo_font_options_copy o) (cairo_font_options_create))`.
+
+**How fix #3 is carried (catalog source patch).** This repo fetches `draw-lib`
+from the network catalog via the clone-free consume rather than vendoring it,
+so the fix lives as `package-patches/draw-lib/cairo-font-options-copy.patch`.
+`build/consume.rkt`'s `refresh-pkg-catalog!` applies it to the *staged*
+`draw-lib` source after the catalog fetch and then re-runs
+`raco setup --pkgs draw-lib` (same host-safe `-MCR`/`-G` cross discipline) to
+recompile, so the built catalog archives **patched** `tpb32l` `.zo`
+(`discover-pkg-patches` scans `package-patches/<pkg>/*.patch`). The patch dir is
+folded into the **delta-hash** (`build/cache.rkt` / `config.rkt`
+`package-patches-dir`), so editing it yields a fresh SDK/catalog/payload. (The
+real fix is upstream in `racket/draw`, worth a PR.)
+
+> **Two traps that cost time here, both now handled:**
+> - **Apply with `patch`, not `git apply`.** The staged tree lives under
+>   `.work/` (inside the racket-wasm git repo). `git apply` is repo-aware: it
+>   resolves paths against the repo *toplevel*, not the cwd, so it silently
+>   no-ops (exit 0!) on the gitignored staging dir. `apply-pkg-patches!` uses
+>   `patch -p1` (repo-agnostic, cwd-relative) with a **forward dry-run** as the
+>   idempotency probe (exit 0 = not yet applied; nonzero + "previously applied"
+>   = skip; other nonzero = the patch drifted from the package version → error).
+>   BSD `patch -R --dry-run` succeeds on *both* states, so it can't detect
+>   already-applied.
+> - **Recipe edits must invalidate the dep cache.** `wasm-deps/deps.sh`'s
+>   `wasm_dep_manifest_hash` now folds in the recipe `.sh` + its sibling
+>   `.patch` files; before this, editing a recipe's `wasm_dep_patch` (e.g.
+>   adding the glib fpcast patch) left the dep "up to date" and silently linked
+>   the **unpatched** library. **Cross-dep caveat:** the manifest tracks only a
+>   dep's *own* recipe, so patching a dependency's *headers* (glib's `gtype.h`)
+>   does not auto-rebuild its consumers (pango). The fpcast change here forced a
+>   full stack rebuild (the manifest *formula* changed), which recompiled pango
+>   against the patched glib in leaf→root order; a future targeted glib-only
+>   edit must force-rebuild the GObject consumers by hand.
+
+**Fontconfig provisioning (makes node text reliable).** With the three casts
+fixed, text *executes*, but was flaky without a config + a font
+(`FcInitLoadConfigAndFonts` returns NULL; Pango then sometimes returns
+degenerate metrics and `pict->bitmap` fails). Fixed by shipping
+`overlay/racket/src/cs/c/wasm-fonts/` (DejaVuSans.ttf + a minimal `fonts.conf`):
+`build.zuo`'s `core-preloads` drops them at `/share/fonts/DejaVuSans.ttf` and
+`/etc/fonts/fonts.conf` on both surfaces, and `main_em.c` exports
+`FONTCONFIG_FILE`/`FONTCONFIG_PATH`/`HOME`/`XDG_CACHE_HOME` and `mkdir`s a
+writable cache before boot. **Under node, text now renders reliably.**
+
+**Why not `-sEMULATE_FUNCTION_POINTER_CASTS=1`.** It would fix the C-side casts
+at once, but (a) it doesn't link -- `wasm-opt --fpcast-emu` aborts with
+`max-func-params needs to be at least 17` and Emscripten exposes no knob to
+forward `--pass-arg`; (b) it rewrites the whole function table, endangering
+Chez's self-tagged foreign-callable indices; and (c) it wouldn't fix #3, which
+is a Racket-level binding bug, not a C cast.
+
+#### Known limitation: text hangs in the *browser* (GLib thread deadlock)
+
+`racket/draw` text works under node but **hangs in the browser shell** -- not a
+signature bug, the shell's threading model. The font path makes GLib spin up a
+helper thread and `g_cond_wait`s for it:
+
+```
+S_pb_interp -> ffi_call -> pango_layout_get_iter -> ...
+  -> pango_fc_font_map_get_config -> g_cond_wait
+  -> pthread_cond_wait -> _do_futex_wait        (blocks forever)
+```
+
+`shell-worker.js` runs the Emscripten module *inside a Web Worker* that then
+boots Racket and blocks synchronously (Atomics.wait on the SAB stdin/DOM
+rings), so Emscripten can never spawn/handshake the child thread the cond waits
+on (node spawns it fine, hence node works). `-sPTHREAD_POOL_SIZE` made it worse
+(startup hang). The real fixes are architectural and are **open follow-on
+work**: (1) `-sPROXY_TO_PTHREAD` -- run Racket on a proxied pthread, keeping the
+shell worker free to service `pthread_create`/proxied main-thread ops (reworks
+the shell I/O coordination); (2) de-thread GLib on the font path (a targeted
+dep patch, like the `gtype.c` iface-init fix); (3) eagerly init the font system
+before the worker parks the main thread. Until one lands, **text is node-only**;
+the browser/IDE examples stay geometry-only.
 
 ## Calling WASM-specific primitives from Racket
 

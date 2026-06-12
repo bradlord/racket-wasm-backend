@@ -1,0 +1,41 @@
+diff --git a/draw-lib/racket/draw/private/dc.rkt b/draw-lib/racket/draw/private/dc.rkt
+index 0a26b62..f2b196b 100644
+--- a/draw-lib/racket/draw/private/dc.rkt
++++ b/draw-lib/racket/draw/private/dc.rkt
+@@ -625,10 +625,12 @@
+     (define current-smoothing #f)
+ 
+     (define/private (set-font-antialias context smoothing hinting)
+-      (let ([o (pango_cairo_context_get_font_options context)]
+-            [o2 (cairo_font_options_create)])
+-        (when o
+-          (cairo_font_options_copy o2 o))
++      (let* ([o (pango_cairo_context_get_font_options context)]
++             ;; cairo_font_options_copy is 1-arg returning a NEW options object
++             ;; (see cairo.rkt); copy the context's existing options when present,
++             ;; else start from a fresh set. The old 2-arg copy-into call trapped
++             ;; on wasm. See build-wasm.md "Text / Pango".
++             [o2 (if o (cairo_font_options_copy o) (cairo_font_options_create))])
+         (cairo_font_options_set_antialias
+          o2 
+          (case smoothing
+diff --git a/draw-lib/racket/draw/unsafe/cairo.rkt b/draw-lib/racket/draw/unsafe/cairo.rkt
+index 812d2b6..02a3331 100644
+--- a/draw-lib/racket/draw/unsafe/cairo.rkt
++++ b/draw-lib/racket/draw/unsafe/cairo.rkt
+@@ -236,7 +236,14 @@
+   #:wrap (deallocator))
+ (define-cairo cairo_font_options_create (_cfun -> _cairo_font_options_t)
+   #:wrap (allocator cairo_font_options_destroy))
+-(define-cairo cairo_font_options_copy (_cfun _cairo_font_options_t _cairo_font_options_t -> _void))
++;; cairo_font_options_copy is `cairo_font_options_t* (const cairo_font_options_t*)`
++;; -- ONE arg returning a new options object. It was mis-bound 2-arg / -> void,
++;; which native ABIs tolerate but wasm's typed call_indirect rejects (the
++;; racket/draw -> Pango text path traps). Bind it like cairo_font_options_create:
++;; 1-arg, returning options, registered for finalization. See build-wasm.md
++;; "Text / Pango" and the dc.rkt set-font-antialias call site.
++(define-cairo cairo_font_options_copy (_cfun _cairo_font_options_t -> _cairo_font_options_t)
++  #:wrap (allocator cairo_font_options_destroy))
+ (define-cairo cairo_get_font_options (_cfun _cairo_t _cairo_font_options_t -> _void))
+ (define-cairo cairo_set_font_options (_cfun _cairo_t _cairo_font_options_t -> _void))
+ (define-cairo cairo_font_options_set_antialias (_cfun _cairo_font_options_t _int -> _void))

@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #define BOOT_EXTERN extern
 #include "boot.h"
@@ -84,6 +85,22 @@ int main(int argc, char **argv) {
   ba.is_gui = 0;
   ba.wm_is_gracket_or_x11_arg_count = 0;
   ba.gracket_guid_or_x11_args = "";
+
+  /* Fontconfig (racket/draw -> Pango) environment. The image preloads a
+     single font under /share/fonts and a config at /etc/fonts/fonts.conf
+     (see build.zuo's `core-preloads` and wasm-fonts/). Point fontconfig at
+     the config explicitly -- the library's compiled-in default sysconfdir
+     is not /etc here -- and give it a writable HOME/cache dir in tmpfs so
+     its cache build doesn't fail (or, in the browser worker, hang) trying
+     to create ~/.cache. Without any of this, FcInitLoadConfigAndFonts
+     returns a NULL config; see build-wasm.md "Text / Pango". */
+  setenv("FONTCONFIG_FILE", "/etc/fonts/fonts.conf", 1);
+  setenv("FONTCONFIG_PATH", "/etc/fonts", 1);
+  setenv("HOME", "/tmp", 1);
+  setenv("XDG_CACHE_HOME", "/tmp/.cache", 1);
+  mkdir("/tmp", 0777);
+  mkdir("/tmp/fontconfig", 0777);
+  mkdir("/tmp/.cache", 0777);
 
   racket_boot(&ba);
   return 0;

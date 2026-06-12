@@ -34,6 +34,31 @@ DEP_LINK_FLAGS=(-lgio-2.0 -lgmodule-2.0 -lgobject-2.0 -lglib-2.0)
 # will fail if anything actually tries them (racket/draw's pango path
 # does not).
 wasm_dep_patch() {
+  # Fix GObject function-pointer-cast signature mismatches that wasm's
+  # typed call_indirect rejects (text/Pango traps otherwise). Backported
+  # from the Fluendo glib WASM fork; see deps/glib-fpcast.patch and
+  # build-wasm.md "Text / Pango". Idempotent: the marker (the new
+  # class_data arg on g_object_do_class_init) is only present once
+  # applied. `$here` is the wasm-deps dir (set by build-deps.sh before
+  # this recipe is sourced); wasm_dep_patch runs with cwd = dep source.
+  if ! grep -q "g_object_do_class_init (GObjectClass \*class," gobject/gobject.c; then
+    patch -p1 < "$here/deps/glib-fpcast.patch"
+  fi
+
+  # The fork's patch fixes class_init/default_init via the G_DEFINE_*
+  # macros, but G_IMPLEMENT_INTERFACE can't adapt a consumer's 1-arg
+  # iface_init -- so type_iface_vtable_iface_init_Wm() still calls it as
+  # a 2-arg GInterfaceInitFunc and wasm's typed call_indirect traps (the
+  # racket/draw -> Pango font path, PangoCairoFontMap interface). Every
+  # iface_init on this stack is genuinely 1-arg (interface_data unused),
+  # so call it through its real signature. Glib-only -- fixes all
+  # consumers without patching them. See build-wasm.md.
+  if ! grep -q "wasm: 1-arg iface_init ABI" gobject/gtype.c; then
+    sed -i.bakif \
+      's|iholder->info->interface_init (vtable, iholder->info->interface_data);|((void (*) (gpointer)) iholder->info->interface_init) (vtable); /* wasm: 1-arg iface_init ABI */|' \
+      gobject/gtype.c
+  fi
+
   # GIO needs res_query() (DNS resolver) which wasm32-emscripten
   # doesn't provide -- relax the configure-time error so the library
   # builds. The actual link references are skipped below.

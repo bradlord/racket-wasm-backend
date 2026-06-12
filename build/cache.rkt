@@ -89,7 +89,11 @@
                           (dir-content-hash overlay-dir) "|"
                           (dir-content-hash overlay-local-dir) "|"
                           (named-files-hash runtime-glue-dir link-glue-names) "|"
-                          (dir-content-hash wasm-deps-src-dir)))))
+                          (dir-content-hash wasm-deps-src-dir) "|"
+                          ;; Catalog-package source patches (build/consume.rkt):
+                          ;; editing one changes the cross-compiled .zo, so it must
+                          ;; invalidate the SDK/catalog/payload caches.
+                          (dir-content-hash package-patches-dir)))))
   ;; Identify each local package by its basename + a hash of its contents.
   (define locals
     (for/list ([p (in-list local-pkgs)])

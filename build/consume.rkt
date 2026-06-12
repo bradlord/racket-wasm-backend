@@ -56,6 +56,108 @@
 (define (->path p) (if (path? p) p (string->path p)))
 (define (real p) (simplify-path (path->complete-path (->path p))))
 
+;; Repo-side package source patches. `package-patches/<pkg>/*.patch` carries
+;; small fixes applied to a CATALOG package's source during the staging compile
+;; (e.g. draw-lib's cairo_font_options_copy mis-binding, a genuine upstream bug
+;; that wasm's typed call_indirect surfaces -- see build-wasm.md "Text / Pango").
+;; The patch internal paths are package-rooted (`<pkg>/...`), applied with `-p1`
+;; from the addon pkgs dir. Their content feeds the build key (build/cache.rkt
+;; delta-hash), so editing one yields a fresh SDK/catalog and a clean re-stage.
+;; `package-patches-dir` is defined in config.rkt (folded into the delta-hash).
+
+;; assoc list (pkg-name . (listof absolute-patch-path)), sorted, for the staged
+;; packages that have a `package-patches/<name>/` dir. `present` is the set of
+;; package names actually staged (so we don't try to patch an absent dir).
+(define (discover-pkg-patches present)
+  (cond
+    [(not (directory-exists? package-patches-dir)) '()]
+    [else
+     (for*/list ([d (in-list (directory-list package-patches-dir))]
+                 [name (in-value (path->string d))]
+                 #:when (and (directory-exists? (build-path package-patches-dir d))
+                             (member name present))
+                 [patches (in-value
+                           (sort (for/list ([p (in-list (directory-list
+                                                         (build-path package-patches-dir d)))]
+                                            #:when (regexp-match? #rx"\\.patch$" (path->string p)))
+                                   (real (build-path package-patches-dir d p)))
+                                 string<? #:key path->string))]
+                 #:when (pair? patches))
+       (cons name patches))]))
+
+;; Run `patch` capturing merged stdout+stderr; returns (values exit-code output).
+;; `patch` (unlike `git apply`) is NOT git-repo-aware -- it applies relative to
+;; `dir` with `-p1`. This matters because the staged tree lives UNDER the
+;; racket-wasm repo, where `git apply` resolves paths against the repo toplevel
+;; and silently no-ops on the (gitignored) staging dir.
+(define (run-patch dir args)
+  (define o (open-output-string))
+  (parameterize ([current-directory dir])
+    (define-values (sp out in err)
+      (apply subprocess #f #f 'stdout (find-executable-path "patch") args))
+    (close-output-port in)
+    (define pump (thread (lambda () (copy-port out o))))
+    (subprocess-wait sp)
+    (thread-wait pump)
+    (values (subprocess-status sp) (get-output-string o))))
+
+;; Apply each package's patches to its staged source under `ap` (the addon pkgs
+;; dir), idempotently. The reliable probe is a FORWARD dry-run: exit 0 => the
+;; patch isn't yet in place, so apply it; nonzero => `patch` either detected a
+;; "previously applied" patch (skip) or a real conflict (error -- the patch has
+;; drifted from this package version). (BSD `patch -R --dry-run` succeeds on BOTH
+;; patched and unpatched, so it can't be used to detect already-applied.) Returns
+;; the names that had at least one patch NEWLY applied (caller recompiles those).
+(define (apply-pkg-patches! ap pkg-patches)
+  (filter
+   values
+   (for/list ([entry (in-list pkg-patches)]
+              #:when (let ([pkgdir (build-path ap (car entry))])
+                       (or (directory-exists? pkgdir)
+                           (begin (info-msg "pkg-patch: ~a not staged; skipping" (car entry)) #f))))
+     (define name (car entry))
+     (define changed?
+       (for/fold ([changed? #f]) ([patch (in-list (cdr entry))])
+         (define pstr (path->string patch))
+         (define base (list "-p1" "--forward" "-i" pstr))
+         (define-values (dry-code dry-out) (run-patch ap (cons "--dry-run" base)))
+         (cond
+           [(zero? dry-code)
+            (info-msg "pkg-patch: applying ~a to ~a" (file-name-from-path patch) name)
+            (define-values (code _out) (run-patch ap base))
+            (unless (zero? code)
+              (error 'apply-pkg-patches! "patch ~a failed to apply to ~a (exit ~a)" pstr name code))
+            #t]
+           [(regexp-match? #rx"(?i:previously applied|reversed)" dry-out)
+            (info-msg "pkg-patch: ~a already applied to ~a; skipping" (file-name-from-path patch) name)
+            changed?]
+           [else
+            (error 'apply-pkg-patches!
+                   "patch ~a does not apply to ~a (drifted from the package version?):\n~a"
+                   pstr name dry-out)])))
+     (and changed? name))))
+
+;; Recompile the named packages' collections to tpb32l after a source patch,
+;; reusing the host-safe cross discipline (`-MCR hostzo:xtgt`, `-G` cross config,
+;; PLTADDONDIR addon). `--pkgs <names>` limits setup to just those packages; the
+;; compilation manager recompiles the patched files (source newer than `.zo`).
+;; Post-install packaging phases that need host launcher templates absent from the
+;; cross lib-dir (--no-launcher) or doc/foreign-lib steps are skipped so setup
+;; exits cleanly while still emitting the `.zo`.
+(define (recompile-pkgs! #:racket racket #:cc-dir cc-dir #:config-etc config-etc
+                         #:hostzo hostzo #:xtgt xtgt #:addon addon #:names names)
+  (info-msg "recompiling patched package(s) for ~a: ~a" target-machine (string-join names ", "))
+  (run (if (path? racket) (path->string racket) racket)
+       #:env (list (cons "PLTADDONDIR" (path->string addon)))
+       #:args (append
+               (list "-G" (path->string config-etc)
+                     "-MCR" (format "~a:~a" (path->string hostzo) (path->string xtgt))
+                     "--cross-compiler" target-machine (path->string cc-dir)
+                     "-l-" "raco" "setup"
+                     "--no-docs" "--no-launcher" "--no-foreign-libs" "--no-pkg-deps"
+                     "--pkgs")
+               names)))
+
 ;; The collection link entry for an installed package dir. A single-collection
 ;; package (info.rkt `(define collection "name")`) gets a named link; anything
 ;; else is a collection-root link. Mirrors how `links.rktd` already lists the
@@ -234,6 +336,18 @@
      ;; compiled code, then strip each into the catalog + rebuild the index.
      (define ap (addon-pkgs-dir install-root))
      (unless ap (error 'refresh-pkg-catalog! "no packages staged under ~a" install-root))
+     ;; Apply any repo-side source patches to the staged packages, then recompile
+     ;; just those, so the catalog archives PATCHED tpb32l `.zo`. Must happen
+     ;; before the harvest/strip (which captures the compiled tree). See
+     ;; `discover-pkg-patches` / build-wasm.md "Text / Pango".
+     (let* ([staged (for/list ([p (in-list (directory-list ap))]
+                               #:when (directory-exists? (build-path ap p)))
+                      (path->string p))]
+            [recompiled (apply-pkg-patches! ap (discover-pkg-patches staged))])
+       (unless (null? recompiled)
+         (recompile-pkgs! #:racket racket #:cc-dir cc-dir #:config-etc xcfg
+                          #:hostzo hostzo #:xtgt xtgt #:addon install-root
+                          #:names recompiled)))
      (define harvested (harvest! xtgt ap))
      (info-msg "staged ~a tpb32l artifact(s); stripping into the catalog (~a)" harvested STRIP-MODE)
      (strip-into-catalog! #:racket racket #:cc-dir cc-dir #:config-etc xcfg
