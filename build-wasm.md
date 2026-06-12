@@ -504,6 +504,51 @@ The resulting `dist/` records the *package's* provenance (it describes the actua
 binaries shipped). The `target` filter still selects which surface subset is
 copied, and the package must contain that surface's files.
 
+#### Licenses bundle
+
+Every `dist/`, distributable package, and cross-SDK ships a **`licenses/`** tree
+so the distribution is license-compliant. `build/licenses.rkt`
+(`assemble-licenses!`) builds it; the grouped-by-origin layout is:
+
+- `README.txt` -- the MIT umbrella notice (`config.rkt` `license-readme-text`):
+  this project is MIT, the bundled components carry their own licenses, all
+  included here.
+- `racket-wasm-MIT.txt` -- this repo's `LICENSE.txt` (the project's own license).
+- `racket/` -- upstream Racket's `LICENSE*.txt` set (Apache/MIT/LGPL/GPL/
+  libscheme), globbed from `<clone>/racket/src`.
+- `deps/<name>/` -- one subdir per built native dep, holding its license file(s).
+- `licenses.html` -- a browsable index: the umbrella notice followed by relative
+  links to every collected file, grouped into *This project* / *Racket* /
+  *Dependencies* (per dep). Written last so it links the final tree.
+
+**Discovery is clone-driven and cache-keyed.** All texts except the repo MIT live
+in the disposable clone (`<clone>/racket/src` + the extracted dep sources), which
+exists only on a build **miss**. So `assemble-licenses!` runs in
+`ensure-base-runtime!` (writing the tree into the **base cache**, keyed by
+`wasm-deps`+delta -- exactly what the dep license set depends on) and in
+`package-cross-sdk` (writing into the SDK). `collect-outputs` / `build-package` /
+`assemble-from-package` then **copy** the prebuilt `licenses/` tree from the
+cache (or the consumed package) into `dist/` -- they never regenerate it, so it
+survives cache hits and the clone-free `--runtime` path. `cache-complete?` takes
+`#:require-licenses?` (the base layer passes `#t`) so a cache entry predating
+license collection is rebuilt once.
+
+**Deps are found by scanning** `<clone>/racket/src` for `build-<name>-em` dirs --
+exactly the wasm-deps recipes that ran (libffi always + whatever `WASM_DEPS` /
+the `draw` alias selected), so no knowledge of the dep-set string or the bash
+alias is needed. rktio is in-tree (no `build-*-em` dir) and covered by Racket's
+own license, so it's correctly excluded. Within each dep's `src/`, license files
+are located by a **filename glob** (`license`/`licence`/`copying`/`copyright`/
+`notice`/`ftl`/`gpl`, case-insensitive) over the root, with a small
+**override table** for deps whose texts sit in subdirs or a whole SPDX dir
+(`freetype`: `docs/FTL.TXT` + `docs/GPLv2.TXT`; `glib`: `COPYING` + the
+`LICENSES/` SPDX dir). An override path naming a **file** is flattened to
+`<dep>/<basename>`; one naming a **directory** is copied as a tree, keeping its
+structure (e.g. `glib/LICENSES/*.txt`). To support a new dep whose license the
+glob misses, add an override entry naming its file(s)/dir(s) relative to the dep
+source root; a dep that yields no license file logs a non-fatal warning. **Deferred:** the
+licenses of packages installed into `share.data` are not yet collected.
+
 #### Cross-compiler SDK (custom packages without the clone)
 
 The runtime binary package lets you *assemble an app* without the clone. To

@@ -15,6 +15,7 @@
          "toolchain.rkt"
          "cache.rkt"
          "metadata.rkt"
+         "licenses.rkt"
          "pack.rkt"
          "consume.rkt")
 
@@ -140,7 +141,19 @@
     (for ([p (in-list (directory-list surface-dir))]
           #:when (file-exists? (build-path surface-dir p)))
       (copy-into surface-dir (path->string p))))
+  ;; 4. License tree, from whichever runtime src carries it (the base cache, the
+  ;;    package). Generated when the clone was warm; copied here verbatim.
+  (copy-licenses-from srcs dest)
   (info-msg "outputs collected into ~a" dest))
+
+;; Copy a `licenses/` tree into `dest` from the first of `srcs` (dirs) that has
+;; one. A no-op when none does -- a tolerated state for an older cache entry or a
+;; runtime package built before licenses were collected.
+(define (copy-licenses-from srcs dest)
+  (for/or ([s (in-list srcs)])
+    (define src (build-path s "licenses"))
+    (and (directory-exists? src)
+         (begin (copy-tree src (build-path dest "licenses")) #t))))
 
 ;; The runtime-output files actually present in `dir` (a cache entry / package /
 ;; dist), for the metadata's `runtime-files`.
@@ -210,7 +223,7 @@
                               #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
                               #:scheme scheme-opt #:racket racket-opt #:force? force?)
   (cond
-    [(and (not force?) (cache-complete? base-key))
+    [(and (not force?) (cache-complete? base-key #:require-licenses? #t))
      (info-msg "base runtime cache hit (~a): no emcc link" base-key)
      (let ([m (read-build-metadata (cache-dir-for base-key))]) (and m (hash-ref m 'racket-version #f)))]
     [else
@@ -228,6 +241,10 @@
      ;; payload together under base-key.
      (pack-packages #:dest (clone-wasm-out) #:cross-root clone-dir)
      (snapshot-runtime! base-key (clone-wasm-out))
+     ;; Collect the license tree into the base cache while the clone + dep
+     ;; sources are warm (keyed by base-key = wasm-deps+delta). collect-outputs
+     ;; copies it into dist/ from here, so it survives cache hits.
+     (assemble-licenses! (cache-dir-for base-key) #:clone clone-dir)
      (define rv (host-racket-version racket))
      (write-metadata-into! (cache-dir-for base-key) base-key base-components rv)
      rv]))
@@ -405,6 +422,8 @@
       (copy-file s d)))
   (copy-payload! (if has-pkgs? (app-payload-cache-dir-for pkg-key) (cache-dir-for base-key))
                  pkg-dest)
+  ;; The license tree from the base cache, so the distributable .tar.gz carries it.
+  (copy-licenses-from (list (cache-dir-for base-key)) pkg-dest)
   (define rv (let ([m (read-build-metadata (cache-dir-for base-key))]) (and m (hash-ref m 'racket-version #f))))
   (write-metadata-into! pkg-dest key components rv)
   ;; Single distributable artifact next to the dir: <name>.tar.gz of its contents.
@@ -449,6 +468,9 @@
   (make-directory* dest*)
   (for ([e (in-list (cross-sdk-layout))])
     (copy-sdk-entry! dest* (car e) (cdr e)))
+  ;; License tree, synthesized from the warm clone (ensure-sdk! guarantees it);
+  ;; the tar below then bundles it into the SDK archive.
+  (assemble-licenses! dest* #:clone clone-dir)
   (write-build-metadata!
    dest*
    (make-build-metadata #:key key #:components components #:kind 'cross-sdk

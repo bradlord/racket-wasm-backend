@@ -158,11 +158,17 @@
 ;; defaults to the full runtime set; the split build passes `base-runtime-names`
 ;; (package-agnostic binaries) or `pkg-payload-names` (share.data*) so each layer
 ;; caches under its own key independently.
-(define (cache-complete? key [names runtime-output-names])
+;; `require-licenses?` additionally demands a collected `licenses/` tree -- the
+;; base layer passes #t so a cache entry built before license collection (or a
+;; partial one) is treated as incomplete and rebuilt once. The payload layers
+;; don't carry licenses and leave it #f.
+(define (cache-complete? key [names runtime-output-names] #:require-licenses? [require-licenses? #f])
   (define d (cache-dir-for key))
   (and (directory-exists? d)
        (for/and ([n (in-list names)])
-         (file-exists? (build-path d n)))))
+         (file-exists? (build-path d n)))
+       (or (not require-licenses?)
+           (directory-exists? (build-path d "licenses")))))
 
 ;; Copy the files in `names` from `src` into the cache for `key`. `names`
 ;; defaults to the full runtime set (see `cache-complete?`).

@@ -54,6 +54,39 @@
 (define (clone-wasm-out)
   (build-path clone-dir "racket" "src" "build" "cs" "c" "wasm"))
 
+;; --- licenses -----------------------------------------------------------
+;;
+;; The build collects every applicable license text into a `licenses/` tree in
+;; dist/ and the SDK (see build/licenses.rkt). The texts come from three places,
+;; all clone-side except this project's own MIT license:
+;;   * this repo's LICENSE.txt (the project is MIT-licensed);
+;;   * upstream Racket's license set, under <clone>/racket/src;
+;;   * each built native dep's license file(s), under the dep's extracted source
+;;     dir (<clone>/racket/src/build-<name>-em/src).
+(define repo-license-file (at-root "LICENSE.txt"))
+
+;; The umbrella notice written to licenses/README.txt. Names this project's MIT
+;; license and points at the bundled component licenses.
+(define license-readme-text #<<EOF
+racket-wasm license notice
+==========================
+
+This project (racket-wasm) is licensed under the MIT License; its full text is
+in `racket-wasm-MIT.txt` in this directory.
+
+The distributed runtime bundles other software, each under its own license. The
+full texts are included here:
+
+  * racket/  -- upstream Racket and the Chez Scheme runtime it embeds
+                (Apache 2.0, MIT, LGPL, GPL, and the libscheme license).
+  * deps/    -- the native C libraries linked into the WebAssembly runtime
+                (always libffi; the cairo/pango drawing stack and others when
+                the build selects them). One subdirectory per bundled library.
+
+Your use of the distributed runtime is subject to all of the above licenses.
+EOF
+)
+
 ;; --- pinned upstream ----------------------------------------------------
 
 (define upstream-lock-path (at-root "upstream.lock"))
