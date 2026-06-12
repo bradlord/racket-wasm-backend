@@ -168,7 +168,7 @@ index b4e92ee..fb294f4 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +791,297 @@
+@@ -691,6 +791,303 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -451,7 +451,13 @@ index b4e92ee..fb294f4 100644
 +                                ;; loader uses minified locals; a separate
 +                                ;; script needs them exported on Module).
 +                                "FS_createPath,FS_createDataFile")
-+                            "-sFORCE_FILESYSTEM=1" "-lidbfs.js")
++                            "-sFORCE_FILESYSTEM=1" "-lidbfs.js"
++                            ;; EXPERIMENT: run main()/Racket on a proxied pthread
++                            ;; (a nested worker) so the shell worker stays free to
++                            ;; service pthread_create + proxied main-thread ops --
++                            ;; the GLib font-helper-thread deadlock fix. Pool gives
++                            ;; the proxied main + a few helpers ready workers.
++                            "-sPROXY_TO_PTHREAD" "-sPTHREAD_POOL_SIZE=4")
 +                      dep-uflags))
 +                   ;; The link emits ONLY the runtime (scheme*.{js,wasm,data})
 +                   ;; plus the glue baked in above (node-*.js, idbfs-init.js,

@@ -176,7 +176,16 @@ Open:
   ("relocate off *the* main thread") doesn't hold on the browser, which
   already runs Racket inside `shell-worker.js`. It's an asymmetric, node-only
   capability with real boot cost (an always-on proxy worker + N pooled
-  workers), so it was not adopted; C1+E is uniform across both surfaces.
+  workers), so it was not adopted *for the TCP/DNS fix*; C1+E is uniform across
+  both surfaces.
+
+  **Correction (later):** the "precondition doesn't hold on the browser" claim
+  was wrong -- `-sPROXY_TO_PTHREAD` *does* work on the browser once
+  `Module.mainScriptUrlOrBlob` points the pthread pool at `scheme-web.js` (the
+  `importScripts` host otherwise can't supply its own URL). It is now enabled on
+  the browser link to fix the GLib **font** deadlock (a different deadlock than
+  this TCP/DNS one, which C1 still handles). See "Browser text: the GLib thread
+  deadlock and its fix".
 
   **Testing gotcha (cost real time):** `runtime-glue/serve.rkt` roots at
   `(current-directory)`, so it must be launched **from `dist/`** (`cd dist &&
@@ -1371,14 +1380,19 @@ flag is omitted there. (The browser's *package* tree no longer rides in
 `scheme-web.data` — it ships as a separate `share.data`/`share.data.js`
 that caches itself the same way; see "Packages as a separate data file".)
 
-Notably absent: `-sPROXY_TO_PTHREAD` and the pthread-pool flags. The
-earlier design used `PROXY_TO_PTHREAD` so Emscripten itself spawned the
-runtime thread, but that ran the *filesystem* on the page's main
-thread (MEMFS is per-thread JS state), forcing `get_char` to be
-non-blocking and the runtime to busy-poll between keystrokes. By
-owning the worker ourselves, the FS and `main()` share a thread,
-`get_char` truly blocks on `Atomics.wait`, and the runtime idles at 0%
-CPU.
+The base browser link historically omitted `-sPROXY_TO_PTHREAD`: an even
+earlier design used it so Emscripten spawned the runtime thread, but that ran
+the *filesystem* on the page's main thread (MEMFS is per-thread JS state),
+forcing `get_char` to be non-blocking and the runtime to busy-poll between
+keystrokes. By owning the worker ourselves, the FS and `main()` share a thread,
+`get_char` truly blocks on `Atomics.wait`, and the runtime idles at 0% CPU.
+**However, that thread-sharing is exactly what deadlocks GLib's font path**, so
+the browser link now *does* enable `-sPROXY_TO_PTHREAD` again -- but with the
+shell worker owned by us as the *proxy-pump* thread (not running Racket), and
+`mainScriptUrlOrBlob` pointing the pthread pool at `scheme-web.js`. The FS now
+lives on the proxied pthread with `main()`, so `get_char` still blocks cleanly;
+the page main thread only pumps the proxy queue. See "Browser text: the GLib
+thread deadlock and its fix" for the full account.
 
 Serve with **COOP/COEP headers** — `SharedArrayBuffer` is unavailable
 without cross-origin isolation, so a plain static server will not start
@@ -2008,17 +2022,16 @@ megabytes of static code). `make-bitmap` returns a real `bitmap%`,
 software backend without error. The wasm grew from ~26 MB to ~32 MB
 and the .data from ~87 MB to ~95 MB.
 
-> **Text rendering -- node works, browser hangs.** Drawing (geometry)
+> **Text rendering -- works on node AND the browser.** Drawing (geometry)
 > works as above. *Text* (`get-text-extent`, `draw-text`, `pict`'s `text`)
 > required three function-pointer/signature fixes plus fontconfig
-> provisioning; with them, **text renders reliably under node**. The fixes
-> are now **merged into this repo's delta** (re-homed from the old fork
-> branch `wasm-text-fonts-wip`) -- see the "Text / Pango" section just below
-> for the full write-up and where each fix lives. It **still hangs in the
-> *browser*** (a GLib helper-thread deadlock in `shell-worker.js`, not a
-> signature bug); that is **open follow-on work**, so the browser/IDE
-> examples stay geometry-only and the browser text story remains the
-> Canvas-2D path (`web-repl/text`).
+> provisioning (node), and then `-sPROXY_TO_PTHREAD` + two glue/runtime
+> tweaks (browser). All are **merged into this repo's delta** (re-homed from
+> the old fork branch `wasm-text-fonts-wip`). See the "Text / Pango" section
+> just below for the node fixes and "Browser text" for the PROXY fix and where
+> each change lives. The browser IDE now renders Pango text inline (verified in
+> headless Chromium); `web-repl/text`'s Canvas-2D path remains available as a
+> font-free alternative.
 
 A handful of libm / libc essentials (fmod, pow, sqrt, sin/cos/tan,
 atan2, exp/log, floor/ceil/round/trunc, fabs) are registered in
@@ -2123,9 +2136,9 @@ forward `--pass-arg`; (b) it rewrites the whole function table, endangering
 Chez's self-tagged foreign-callable indices; and (c) it wouldn't fix #3, which
 is a Racket-level binding bug, not a C cast.
 
-#### Known limitation: text hangs in the *browser* (GLib thread deadlock)
+#### Browser text: the GLib thread deadlock and its fix (`-sPROXY_TO_PTHREAD`)
 
-`racket/draw` text works under node but **hangs in the browser shell** -- not a
+`racket/draw` text first appeared to **hang in the browser shell** -- not a
 signature bug, the shell's threading model. The font path makes GLib spin up a
 helper thread and `g_cond_wait`s for it:
 
@@ -2135,17 +2148,49 @@ S_pb_interp -> ffi_call -> pango_layout_get_iter -> ...
   -> pthread_cond_wait -> _do_futex_wait        (blocks forever)
 ```
 
-`shell-worker.js` runs the Emscripten module *inside a Web Worker* that then
-boots Racket and blocks synchronously (Atomics.wait on the SAB stdin/DOM
-rings), so Emscripten can never spawn/handshake the child thread the cond waits
-on (node spawns it fine, hence node works). `-sPTHREAD_POOL_SIZE` made it worse
-(startup hang). The real fixes are architectural and are **open follow-on
-work**: (1) `-sPROXY_TO_PTHREAD` -- run Racket on a proxied pthread, keeping the
-shell worker free to service `pthread_create`/proxied main-thread ops (reworks
-the shell I/O coordination); (2) de-thread GLib on the font path (a targeted
-dep patch, like the `gtype.c` iface-init fix); (3) eagerly init the font system
-before the worker parks the main thread. Until one lands, **text is node-only**;
-the browser/IDE examples stay geometry-only.
+The cause: `shell-worker.js` runs the Emscripten module *inside a Web Worker*
+that boots Racket and then blocks synchronously (`Atomics.wait` on the SAB
+stdin/DOM rings). When Racket runs **on** that worker, the worker is the
+module's "main thread", so it can never spawn/handshake the GLib helper thread
+the cond waits on (node spawns it fine, hence node always worked).
+
+**Fixed by running Racket on a proxied pthread (`-sPROXY_TO_PTHREAD`).** Two
+small changes, no source patches to GLib/Pango, no shell-IO rewrite:
+
+1. **`build.zuo.patch`** adds `-sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4` to the
+   **browser** emcc link. `main()`/Racket now runs on a child pthread (a nested
+   worker); the shell worker becomes the proxy-pump/main thread and stays free
+   to service `pthread_create` + proxied main-thread ops, so the GLib helper
+   thread spawns and `g_cond_wait` completes. The SAB stdin/stdout/DOM rings are
+   shared memory, so they keep working across the thread boundary unchanged.
+2. **`runtime-glue/shell-worker.js`** sets `Module.mainScriptUrlOrBlob =
+   "./scheme-web.js"`. Without it, Emscripten spawns its pthread pool by
+   `new Worker(_scriptName)` where `_scriptName` is the *current* worker's URL
+   (`shell-worker.js`, because the module is loaded via `importScripts` and
+   can't discover its own URL) -- spawning useless extra `shell-worker.js`
+   instances so the proxied `main()` never boots (stuck at "Downloading…").
+   Pointing it at the real module makes the pool spawn `scheme-web.js` in
+   pthread mode.
+3. **`wasm_canvas.c`** delivers the pixel blit via `MAIN_THREAD_EM_ASM` instead
+   of `EM_JS`. Under PROXY the blit runs on the Racket pthread, whose
+   `self.postMessage` reaches the shell worker, *not* the page -- so picts
+   computed but never rendered. `MAIN_THREAD_EM_ASM` proxies the `postMessage`
+   to the main thread (the shell worker), whose `postMessage` reaches the page;
+   when Racket already runs on the main thread (non-proxy / node) it runs
+   inline, so the change is surface-agnostic. (Watch the EM_ASM comma trap: the
+   C preprocessor protects commas only inside parens, not the `{ }` body, so use
+   one `var` per statement, not `var a=$0, b=$1`.)
+
+**Verified end-to-end in headless Chromium** against a freshly served `dist/`:
+the core REPL boots/evals/exits under PROXY; `get-text-extent`/`draw-text` run
+with correct metrics and no hang (run-then-exit *and* the interactive IDE REPL);
+and a `(text …)` pict **renders inline as a `<canvas>`** in the IDE Interactions
+pane. `-sPTHREAD_POOL_SIZE` alone (no PROXY) was the earlier dead end -- it hung
+at startup because the pool handshake also needs the worker to pump messages,
+which it can't once it boots Racket synchronously; PROXY is what frees it.
+
+Cost: an always-on proxy worker + a small pthread pool, and a modestly larger
+browser link. The node surface is unaffected (its link has no PROXY flag).
 
 ## Calling WASM-specific primitives from Racket
 

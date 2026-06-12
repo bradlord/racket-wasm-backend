@@ -54,6 +54,15 @@ function buildModule(init) {
 
     locateFile: function (path) { return path; },
 
+    // Under -sPROXY_TO_PTHREAD, Emscripten spawns its pthread workers (the
+    // proxied main + the pool) via `new Worker(pthreadMainJs)`, where
+    // pthreadMainJs defaults to `_scriptName` -- which is THIS worker's URL
+    // (shell-worker.js), because scheme-web.js is loaded via importScripts and
+    // cannot discover its own URL. That spawns useless extra shell-worker.js
+    // instances and the proxied main never boots. Point it at the real
+    // Emscripten module so pthread workers run scheme-web.js in pthread mode.
+    mainScriptUrlOrBlob: "./scheme-web.js",
+
     // setStatus messages from Emscripten include the download
     // "loaded/total" suffix; the page parses both.
     setStatus: function (text) {

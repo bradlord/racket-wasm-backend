@@ -36,42 +36,59 @@
 
 #ifdef __EMSCRIPTEN__
 
-EM_JS(int, wasm_canvas_blit, (int w, int h, const void *rgba),
-{
-  if (typeof self === "undefined" || typeof self.postMessage !== "function") {
-    return -1;
-  }
-  if (w <= 0 || h <= 0) return -1;
-  var bytes = (w * h) << 2;
-  var buf = new ArrayBuffer(bytes);
-  new Uint8Array(buf).set(HEAPU8.subarray(rgba, rgba + bytes));
-  self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
-  return 0;
-});
+/* Delivery runs on the MAIN browser thread via MAIN_THREAD_EM_ASM, not on
+ * whatever thread Racket happens to run on. Under -sPROXY_TO_PTHREAD Racket
+ * runs on a child pthread whose `self.postMessage` reaches the shell worker
+ * (the pthread's parent), NOT the page -- so the blit would be silently
+ * dropped. MAIN_THREAD_EM_ASM proxies the JS to the main thread (the shell
+ * worker), whose `self.postMessage` reaches the page; when Racket already runs
+ * ON the main thread (no proxy, and the node CLI) it runs inline. The call is
+ * synchronous, so the pixel copy out of the (shared, -pthread) heap completes
+ * before Racket may reuse the buffer. $0=w $1=h $2=pixel pointer. */
+
+int wasm_canvas_blit(int w, int h, const void *rgba) {
+  /* NB: one `var` per statement -- the C preprocessor protects commas only
+     inside parens, not the EM_ASM braces, so `var a=$0, b=$1` would split the
+     macro args. */
+  return MAIN_THREAD_EM_ASM_INT({
+    if (typeof self === "undefined" || typeof self.postMessage !== "function") return -1;
+    var w = $0;
+    var h = $1;
+    var rgba = $2;
+    if (w <= 0 || h <= 0) return -1;
+    var bytes = (w * h) << 2;
+    var buf = new ArrayBuffer(bytes);
+    new Uint8Array(buf).set(HEAPU8.subarray(rgba, rgba + bytes));
+    self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
+    return 0;
+  }, w, h, rgba);
+}
 
 /* Variant for racket/draw's bitmap% pixel format: `get-argb-pixels`
  * fills bytes in memory order A R G B (one alpha byte then RGB). Canvas
  * putImageData expects R G B A, so we rotate by one byte per pixel.
  * The pixels are non-premultiplied (Racket's documented surface). */
-EM_JS(int, wasm_canvas_blit_argb, (int w, int h, const void *argb),
-{
-  if (typeof self === "undefined" || typeof self.postMessage !== "function") {
-    return -1;
-  }
-  if (w <= 0 || h <= 0) return -1;
-  var bytes = (w * h) << 2;
-  var buf = new ArrayBuffer(bytes);
-  var dst = new Uint8Array(buf);
-  var src = HEAPU8;
-  for (var i = 0, p = argb; i < bytes; i += 4, p += 4) {
-    dst[i]     = src[p + 1];   // R
-    dst[i + 1] = src[p + 2];   // G
-    dst[i + 2] = src[p + 3];   // B
-    dst[i + 3] = src[p];       // A
-  }
-  self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
-  return 0;
-});
+int wasm_canvas_blit_argb(int w, int h, const void *argb) {
+  return MAIN_THREAD_EM_ASM_INT({
+    if (typeof self === "undefined" || typeof self.postMessage !== "function") return -1;
+    var w = $0;
+    var h = $1;
+    var argb = $2;
+    if (w <= 0 || h <= 0) return -1;
+    var bytes = (w * h) << 2;
+    var buf = new ArrayBuffer(bytes);
+    var dst = new Uint8Array(buf);
+    var src = HEAPU8;
+    for (var i = 0, p = argb; i < bytes; i += 4, p += 4) {
+      dst[i]     = src[p + 1];   // R
+      dst[i + 1] = src[p + 2];   // G
+      dst[i + 2] = src[p + 3];   // B
+      dst[i + 3] = src[p];       // A
+    }
+    self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
+    return 0;
+  }, w, h, argb);
+}
 
 /* Variant for callers whose pixel buffer is in Cairo's CAIRO_FORMAT_ARGB32
  * memory layout, which on little-endian is byte order B G R A. Canvas
@@ -79,36 +96,38 @@ EM_JS(int, wasm_canvas_blit_argb, (int w, int h, const void *argb),
  * the copy out of the WASM heap. Output is also unpremultiplied: Cairo
  * stores ARGB32 premultiplied (per its convention), and ImageData wants
  * non-premultiplied components. */
-EM_JS(int, wasm_canvas_blit_bgra, (int w, int h, const void *bgra),
-{
-  if (typeof self === "undefined" || typeof self.postMessage !== "function") {
-    return -1;
-  }
-  if (w <= 0 || h <= 0) return -1;
-  var bytes = (w * h) << 2;
-  var buf = new ArrayBuffer(bytes);
-  var dst = new Uint8ClampedArray(buf);
-  var src = HEAPU8;
-  for (var i = 0, p = bgra; i < bytes; i += 4, p += 4) {
-    var b = src[p],
-        g = src[p + 1],
-        r = src[p + 2],
-        a = src[p + 3];
-    if (a !== 0 && a !== 255) {
-      // Un-premultiply: ImageData wants straight RGBA.
-      var inv = 255 / a;
-      r = (r * inv) | 0; if (r > 255) r = 255;
-      g = (g * inv) | 0; if (g > 255) g = 255;
-      b = (b * inv) | 0; if (b > 255) b = 255;
+int wasm_canvas_blit_bgra(int w, int h, const void *bgra) {
+  return MAIN_THREAD_EM_ASM_INT({
+    if (typeof self === "undefined" || typeof self.postMessage !== "function") return -1;
+    var w = $0;
+    var h = $1;
+    var bgra = $2;
+    if (w <= 0 || h <= 0) return -1;
+    var bytes = (w * h) << 2;
+    var buf = new ArrayBuffer(bytes);
+    var dst = new Uint8ClampedArray(buf);
+    var src = HEAPU8;
+    for (var i = 0, p = bgra; i < bytes; i += 4, p += 4) {
+      var b = src[p];
+      var g = src[p + 1];
+      var r = src[p + 2];
+      var a = src[p + 3];
+      if (a !== 0 && a !== 255) {
+        // Un-premultiply: ImageData wants straight RGBA.
+        var inv = 255 / a;
+        r = (r * inv) | 0; if (r > 255) r = 255;
+        g = (g * inv) | 0; if (g > 255) g = 255;
+        b = (b * inv) | 0; if (b > 255) b = 255;
+      }
+      dst[i]     = r;
+      dst[i + 1] = g;
+      dst[i + 2] = b;
+      dst[i + 3] = a;
     }
-    dst[i]     = r;
-    dst[i + 1] = g;
-    dst[i + 2] = b;
-    dst[i + 3] = a;
-  }
-  self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
-  return 0;
-});
+    self.postMessage({ type: "canvas", w: w, h: h, pixels: buf }, [buf]);
+    return 0;
+  }, w, h, bgra);
+}
 
 #else
 
