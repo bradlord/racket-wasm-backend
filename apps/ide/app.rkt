@@ -12,7 +12,7 @@
 (define app
   (hash
    ;; Catalog packages (by name).
-   'pkgs       '(draw-lib datalog pict-lib)
+   'pkgs       '(draw-lib datalog pict-lib rhombus-lib rhombus-pict-lib)
    ;; Native C deps: the full cairo/pango stack racket/draw needs.
    'wasm-libs  '(draw)
    ;; The web-repl helper package, by path (--copy-installed). Relative to this

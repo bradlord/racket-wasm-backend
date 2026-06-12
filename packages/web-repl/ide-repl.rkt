@@ -27,6 +27,14 @@
 ;; Forms parsed from the current submission but not yet handed to the REPL.
 (define pending '())
 
+;; The stock s-expression interaction reader, captured at module load --
+;; before any `enter!`, so this is the default. After `enter!` into a
+;; non-`racket` #lang whose `configure-runtime` installed its own
+;; `current-read-interaction` (e.g. rhombus's shrubbery reader), the
+;; parameter no longer `eq?`s this, and `ide-prompt-read` defers to it
+;; rather than parsing the language's surface syntax as s-expressions.
+(define default-read-interaction (current-read-interaction))
+
 ;; Read every top-level form in `text`. Uses `read-syntax` -- for a
 ;; `#lang racket` REPL that is exactly the interaction reader, and it
 ;; avoids depending on `current-read-interaction` being installed.
@@ -79,6 +87,18 @@
      (define form (car pending))
      (set! pending (cdr pending))
      form]
+    [(not (eq? (current-read-interaction) default-read-interaction))
+     ;; A non-default #lang installed its own interaction reader (e.g.
+     ;; rhombus's shrubbery reader, via `configure-runtime` run after
+     ;; `enter!`). Read ONE interaction form with it; the REPL evaluates
+     ;; that form in the entered namespace, whose `#%top-interaction`
+     ;; matches this reader. The submission-buffering below is for the
+     ;; default s-expr reader only -- the language reader does its own
+     ;; multi-line/indentation handling against the same stdin port.
+     (display "> ")
+     (flush-output)
+     (define in (current-get-interaction-input-port-value))
+     ((current-read-interaction) (object-name in) in)]
     [else
      (let loop ()
        (display "> ")

@@ -1412,12 +1412,23 @@ Lifecycle is **process-per-run**. The Interactions pane is inert until
      `#<object:bitmap%>`. Installed *before* `enter!` so the program's
      own top-level expressions get it too (`#lang racket` prints
      module top-level expression results through `current-print`).
-   - `(enter! (file "/tmp/main.rkt"))` -- instantiates the module (its
-     body runs -- output streams in) **and** switches the REPL's
-     current namespace to the module's, so every top-level definition
-     is in scope. That is exactly DrRacket's Run: run the definitions,
-     then a REPL that sees them (not just the `provide`d names a plain
-     `-i -t` would expose).
+   - `(begin (enter! (file "/tmp/main.rkt")) <configure-runtime> <re-install
+     printer>)` -- `enter!` instantiates the module (its body runs --
+     output streams in) **and** switches the REPL's current namespace to
+     the module's, so every top-level definition is in scope. That is
+     exactly DrRacket's Run: run the definitions, then a REPL that sees
+     them (not just the `provide`d names a plain `-i -t` would expose).
+     Bundled in the *same* `begin` (read+compiled in the `racket`
+     namespace before `enter!` flips it), two follow-ups run for
+     non-`racket` `#lang`s: a guarded `dynamic-require` of the module's
+     `(submod ... configure-runtime)` if it `module-declared?`s one --
+     that is what binds the language's REPL reader to
+     `current-read-interaction` (e.g. rhombus's shrubbery reader; see
+     the reader note below) -- and a re-install of the bitmap printer so
+     it wraps whatever `current-print` `configure-runtime` set, keeping
+     picts/bitmaps rendering at the REPL. These **must** sit inside the
+     `begin`: once the namespace has switched, the REPL's
+     `#%top-interaction` is the language's and rejects bare racket forms.
 
    The prelude ends with a trailing `"\n"` that delimits the submission;
    the submission reader (installed in the first form) consumes it as the
@@ -1441,14 +1452,31 @@ The fix replaces only the REPL's *read* step (`current-prompt-read`; the
 stock loop still evals/prints/handles errors -- see `racket/repl`). The
 new reader consumes a whole **submission** -- one line, or several lines
 accumulated until the forms balance (`exn:fail:read:eof` => read more) --
-parses *all* its top-level forms up front via `current-read-interaction`,
-and hands them to the REPL one at a time from a `pending` queue (no extra
-`> ` between forms of one submission). Because the submission's bytes are
-fully drained before any form runs, a `read-line` during evaluation
-blocks for a *fresh* submission rather than eating the rest of the line.
-That is DrRacket's separation: submitted expressions and the input a
-running program reads are distinct streams in effect, even though they
-ride the same ring. `(foo)(foo)` now prompts twice, once per `foo`.
+parses *all* its top-level forms up front with the s-expression
+`read-syntax`, and hands them to the REPL one at a time from a `pending`
+queue (no extra `> ` between forms of one submission). Because the
+submission's bytes are fully drained before any form runs, a `read-line`
+during evaluation blocks for a *fresh* submission rather than eating the
+rest of the line. That is DrRacket's separation: submitted expressions
+and the input a running program reads are distinct streams in effect,
+even though they ride the same ring. `(foo)(foo)` now prompts twice, once
+per `foo`.
+
+**Non-`racket` `#lang`s (rhombus, …).** That s-expression buffering is
+correct only for languages whose surface syntax *is* s-expressions.
+After `enter!` the REPL's namespace -- and so its `#%top-interaction` --
+belongs to the module's `#lang`; for rhombus that macro wants a
+*shrubbery* group, and handing it a Racket datum read by `read-syntax`
+fails with `#%top-interaction: bad syntax in: (#%top-interaction . 4)`.
+(`#lang datalog` has the same hole; it only looks fine because its output
+comes from the module *body* on Run, not from REPL interaction.) So
+`ide-repl` captures the default `current-read-interaction` at load and,
+when a `#lang`'s `configure-runtime` (run in the `enter!` `begin` above)
+has swapped in a different one, **defers to it** -- reading one
+interaction form with the language's own reader instead of the s-expr
+buffering. The buffering path is kept for the default reader, where the
+shared-stdin interleaving problem it solves still applies; a language
+reader does its own multi-line handling against the same ring.
 
 **Waiting-for-input affordance.** Because the program's `read-line` and
 the REPL's own prompt-read are the same fd, they are indistinguishable

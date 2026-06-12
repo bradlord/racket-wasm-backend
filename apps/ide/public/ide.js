@@ -153,6 +153,16 @@
 ";; REPL on the right.\n",
     },
     {
+      name: "Rhombus (#lang rhombus)",
+      code:
+"#lang rhombus\n" +
+"\n" +
+"import:\n" +
+"  pict open\n" +
+"\n" +
+"circle(~size: 20, ~fill: \"red\")\n",
+    },
+    {
       name: "Browser text",
       code:
 "#lang racket\n" +
@@ -305,8 +315,8 @@
     canvas.width = w;
     canvas.height = h;
     canvas.style.cssText =
-      "display:block;margin:8px 0;max-width:100%;border-radius:8px;" +
-      "border:1px solid rgba(159,176,195,0.18);image-rendering:pixelated;";
+      "display:block;margin:8px 0;max-width:100%;" +
+      "image-rendering:pixelated;";
     // pixels arrived as a transferred ArrayBuffer (RGBA8888, top-down).
     var image = new ImageData(new Uint8ClampedArray(pixels), w, h);
     canvas.getContext("2d").putImageData(image, 0, 0);
@@ -585,7 +595,19 @@
         //      top-level expressions get it too; guarded so a missing
         //      web-repl still lets the program run.
         //   4. enter! the program -- runs its body and lands the REPL in
-        //      its namespace.
+        //      its namespace -- then, in the SAME form (a begin, so it is
+        //      read+compiled in the racket namespace before enter! switches
+        //      it), run the entered #lang's `configure-runtime` submodule
+        //      if it has one. That is what binds a non-default REPL reader
+        //      to `current-read-interaction` (e.g. rhombus's shrubbery
+        //      reader), so ide-repl defers to it instead of feeding the
+        //      language's surface syntax to its `#%top-interaction` as
+        //      s-exprs. Finally re-install the bitmap printer so it wraps
+        //      whatever `current-print` the language set, keeping picts/
+        //      bitmaps rendering at the REPL. Everything after enter! must
+        //      live inside this begin: once the namespace has switched, the
+        //      REPL's `#%top-interaction` is the language's and would reject
+        //      these racket forms.
         // The trailing "\n" delimits the submission; the reader installed
         // in step 1 consumes it as the line terminator, leaving the stdin
         // buffer empty for the program's first real `read-line`.
@@ -595,7 +617,14 @@
           '(require racket/enter) ' +
           '(with-handlers ([(lambda (e) #t) void]) ' +
             '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))) ' +
-          '(enter! (file "/tmp/main.rkt"))\n');
+          '(begin ' +
+            '(enter! (file "/tmp/main.rkt")) ' +
+            '(with-handlers ([(lambda (e) #t) void]) ' +
+              '(let ([cr (list (quote submod) (list (quote file) "/tmp/main.rkt") ' +
+                              '(quote configure-runtime))]) ' +
+                '(when (module-declared? cr #t) (dynamic-require cr #f)))) ' +
+            '(with-handlers ([(lambda (e) #t) void]) ' +
+              '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))))\n');
         setControls(true, true);
         setStatus("Running", "run");
         inputArea.focus();
