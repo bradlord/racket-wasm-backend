@@ -1,9 +1,11 @@
 #lang racket
 
-;; Browser-native text. racket/draw's own text path (Pango) doesn't
-;; work in this WASM build, so web-repl/text asks the *page* to render
-;; text with Canvas 2D and brings it back as an image -- no fonts in
-;; the image, no Pango. Fonts are CSS font strings.
+;; Browser-native text via Canvas 2D. racket/draw's own Pango text path
+;; now works too (see the "pict text" example), but this is a lighter
+;; alternative: web-repl/text asks the *page* to render text with Canvas
+;; 2D and brings it back as an image -- it uses the browser's own fonts
+;; (CSS font strings) instead of the bundled DejaVu Sans, with no Pango
+;; layout. Handy for quick labels and any CSS-available font.
 
 (require web-repl/text)
 
