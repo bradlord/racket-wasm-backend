@@ -36,6 +36,14 @@
       padding: 24px 0 32px;
     }
     .hero { display: grid; gap: 10px; margin-bottom: 20px; }
+    .hero-top {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    .hero-link {
+      color: var(--accent-2); text-decoration: none; font-size: 13px; font-weight: 600;
+      font-family: var(--sans);
+    }
+    .hero-link:hover { text-decoration: underline; }
     .eyebrow {
       margin: 0; color: var(--accent); font-size: 12px; font-weight: 700;
       letter-spacing: 0.18em; text-transform: uppercase; font-family: var(--sans);
@@ -206,12 +214,24 @@
       background: rgba(255, 255, 255, 0.06);
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
+    .site-footer {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(159, 176, 195, 0.12);
+      display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+      font-family: var(--sans); font-size: 13px; color: var(--muted);
+    }
+    .site-footer a { color: var(--accent-2); text-decoration: none; }
+    .site-footer a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
   <main class="page">
     <section class="hero">
-      <p class="eyebrow">Racket CS on WASM</p>
+      <div class="hero-top">
+        <p class="eyebrow">Racket CS on WASM</p>
+        <a class="hero-link" href="https://github.com/bradlord/racket-wasm-backend" target="_blank" rel="noopener">Source on GitHub↗</a>
+      </div>
       <h1>Racket WASM IDE</h1>
       <p>
         Edit a program in <strong>Definitions</strong> on the left, then click
@@ -280,6 +300,10 @@
         </div>
       </section>
     </div>
+
+    <footer class="site-footer">
+      <a href="./licenses/licenses.html">Licenses</a>
+    </footer>
   </main>
   <script defer src="./ide.js"></script>
 </body>
