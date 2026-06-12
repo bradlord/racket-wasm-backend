@@ -1,0 +1,37 @@
+diff --git a/racket/src/rktio/rktio_network.c b/racket/src/rktio/rktio_network.c
+index 7dfe7a6..7d81c08 100644
+--- a/racket/src/rktio/rktio_network.c
++++ b/racket/src/rktio/rktio_network.c
+@@ -286,7 +286,7 @@ struct rktio_addrinfo_lookup_t {
+   char *name, *svc;
+   struct rktio_addrinfo_t *hints;
+   
+-#if defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)
++#if (defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)) && !defined(__EMSCRIPTEN__)
+   /* For delivering the result: */
+   struct rktio_addrinfo_t *result;
+   int err;
+@@ -305,7 +305,7 @@ struct rktio_addrinfo_lookup_t {
+ 
+ static void free_lookup(rktio_addrinfo_lookup_t *lookup)
+ {
+-#if defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)
++#if (defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)) && !defined(__EMSCRIPTEN__)
+   if (lookup->result)
+     do_freeaddrinfo(RKTIO_AS_ADDRINFO(lookup->result));
+ #endif
+@@ -320,12 +320,12 @@ static void free_lookup(rktio_addrinfo_lookup_t *lookup)
+ 
+ static void init_lookup(rktio_addrinfo_lookup_t *lookup)
+ {
+-#if defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)
++#if (defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)) && !defined(__EMSCRIPTEN__)
+   lookup->result = NULL;
+ #endif
+ }
+ 
+-#if defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)
++#if (defined(RKTIO_SYSTEM_WINDOWS) || defined(RKTIO_USE_PTHREADS)) && !defined(__EMSCRIPTEN__)
+ 
+ # ifdef RKTIO_SYSTEM_WINDOWS
+ #  ifdef __BORLANDC__
