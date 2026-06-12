@@ -1,6 +1,6 @@
 #lang racket/base
 ;; `apply`: lay the port's delta onto a synced clone -- git-apply every
-;; patches/**.patch, then copy overlay/ (incl. wasm-shell/) into the tree.
+;; patches/**.patch, then copy overlay/ into the tree.
 ;;
 ;; Idempotent: it first restores the patched tracked files to the pin
 ;; (`git checkout -- <path>`) and re-copies overlay, so re-running after a prior

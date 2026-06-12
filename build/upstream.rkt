@@ -17,8 +17,12 @@
 (define (reset-to-pin!)
   (info-msg "resetting clone to pinned ~a" (substring upstream-sha 0 12))
   (git clone-dir "reset" "--hard" upstream-sha)
-  ;; Remove untracked (overlay copies, build artifacts). -x = include ignored.
-  (git clone-dir "clean" "-fdx"))
+  ;; Remove untracked (overlay copies, build artifacts). -x = include ignored;
+  ;; -ff = also remove untracked dirs that contain nested git repos (meson wrap
+  ;; checkouts like glib's subprojects/sysprof). A single -f skips those, which
+  ;; leaves a gutted build-<dep>-em/src/ behind -- the dep recipe then sees the
+  ;; dir, skips re-extracting the tarball, and fails at configure.
+  (git clone-dir "clean" "-ffdx"))
 
 (define (sync)
   (cond

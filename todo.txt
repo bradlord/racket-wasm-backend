@@ -15,18 +15,27 @@ builds an arbitrary HTML/JS/Racket app + a racket config into dist/.
     same make-wasm-racket path (dogfood). Validated via a full binary-catalog
     rebuild from cleared caches.
 Still open: main-thread build variant, RACKET=auto, GitHub deploy workflow,
-semi-permanent install dir for cheap single-package adds, extra-C / pre-post-js
-hooks, finishing the wasm-shell/ extraction. (See annotations below.)
+semi-permanent install dir for cheap single-package adds, extra-C hooks.
+(See annotations below.)
 
 - Review files in overlay and patches folder for pieces that can be removed or used outside of racket repo.
-    - We probably don't need any gitignore updates on the racket repo, since we won't be committing.
-    - build-wasm-binary-pkgs.rkt should probably live outside of the racket repo checkout.   [not done]
-    - PARTIAL. ~everything in wasm-shell/ can be outside racket repo checkout
-        DONE (Phase 0): shell-worker.js + serve.rkt -> runtime-glue/, ide.* -> apps/ide/public/.
-        Still in overlay/wasm-shell (they are emcc link inputs, baked into the binary):
-        node-locate-file.js, node-tty.js, node-load-share.js, shell-tty.js, idbfs-init.js,
-        plus the test files (run-tests.sh, perf-bench.rktl, draw-stack-test.rkt).
-    - Dependency building code?   [not done]
+    - DONE. We probably don't need any gitignore updates on the racket repo, since we won't be committing.
+        The three .gitignore patches are removed (cosmetic only; sync's `git clean -fdx`
+        ignores .gitignore anyway). Also dropped the dead install-wasm-browser-shell.rkt
+        (it copied wasm-shell files that had already moved to runtime-glue/ + apps/ide/public/).
+    - DONE. build-wasm-binary-pkgs.rkt was dropped from the delta when the SDK-keyed
+        catalog (build/consume.rkt) superseded the clone-bound strip.
+    - DONE. ~everything in wasm-shell/ is now outside the racket repo checkout:
+        Phase 0: shell-worker.js + serve.rkt -> runtime-glue/, ide.* -> apps/ide/public/.
+        Final: the emcc link-JS glue (node-locate-file.js, node-tty.js, node-load-share.js,
+        shell-tty.js, idbfs-init.js) -> runtime-glue/, passed to the link via the
+        RUNTIME_GLUE_DIR make var; test files (run-tests.sh, perf-bench.rktl,
+        draw-stack-test.rkt) -> test/node/. overlay/wasm-shell is gone.
+        The link-JS subset is hashed into the build key (cache.rkt link-glue-names).
+    - DONE. Dependency building code: the recipe sources (build-deps.sh, deps.sh,
+        symgen.sh, wasm-emscripten.cross, deps/*.sh) moved overlay -> repo-root
+        wasm-deps/, passed via the WASM_DEPS_SRC_DIR make var; hashed into the
+        build key. Only the recipe OUTPUTS land in the clone's build tree.
 - Investigate a separate build for a main thread version vs the worker thread version.
 - Build the same-version host racket automatically. (RACKET=auto)
 - Github workflow to build and deploy web-repl
@@ -74,3 +83,5 @@ hooks, finishing the wasm-shell/ extraction. (See annotations below.)
 - Some way to run racket code at different steps of the build process. 
     - Before build: I can't think of anything right now, but I'll think more later.
     - After build: Might generate html or js from racket and put in dist folder. Should accept path to dist folder as an argument to a function.
+
+- Make data loading code do the equivalent of --use-preload-cache https://github.com/emscripten-core/emscripten/blob/main/tools/file_packager.py

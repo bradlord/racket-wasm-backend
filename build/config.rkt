@@ -22,11 +22,24 @@
 ;; manages overlay/.
 (define overlay-dir       (at-root "overlay"))
 (define overlay-local-dir (at-root "overlay-local"))
-;; Repo-side, NOT copied into the clone: host-side runtime glue (browser worker
-;; bootstrap + dev server), copied into dist/ by the orchestrator's
-;; collect-outputs so a surface can be swapped without touching the (expensive)
-;; link. See build-wasm.md and the project roadmap.
+;; Repo-side, NOT copied into the clone: runtime glue. Holds (a) host-side glue
+;; (browser worker bootstrap + dev server), copied into dist/ by the
+;; orchestrator's collect-outputs so a surface can be swapped without touching
+;; the (expensive) link; and (b) the built-in emcc link-JS glue
+;; (`link-glue-names`), passed to cs/c/build.zuo's `wasm` link via the
+;; RUNTIME_GLUE_DIR make var. See build-wasm.md and the project roadmap.
 (define runtime-glue-dir  (at-root "runtime-glue"))
+;; The link-input subset of runtime-glue/: baked into scheme.* / scheme-web.* by
+;; the emcc link, so they are part of the build key (cache.rkt folds exactly
+;; these into the delta-hash -- NOT the whole dir, so editing the host-side glue
+;; like shell-worker.js doesn't force a relink).
+(define link-glue-names
+  '("idbfs-init.js" "shell-tty.js"
+    "node-tty.js" "node-locate-file.js" "node-load-share.js"))
+;; Repo-side wasm-deps recipe sources (build-deps.sh + per-dep recipes), passed
+;; to cs/c/build.zuo's `wasm-deps` target via the WASM_DEPS_SRC_DIR make var.
+;; Also folded into the delta-hash (the recipes determine the linked dep libs).
+(define wasm-deps-src-dir (at-root "wasm-deps"))
 
 ;; The repo's canonical app: the DrRacket-like IDE / web-repl. `build` builds
 ;; this app (through the generic make-wasm-racket path -- it is the dogfood, not

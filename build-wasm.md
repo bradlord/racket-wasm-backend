@@ -155,8 +155,13 @@ The build is wired into the stock build system as a target:
 
 ```sh
 source <emsdk>/emsdk_env.sh
-make wasm SCHEME=<native-threaded-host-scheme> RACKET=<host-racket>
+make wasm SCHEME=<native-threaded-host-scheme> RACKET=<host-racket> \
+     RUNTIME_GLUE_DIR=<racket-wasm>/runtime-glue \
+     WASM_DEPS_SRC_DIR=<racket-wasm>/wasm-deps
 ```
+
+(The two `*_DIR` vars point at racket-wasm's repo-side link glue and
+native-dep recipes; the orchestrator sets them automatically.)
 
 `make wasm` runs `main.zuo`'s `wasm` target, which calls `build-base
 "cs/c"` in a `wasm?` mode: it injects the cross-configure flags
@@ -203,10 +208,9 @@ run it in place against the output dir: `racket runtime-glue/serve.rkt 8123`
 `racket build/main.rkt serve <dir> [port]`, then open `/` (the surface's entry
 page is `index.html`).
 
-The browser-link flags live in the `wasm` target itself.
-`racket/src/ChezScheme/install-wasm-browser-shell.rkt` is a **legacy**,
-unused-by-`make wasm` script that still lists the old in-clone asset names; it
-is not part of the decoupled path and is no longer kept in sync.
+The browser-link flags live in the `wasm` target itself. (The legacy
+`install-wasm-browser-shell.rkt` staging script, which predated the decoupled
+path and listed the old in-clone asset names, has been dropped from the delta.)
 
 #### Building a custom app (`make-wasm-racket` / the `app` subcommand)
 
@@ -558,10 +562,14 @@ deps" below.
 
 `make wasm` is now the only build path. The earlier per-stage
 `wasm-shell/*.sh` scripts (and the `wasm-shell/build.zuo` orchestrator)
-have been removed; `wasm-shell/` retains only the browser runtime assets
-and glue it still serves (`ide.*`, `shell-worker.js`, `serve.rkt`,
-`idbfs-init.js`, `node-tty.js`, `node-locate-file.js`,
-`shell-tty.js`) plus the two WASM test files (`run-tests.sh`,
+have been removed, and `wasm-shell/` itself is gone from the delta: the
+emcc link-time JS glue (`idbfs-init.js`, `shell-tty.js`, `node-tty.js`,
+`node-locate-file.js`, `node-load-share.js`) lives repo-side in
+`runtime-glue/` alongside the host-side glue, passed to the link via the
+`RUNTIME_GLUE_DIR` make var (the orchestrator sets it; a manual
+`make wasm` must pass `RUNTIME_GLUE_DIR=<racket-wasm>/runtime-glue`).
+The page surface lives in `apps/ide/public/`, and the WASM test/bench
+scripts in `test/node/` (`run-tests.sh`, `perf-bench.rktl`,
 `draw-stack-test.rkt`). The stage descriptions below document what
 `make wasm` does internally, stage by stage.
 
@@ -632,7 +640,8 @@ What is **not** yet folded in (still needs new work):
    paths into `build-libffi-em/install` remain (the recipe builds there)
    but are no longer a hardcode pending other work.
 3. ~~The **recipe deps**~~ **(done)** -- the recipe driver
-   (`racket/src/cs/c/wasm-deps/`) is folded in as the `wasm-deps` zuo
+   (repo-side `wasm-deps/`, via `WASM_DEPS_SRC_DIR`) is folded in as the
+   `wasm-deps` zuo
    target; `WASM_DEPS="<libs>"` selects which to build (or `draw` for the
    full cairo/pango stack), `boot.o` is compiled with
    `-DRACKET_EXTRA_FOREIGN_INC` so `wasm_deps.inc` registrations apply,
@@ -717,15 +726,17 @@ libffi check, so either error means the wrong configure is running.
 
 ### 2. Native library deps (libffi + the Cairo/Pango stack)
 
-Cross-compiled native libraries are built by a recipe driver rooted at
-`racket/src/cs/c/wasm-deps/`. In the stock build this is the **`wasm-deps`
-zuo target** (`cs/c/build.zuo`), which `main.zuo` runs before the kernel
-`build` (the Chez kernel's `ffi.c` needs libffi's headers). Drive it via
-make:
+Cross-compiled native libraries are built by a recipe driver that lives
+**repo-side**, in racket-wasm's `wasm-deps/` (not in the clone); the
+**`wasm-deps` zuo target** (`cs/c/build.zuo`) reads its location from the
+`WASM_DEPS_SRC_DIR` make var (the orchestrator sets it) and `main.zuo`
+runs the target before the kernel `build` (the Chez kernel's `ffi.c`
+needs libffi's headers). Drive it via make:
 
 ```sh
-make wasm SCHEME=... RACKET=...                 # libffi only (default)
-make wasm WASM_DEPS="draw" SCHEME=... RACKET=... # + the cairo/pango stack
+make wasm SCHEME=... RACKET=... \
+     WASM_DEPS_SRC_DIR=<racket-wasm>/wasm-deps ...  # libffi only (default)
+make wasm WASM_DEPS="draw" ...                      # + the cairo/pango stack
 ```
 
 `WASM_DEPS` is a space-separated list of recipe names from
@@ -757,9 +768,19 @@ points at `build/cs/c/wasm-deps/`. The `boot.o` compile and the `wasm`
 link read those files back rather than re-running the recipe loop. The
 driver is incremental (per-dep state cache), so re-running is cheap.
 
-(The recipes live under `cs/c/wasm-deps/`; the `wasm-deps` target runs
-them automatically before the kernel build, since `ffi.c` needs libffi's
-headers.)
+(The recipe *sources* live repo-side under `wasm-deps/`; only the
+*outputs* land in the clone's `build/cs/c/wasm-deps/`. The `wasm-deps`
+target runs them automatically before the kernel build, since `ffi.c`
+needs libffi's headers. The recipes are part of the build key -- editing
+one invalidates cached runtimes, like any delta edit.)
+
+A clean-up gotcha that bit once: meson-based recipes (glib, pango) leave
+nested *git checkouts* under `src/subprojects/` (meson wrap). `git clean`
+with a single `-f` refuses to delete untracked dirs that contain a git
+repo, so a sync used to leave a gutted `build-<dep>-em/src/` behind --
+and `wasm_dep_fetch` skips re-extracting when `src/` exists, so the next
+build died at the dep's configure with "no meson.build". `sync` therefore
+cleans with `-ffdx` (double `-f`), which removes nested repos too.
 
 Recipe schema in brief:
 
@@ -777,7 +798,7 @@ DEP_SYMBOLS_MODE=explicit              # or "scrape" or "none"
 DEP_SYMBOLS=(cairo_create cairo_destroy ...)
 ```
 
-Meson recipes use `cs/c/wasm-deps/wasm-emscripten.cross` as their
+Meson recipes use `wasm-deps/wasm-emscripten.cross` as their
 cross-compilation file (emcc/em++/emar wrappers; `system='emscripten'`;
 `-pthread` + `USE_ZLIB=1` propagated to all c/cpp args + link args).
 `PKG_CONFIG_PATH` is accumulated as each dep installs, so later
@@ -1010,8 +1031,8 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      em-tpb32l/lz4/lib/liblz4.a \
      ../rktio/build-em/librktio.a \
      -L ../build-libffi-em/install/lib \
-     --extern-pre-js wasm-shell/node-locate-file.js \
-     --post-js wasm-shell/node-tty.js \
+     --extern-pre-js runtime-glue/node-locate-file.js \
+     --post-js runtime-glue/node-tty.js \
      --preload-file ../build-cs-tpb32l/petite-pbchunk.boot@petite.boot \
      --preload-file ../build-cs-tpb32l/scheme-pbchunk.boot@scheme.boot \
      --preload-file ../build-cs-tpb32l/racket-pbchunk.boot@racket.boot \
@@ -1024,14 +1045,14 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      -lffi
 ```
 
-`wasm-shell/node-tty.js` is the node analogue of `shell-tty.js`: it
+`runtime-glue/node-tty.js` is the node analogue of `shell-tty.js`: it
 overrides Emscripten's default TTY `get_char` to do a real `fs.readSync`
 on node's stdin and return `undefined` (EAGAIN) on a would-block rather
 than letting the default path leak EAGAIN out as EIO (errno 29). Without
 it, `node scheme.js` with a non-blocking stdin (e.g. `child_process.spawn`,
 or any non-piped invocation) loops on `error reading from stream port`.
 
-`wasm-shell/node-locate-file.js` fixes data-file resolution under node so
+`runtime-glue/node-locate-file.js` fixes data-file resolution under node so
 that `node path/to/scheme.js` works from any directory, not just from
 inside the build dir. The trap: Emscripten's internal `locateFile(path)`
 resolves against `scriptDirectory` (the dir of `scheme.js`), which is why
@@ -1086,7 +1107,7 @@ profiling is no longer needed.
 
 ### Browser shell
 
-The browser shell in `wasm-shell/` is a
+The browser shell is a
 **shared runtime + per-surface host** design: one
 `scheme-web.{js,wasm,data}` binary backs every browser surface. Today
 there is one surface -- `index.html`/`ide.js`, the DrRacket-like IDE (see
@@ -1139,7 +1160,7 @@ pthreads of its own):
 
 - `racket/src/cs/c/wasm_shell_io.c` reserves the rings in the shared
   heap and exports their addresses.
-- `wasm-shell/shell-tty.js` is linked in with
+- `runtime-glue/shell-tty.js` is linked in with
   `emcc --post-js`. It replaces the TTY `get_char`/`put_char` ops:
   `get_char` blocks on the input ring with `Atomics.wait` (legal on
   the runtime worker), `put_char` pushes each byte into the output
@@ -1147,7 +1168,7 @@ pthreads of its own):
   While parked in that `Atomics.wait` it sets the `shell_io_state` flag
   to `1` (and back to `0` once input arrives) so the page can show a
   "waiting for input" affordance -- see "IDE page".
-- `wasm-shell/shell-worker.js` is the worker bootstrap: it sets up
+- `runtime-glue/shell-worker.js` is the worker bootstrap: it sets up
   `self.Module`, `importScripts("./scheme-web.js")` synchronously,
   and on `onRuntimeInitialized` posts the shared `HEAPU8.buffer`
   (a `SharedArrayBuffer`) plus the ring offsets back to the page.
@@ -1178,7 +1199,7 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      em-tpb32l/lz4/lib/liblz4.a \
      ../rktio/build-em/librktio.a \
      -L ../build-libffi-em/install/lib \
-     --post-js wasm-shell/shell-tty.js \
+     --post-js runtime-glue/shell-tty.js \
      --preload-file ../build-cs-tpb32l/petite-pbchunk.boot@petite.boot \
      --preload-file ../build-cs-tpb32l/scheme-pbchunk.boot@scheme.boot \
      --preload-file ../build-cs-tpb32l/racket-pbchunk.boot@racket.boot \
@@ -1360,17 +1381,18 @@ has been exercised on a broader set of collections.
 
 ## Running the Racket test suite
 
-`wasm-shell/run-tests.sh` runs a slice of the
+`test/node/run-tests.sh` runs a slice of the
 checked-in Racket core tests (the `.rktl` files in
 `pkgs/racket-test-core/tests/racket/`) under the WASM/node build. Each
 `.rktl` is a flat script that expects to be `load`ed inside a session
 that already evaluated `testing.rktl`, so the script concatenates the
 two and pipes them through `node scheme.js`, then greps for the per-test
-summary line.
+summary line. It runs against the orchestrator's clone (`.work/racket`)
+by default; set `RACKET_WASM_CLONE` to point at a different built tree.
 
 ```sh
-wasm-shell/run-tests.sh             # default slice
-wasm-shell/run-tests.sh list hash   # by name
+test/node/run-tests.sh             # default slice
+test/node/run-tests.sh list hash   # by name
 ```
 
 The default slice covers `control` (delimited continuations / prompts),
@@ -1406,7 +1428,7 @@ implement on Emscripten and hangs.)
 
 ## Performance vs. native Racket CS
 
-`wasm-shell/perf-bench.rktl` is a single-threaded, CPU-bound
+`test/node/perf-bench.rktl` is a single-threaded, CPU-bound
 microbenchmark shared by both runtimes. It is timed *internally* with
 `current-process-milliseconds` / `current-inexact-milliseconds`, so the
 WASM runtime's large startup and `.data` mount cost is excluded -- the
@@ -1415,9 +1437,9 @@ through either runtime's stdin REPL:
 
 ```sh
 # native host racket
-racket < wasm-shell/perf-bench.rktl | grep BENCH
-# WASM under node (from the build dir)
-node racket/src/build/cs/c/wasm/scheme.js < wasm-shell/perf-bench.rktl | grep BENCH
+racket < test/node/perf-bench.rktl | grep BENCH
+# WASM under node (against the orchestrator's clone)
+node .work/racket/racket/src/build/cs/c/wasm/scheme.js < test/node/perf-bench.rktl | grep BENCH
 ```
 
 Measured on an Apple M3 Pro, node v22.16.0 (arm64). Native is
@@ -1507,7 +1529,7 @@ it finds (`links-pkgs-roots` in `cs/c/build.zuo`) rather than hardcoding a
 list -- adding a package whose deps drag in new in-tree libraries needs no
 edit to the link step. So there are no per-package emcc flags: anything
 the install dropped under `racket/share/pkgs` or linked into `/pkgs` with a
-links entry ships automatically. (The old `wasm-shell/share-links.rktd` +
+links entry ships automatically. (The old `share-links.rktd` +
 per-package `--preload-file` scheme is gone.)
 
 ### Adding a new package
@@ -1789,7 +1811,7 @@ pango, glib, harfbuzz at the time of writing), `(require <pkg>)`
 fails at module load with `ffi-obj: could not find export from
 foreign library, name: <C-symbol>`. That error names exactly the
 missing entry point; the fix is to add a recipe for the underlying
-library and relink. `cs/c/wasm-deps/deps/cairo.sh` is the template for
+library and relink. `wasm-deps/deps/cairo.sh` is the template for
 a meson recipe with symbol scraping.
 
 A stub mechanism exists for the few cases where binding to a no-op
@@ -2111,7 +2133,7 @@ below).
 
 3. **Persistent home via IDBFS, properly (transparent flush).**
    v0 is *shipped*: `/home/web_user` is mounted on IDBFS in
-   `wasm-shell/idbfs-init.js` (`--pre-js`); the boot path runs
+   `runtime-glue/idbfs-init.js` (`--pre-js`); the boot path runs
    `FS.syncfs(true)` so any previous session's files are present
    when Racket starts; a "Save & Restart" button on the page sends
    `(exit 0)` to the runtime over the input ring, the worker's

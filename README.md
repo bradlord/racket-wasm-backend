@@ -14,7 +14,11 @@ documented in [`build-wasm.md`](build-wasm.md). Read it before working in here.
 
 - `build/` — the Racket orchestrator (`racket build/main.rkt <subcommand>`).
 - `patches/` — one diff per modified upstream file, applied to the clone.
-- `overlay/` — additive files copied into the clone (and `wasm-shell/` at its root).
+- `overlay/` — additive files copied into the clone.
+- `runtime-glue/` — repo-side runtime glue: the emcc link-JS (passed to the
+  link via `RUNTIME_GLUE_DIR`) + the browser worker bootstrap and dev server.
+- `wasm-deps/` — native-dependency build recipes (passed via `WASM_DEPS_SRC_DIR`).
+- `test/node/` — WASM test/bench scripts, run against the built clone.
 - `upstream.lock` — the pinned upstream commit the delta applies onto.
 - `.work/` — the cloned tree + build artifacts (gitignored, disposable).
 - `dist/` — collected build outputs (gitignored).

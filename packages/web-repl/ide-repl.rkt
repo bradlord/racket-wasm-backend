@@ -4,7 +4,7 @@
 ;;
 ;; The IDE runs the user's program in a plain console REPL whose stdin is
 ;; a single shared byte stream that doubles as the program's stdin (see
-;; wasm-shell/ide.js, wasm_shell_io.c). The stock REPL reads ONE datum,
+;; apps/ide/public/ide.js, wasm_shell_io.c). The stock REPL reads ONE datum,
 ;; then evaluates it -- so if you submit `(foo)(foo)` and `foo` calls
 ;; `(read-line)`, the first `foo`'s read-line swallows the trailing
 ;; `(foo)` as its input instead of it being evaluated as an expression.

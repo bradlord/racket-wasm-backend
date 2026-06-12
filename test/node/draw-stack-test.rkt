@@ -13,9 +13,9 @@
 ;;   - A real Cairo drawing operation runs end-to-end: image surface
 ;;     allocation, paint, primitives, surface_get_data.
 ;;
-;; Run from the build dir:
-;;   cd racket/src/build/cs/c/wasm
-;;   node scheme.js -u .../draw-stack-test.rkt
+;; Run from the clone's build dir:
+;;   cd .work/racket/racket/src/build/cs/c/wasm
+;;   node scheme.js -u .../test/node/draw-stack-test.rkt
 ;;
 ;; (Pipe via stdin if you don't have file access into MEMFS yet:
 ;;    cat draw-stack-test.rkt | tail -n +2 | node scheme.js

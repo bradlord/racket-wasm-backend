@@ -58,6 +58,17 @@
   (list "CLAUDE.md" "build-wasm.md" "buildit.sh" "rebuild-binary-catalog.sh"
         "racket/src/build-wasm-binary-pkgs.rkt"))
 
+(define dropped-from-delta
+  ;; Files deliberately removed from the delta (any git status). The .gitignore
+  ;; tweaks were cosmetic only -- the clone is never committed, and sync's
+  ;; `git clean -fdx` removes ignored files regardless. The browser-shell
+  ;; installer copied wasm-shell files that have since moved repo-side
+  ;; (runtime-glue/ + apps/ide/public/), so it was dead code.
+  (list "racket/src/.gitignore"
+        "racket/src/ChezScheme/.gitignore"
+        "racket/src/rktio/.gitignore"
+        "racket/src/ChezScheme/install-wasm-browser-shell.rkt"))
+
 ;; The fork ships web-repl under racket/collects; this repo instead manages it as
 ;; a *package* (overlay-local/pkgs/web-repl/, with an info.rkt depending on
 ;; pict-lib) so a clean cross build compiles it after its package deps. Skip the
@@ -65,6 +76,17 @@
 ;; info.rkt and build-wasm.md "web-repl".
 (define (repo-managed-as-package? path)
   (regexp-match? #rx"^racket/collects/web-repl/" path))
+
+;; Files that used to ride along in the overlay but now live repo-side, outside
+;; the clone. All of the fork's wasm-shell/: the page surface + host glue moved
+;; in the runtime/surface decoupling (apps/ide/public/ + runtime-glue/), the
+;; emcc link-JS glue moved to runtime-glue/ (build.zuo reads it via the
+;; RUNTIME_GLUE_DIR make var), and the test/bench scripts moved to test/node/
+;; (they run against the built clone from outside; see test/node/run-tests.sh's
+;; RACKET_WASM_CLONE). Likewise the native-dep recipe sources: repo-root
+;; wasm-deps/, read by build.zuo's `wasm-deps` target via WASM_DEPS_SRC_DIR.
+(define (moved-repo-side? path)
+  (regexp-match? #rx"^(wasm-shell/|racket/src/cs/c/wasm-deps/)" path))
 
 ;; --- main ---------------------------------------------------------------
 
@@ -125,6 +147,10 @@
     (cond
       [(member path group-c-native)
        (set! skipped (cons (list path "group-c-native") skipped))]
+      [(member path dropped-from-delta)
+       (set! skipped (cons (list path "dropped") skipped))]
+      [(moved-repo-side? path)
+       (set! skipped (cons (list path "moved-repo-side") skipped))]
       [(repo-managed-as-package? path)
        (set! skipped (cons (list path "web-repl-package") skipped))]
       [(string=? status "A")

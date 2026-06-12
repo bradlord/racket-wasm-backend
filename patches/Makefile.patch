@@ -1,8 +1,8 @@
 diff --git a/Makefile b/Makefile
-index c10c9e2..850a79b 100644
+index c10c9e2..8997629 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -67,6 +67,34 @@ CONFIGURE_ARGS =
+@@ -67,6 +67,48 @@ CONFIGURE_ARGS =
  # replaced with the build subdirectory where `configure` is run
  CONFIGURE_ARGS_qq =
  
@@ -13,9 +13,16 @@ index c10c9e2..850a79b 100644
 +
 +# WebAssembly: additional native C library dependencies to build and
 +# link for `make wasm` (libffi is always built). Space-separated recipe
-+# names from racket/src/cs/c/wasm-deps/deps/, or the group alias `draw`
++# names from the recipe-source dir's deps/, or the group alias `draw`
 +# (the full cairo/pango stack that racket/draw needs). Empty = libffi only.
 +WASM_DEPS =
++
++# WebAssembly: directory holding the native-dep recipe sources
++# (build-deps.sh, deps.sh, symgen.sh, deps/*.sh). Required for
++# `make wasm`; the racket-wasm orchestrator sets it to its repo-side
++# wasm-deps/ dir (absolute path, no spaces -- BUILD_VARS re-expands
++# through the shell).
++WASM_DEPS_SRC_DIR =
 +
 +# WebAssembly: local (path) packages to `raco pkg install --copy` into
 +# share/pkgs for `make wasm`, in addition to the catalog PKGS. Space-separated
@@ -34,24 +41,33 @@ index c10c9e2..850a79b 100644
 +LINK_EXTERN_PRE_JS =
 +APP_TARGET =
 +
++# WebAssembly: directory holding the built-in emcc link JS glue
++# (idbfs-init.js, shell-tty.js, node-tty.js, node-locate-file.js,
++# node-load-share.js). Required for `make wasm`; the racket-wasm
++# orchestrator sets it to its repo-side runtime-glue/ dir (absolute
++# path, no spaces -- BUILD_VARS re-expands through the shell).
++RUNTIME_GLUE_DIR =
++
  # ------------------------------------------------------------
  # Cross-build support
  
-@@ -185,6 +213,13 @@ BUILD_VARS = MAKE=$(MAKE) \
+@@ -185,6 +227,15 @@ BUILD_VARS = MAKE=$(MAKE) \
               CPUS="$(CPUS)" \
               CONFIGURE_ARGS_qq='$(CONFIGURE_ARGS_qq)' \
               CONFIGURE_ARGS="$(CONFIGURE_ARGS)" \
 +             CONFIGURE_WRAPPER="$(CONFIGURE_WRAPPER)" \
 +             WASM_DEPS="$(WASM_DEPS)" \
++             WASM_DEPS_SRC_DIR="$(WASM_DEPS_SRC_DIR)" \
 +             LOCAL_PKGS="$(LOCAL_PKGS)" \
 +             LINK_PRE_JS="$(LINK_PRE_JS)" \
 +             LINK_POST_JS="$(LINK_POST_JS)" \
 +             LINK_EXTERN_PRE_JS="$(LINK_EXTERN_PRE_JS)" \
 +             APP_TARGET="$(APP_TARGET)" \
++             RUNTIME_GLUE_DIR="$(RUNTIME_GLUE_DIR)" \
               CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
               RACKET="$(RACKET)" \
               PLAIN_RACKET="$(PLAIN_RACKET)" \
-@@ -223,6 +258,30 @@ cs: $(ZUO)
+@@ -223,6 +274,30 @@ cs: $(ZUO)
  bc: $(ZUO)
  	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
  

@@ -21,8 +21,16 @@ its top.
   `extract-from-fork.rkt` regenerates `patches/`+`overlay/` from the fork.
 - `patches/` — one `git diff` per modified upstream file, mirroring its path.
   Apply with `git apply` onto the pinned clone.
-- `overlay/` — additive files copied verbatim into the clone (incl. `wasm-shell/`
-  at the clone root).
+- `overlay/` — additive files copied verbatim into the clone.
+- `runtime-glue/` — repo-side runtime glue, NOT copied into the clone: the emcc
+  link-JS (idbfs-init/shell-tty/node-*.js, passed to the link via the
+  `RUNTIME_GLUE_DIR` make var) + host-side glue (shell-worker.js, serve.rkt).
+  The link-JS subset is a **build-key input** (cache.rkt `link-glue-names`).
+- `wasm-deps/` — native-dependency recipe sources (build-deps.sh + deps/*.sh),
+  run by the clone's `wasm-deps` zuo target via `WASM_DEPS_SRC_DIR`. Also a
+  **build-key input**; only the outputs land in the clone.
+- `test/node/` — WASM test/bench scripts (run-tests.sh, perf-bench.rktl);
+  they run against the built clone (`RACKET_WASM_CLONE` overrides `.work/racket`).
 - `upstream.lock` — pinned upstream URL + SHA the delta applies onto.
 - `extract-manifest.rktd` — what the extractor classified as patch vs overlay
   vs skipped.

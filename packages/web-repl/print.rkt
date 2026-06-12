@@ -4,7 +4,7 @@
 ;; body or typed at the REPL) that evaluates to a bitmap% shows up as an
 ;; inline <canvas> via display-bm, instead of printing as
 ;; #<object:bitmap%>. The IDE installs this as a prelude before running
-;; the user's program (see wasm-shell/ide.js).
+;; the user's program (see apps/ide/public/ide.js).
 ;;
 ;; Duck-typed on purpose: "a bitmap" means "an object that answers
 ;; get-argb-pixels" -- exactly what display-bm needs. So this needs only

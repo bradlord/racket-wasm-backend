@@ -1,8 +1,8 @@
 diff --git a/racket/src/cs/c/build.zuo b/racket/src/cs/c/build.zuo
-index b4e92ee..b85492a 100644
+index b4e92ee..fb294f4 100644
 --- a/racket/src/cs/c/build.zuo
 +++ b/racket/src/cs/c/build.zuo
-@@ -54,6 +54,31 @@
+@@ -54,6 +54,35 @@
    (define boot-files (list petite-chunked.boot scheme-chunked.boot racket-chunked.boot))
  
    (define cross? (equal? (lookup 'CROSS_MODE) "cross"))
@@ -29,12 +29,16 @@ index b4e92ee..b85492a 100644
 +  ;; flags), both consumed by the `wasm` link below.
 +  (define wasm-deps-spec (lookup 'WASM_DEPS ""))
 +  (define wasm-deps-dir (at-dir "wasm-deps"))
-+  (define wasm-deps-driver (at-source "wasm-deps" "build-deps.sh"))
++  ;; The recipe sources (build-deps.sh + deps/) live outside the tree, in
++  ;; the racket-wasm orchestrator's wasm-deps/ dir, passed via the
++  ;; WASM_DEPS_SRC_DIR make var. Only the OUTPUT dir (`wasm-deps-dir`) is
++  ;; in the build tree. Validated lazily in the `wasm-deps` target.
++  (define wasm-deps-src-dir (lookup 'WASM_DEPS_SRC_DIR ""))
 +  (define wasm-deps.inc (build-path wasm-deps-dir "wasm_deps.inc"))
  
    (define scheme.exe+args
      (cond
-@@ -115,7 +140,26 @@
+@@ -115,7 +144,26 @@
                 'enablelibffi (lookup 'SCHEME_LIBFFI "no")
                 'disablecurses (lookup 'DISABLE_CURSES "no")
                 'disableiconv (lookup 'DISABLE_ICONV "no")
@@ -62,7 +66,7 @@ index b4e92ee..b85492a 100644
  
    (define (add-scheme-boot-config config)
      (if (equal? (lookup 'ENABLE_EXTRA_CHECKS "no") "yes")
-@@ -174,6 +218,25 @@
+@@ -174,6 +222,25 @@
      (map .c->.o pbchunk-srcs))
  
    (define boot.o (at-dir (.c->.o "boot.c")))
@@ -88,7 +92,7 @@ index b4e92ee..b85492a 100644
    (define boot-objs
      (append (list boot.o)
              (list (at-dir CS m "boot" m (.a "kernel")))
-@@ -407,10 +470,14 @@
+@@ -407,10 +474,14 @@
       `([:target build ()
                  ,(lambda (token)
                     (build/dep (find-target "build-racketcs" the-targets) token)
@@ -107,7 +111,7 @@ index b4e92ee..b85492a 100644
                  :recur]
  
         [:target build-and-prepare ()
-@@ -444,10 +511,21 @@
+@@ -444,10 +515,21 @@
                                                    'vars (hash 'BOOTFILE_RACKET (lookup 'RACKET)))))
                          (build (find-target "scheme" host-targets-at) token)]))
                     (build/dep (find-target "bootfiles" the-targets) token)
@@ -131,7 +135,7 @@ index b4e92ee..b85492a 100644
                  :recur]
  
         ,(if windows?
-@@ -672,13 +750,31 @@
+@@ -672,13 +754,31 @@
                           ,(at-source "../../ChezScheme/c/self-exe.c")
                           ,(at-source "path_replace.inc")
                           ,(at-source "boot.h")
@@ -164,7 +168,7 @@ index b4e92ee..b85492a 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +787,273 @@
+@@ -691,6 +791,289 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -228,10 +232,15 @@ index b4e92ee..b85492a 100644
 +                ,(lambda (token)
 +                   (unless emscripten?
 +                     (error "wasm-deps target requires an Emscripten cross build (configure with --host=...-emscripten)"))
++                   (when (equal? wasm-deps-src-dir "")
++                     (error (~a "wasm-deps: WASM_DEPS_SRC_DIR is not set;"
++                                " the racket-wasm orchestrator sets it --"
++                                " for a manual `make wasm` pass"
++                                " WASM_DEPS_SRC_DIR=<racket-wasm>/wasm-deps")))
 +                   (mkdir-p wasm-deps-dir)
 +                   (shell/wait
 +                    (map string->shell
-+                         (list wasm-deps-driver
++                         (list (build-path wasm-deps-src-dir "build-deps.sh")
 +                               "--src" (at-source "../..")
 +                               "--out" wasm-deps-dir
 +                               "--deps" wasm-deps-spec))))
@@ -322,7 +331,18 @@ index b4e92ee..b85492a 100644
 +                             (preload racket-chunked.boot "racket.boot")
 +                             (preload (at-source "../../../collects") "/collects")
 +                             (preload (at-source "../../../etc") "/etc")))
-+                   (define wasm-shell (at-source "../../../../wasm-shell"))
++                   ;; Built-in link JS glue (idbfs-init.js, shell-tty.js,
++                   ;; node-*.js) lives outside the tree, in the racket-wasm
++                   ;; orchestrator's runtime-glue/ dir, passed via the
++                   ;; RUNTIME_GLUE_DIR make var.
++                   (define runtime-glue
++                     (let ([dir (lookup 'RUNTIME_GLUE_DIR "")])
++                       (when (equal? dir "")
++                         (error (~a "wasm link: RUNTIME_GLUE_DIR is not set;"
++                                    " the racket-wasm orchestrator sets it --"
++                                    " for a manual `make wasm` pass"
++                                    " RUNTIME_GLUE_DIR=<racket-wasm>/runtime-glue")))
++                       dir))
 +                   ;; App-supplied emcc link JS (build/app.rkt manifest fields
 +                   ;; 'pre-js/'post-js/'extern-pre-js), passed as space-joined
 +                   ;; absolute paths in the LINK_*_JS make vars and shell-split
@@ -353,15 +373,15 @@ index b4e92ee..b85492a 100644
 +                      ;; process CWD, so `node path/to/scheme.js` works from
 +                      ;; anywhere. Must be extern-pre-js -- the --preload-file
 +                      ;; loader runs at parse time, before ordinary --pre-js.
-+                      (list "--extern-pre-js" (build-path wasm-shell "node-locate-file.js")
-+                            "--post-js"       (build-path wasm-shell "node-tty.js")
++                      (list "--extern-pre-js" (build-path runtime-glue "node-locate-file.js")
++                            "--post-js"       (build-path runtime-glue "node-tty.js")
 +                            ;; node-load-share.js (pre-js): at runtime load the
 +                            ;; separate package data file (share.data via
 +                            ;; share.data.js) by indirect-eval, the node analog
 +                            ;; of the worker's importScripts. Like the browser,
 +                            ;; node ships packages OUT of the link so a package
 +                            ;; change needn't relink scheme.*.
-+                            "--pre-js"        (build-path wasm-shell "node-load-share.js"))
++                            "--pre-js"        (build-path runtime-glue "node-load-share.js"))
 +                      ;; App link JS for the node surface only.
 +                      (if (equal? app-target "node") app-link-args (list))
 +                      ;; Core preloads only (boot/collects/etc); packages load
@@ -392,8 +412,8 @@ index b4e92ee..b85492a 100644
 +                      common-objs
 +                      (list wasm_shell_io.o)
 +                      dep-linkflags
-+                      (list "--pre-js"  (build-path wasm-shell "idbfs-init.js")
-+                            "--post-js" (build-path wasm-shell "shell-tty.js"))
++                      (list "--pre-js"  (build-path runtime-glue "idbfs-init.js")
++                            "--post-js" (build-path runtime-glue "shell-tty.js"))
 +                      ;; App link JS for the browser surface only.
 +                      (if (equal? app-target "browser") app-link-args (list))
 +                      ;; Core preloads only: the package tree ships as a
@@ -438,7 +458,7 @@ index b4e92ee..b85492a 100644
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                  ,(lambda (path token)
                     (scheme "--script" (at-source "convert-to-boot.ss")
-@@ -765,7 +1128,11 @@
+@@ -765,7 +1148,11 @@
                                   token))])]
             [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                  (not (equal? (lookup 'RACKET) "")))
@@ -451,7 +471,7 @@ index b4e92ee..b85492a 100644
              (when xpatch?
                (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
              `([:target bootfiles ()
-@@ -878,7 +1245,19 @@
+@@ -878,7 +1265,19 @@
                  ,(lambda (token)
                     (install #f)
                     (setup))]
@@ -472,7 +492,7 @@ index b4e92ee..b85492a 100644
         [:target plain-install ()
                  ,(lambda (token)
                     (install #f))]
-@@ -1092,32 +1471,39 @@
+@@ -1092,32 +1491,39 @@
                   (list petite-v.boot scheme-v.boot racket-v.boot)
                   (list "petite.boot" "scheme.boot" "racket.boot")))])
  
@@ -535,7 +555,7 @@ index b4e92ee..b85492a 100644
      (call-with-dest-racket
       (lambda (bindir dest-racket)
         (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
-@@ -1125,13 +1511,37 @@
+@@ -1125,13 +1531,37 @@
                                     (hash-set config 'copytree-prepared-setup-files #t)
                                     config))
         (maybe-copytree copytree-config dest-racket copytree-racket at-dir)

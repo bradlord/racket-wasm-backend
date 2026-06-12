@@ -63,11 +63,21 @@
                     (string-append "RACKET=" racket)
                     (string-append "PKGS=" pkgs)
                     (string-append "WASM_DEPS=" wasm-deps)
+                    ;; The native-dep recipe sources live repo-side; cs/c/
+                    ;; build.zuo's `wasm-deps` target runs them from here.
+                    ;; Hashed into the build key (cache.rkt wasm-deps-src-dir).
+                    (string-append "WASM_DEPS_SRC_DIR="
+                                   (path->string (path->complete-path wasm-deps-src-dir)))
                     (string-append "LOCAL_PKGS=" local-pkgs)
                     (string-append "LINK_PRE_JS=" (join-paths pre-js))
                     (string-append "LINK_POST_JS=" (join-paths post-js))
                     (string-append "LINK_EXTERN_PRE_JS=" (join-paths extern-pre-js))
                     (string-append "APP_TARGET=" (symbol->string (normalize-target app-target)))
+                    ;; The built-in link JS glue (idbfs-init/shell-tty/node-*.js)
+                    ;; lives repo-side; cs/c/build.zuo's `wasm` link reads it from
+                    ;; here. Hashed into the build key (cache.rkt link-glue-names).
+                    (string-append "RUNTIME_GLUE_DIR="
+                                   (path->string (path->complete-path runtime-glue-dir)))
                     (string-append "SETUP_MACHINE_FLAGS=" setup-flags))))
 
 ;; The runtime set (link products + the separate package payload share.data*)

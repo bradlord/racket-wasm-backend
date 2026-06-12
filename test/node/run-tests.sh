@@ -13,15 +13,19 @@
 #   ./run-tests.sh              # default slice
 #   ./run-tests.sh list hash    # specific tests
 #
+# Runs against the orchestrator's clone (.work/racket) by default; point
+# RACKET_WASM_CLONE at a different built tree to override.
+#
 # Exits 0 iff every test that returned a summary passed.
 
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo="$(cd "$here/.." && pwd)"
+repo_root="$(cd "$here/../.." && pwd)"
+clone="${RACKET_WASM_CLONE:-$repo_root/.work/racket}"
 
-scheme_js="$repo/racket/src/build/cs/c/wasm/scheme.js"
-tests_dir="$repo/pkgs/racket-test-core/tests/racket"
+scheme_js="$clone/racket/src/build/cs/c/wasm/scheme.js"
+tests_dir="$clone/pkgs/racket-test-core/tests/racket"
 
 [ -f "$scheme_js" ]                      || { echo "scheme.js not built: $scheme_js" >&2; exit 1; }
 [ -f "$tests_dir/testing.rktl" ]         || { echo "test harness missing: $tests_dir/testing.rktl" >&2; exit 1; }

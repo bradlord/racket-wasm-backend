@@ -1,7 +1,8 @@
 #lang racket/base
 ;; A content-complete runtime cache, keyed by everything that determines the
 ;; runtime binary + package payload: the pinned upstream SHA, a hash of the delta
-;; (patches/ + overlay/ + overlay-local/), the native-dep selection (WASM_DEPS),
+;; (patches/ + overlay/ + overlay-local/ + the repo-side link glue and wasm-deps
+;; recipe sources), the native-dep selection (WASM_DEPS),
 ;; and the package set (PKGS). Two app configs that differ in any of these get
 ;; separate cache entries and never clobber each other in the one shared clone --
 ;; the Phase 3 "build isolation" win. A config that has already been built is
@@ -44,6 +45,21 @@
         string<?))
      (sha1 (open-input-string (string-join lines "\n")))]))
 
+;; sha1 over a fixed set of named files in a dir: sorted "<name>:<file-sha1>"
+;; lines (missing file -> ""). Used for the link-glue subset of runtime-glue/ --
+;; only the files the emcc link bakes in feed the key, so editing the host-side
+;; glue (shell-worker.js, serve.rkt) never forces a relink.
+(define (named-files-hash dir names)
+  (define lines
+    (sort
+     (for/list ([n (in-list names)])
+       (define p (build-path dir n))
+       (string-append n ":" (if (file-exists? p)
+                                (call-with-input-file p sha1)
+                                "")))
+     string<?))
+  (sha1 (open-input-string (string-join lines "\n"))))
+
 ;; The *components* that determine a (pkgs, wasm-deps, local-pkgs[, link-js])
 ;; build, as an inspectable hash. This is the single source of truth for the
 ;; build-key -- `key-from-components` hashes these into the key, and the
@@ -51,7 +67,8 @@
 ;; component-by-component (build/metadata.rkt). pkgs/wasm-deps are the make-var
 ;; strings ("" = none).
 ;;   'upstream-sha 'upstream-url  the pinned upstream the delta applies onto.
-;;   'delta-hash   sha1 of patches/ + overlay/ + overlay-local/ contents.
+;;   'delta-hash   sha1 of patches/ + overlay/ + overlay-local/ contents, plus
+;;                 the repo-side link glue (link-glue-names) + wasm-deps recipes.
 ;;   'wasm-deps 'pkgs  the make-var strings.
 ;;   'local-pkgs   a list of (basename . content-hash) -- both *which* packages
 ;;                 and *what's in them* feed the key (so editing one rebuilds).
@@ -61,11 +78,18 @@
 (define (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
                              #:local-pkgs [local-pkgs '()]
                              #:link-js [link-js '()] #:target [target 'browser])
+  ;; The delta is everything that shapes the runtime besides the upstream pin:
+  ;; patches/ + overlay/ + overlay-local/, plus the former-overlay content that
+  ;; now lives repo-side -- the built-in link-JS glue (only the link-input
+  ;; subset of runtime-glue/; see config.rkt link-glue-names) and the wasm-deps
+  ;; recipe sources.
   (define delta
     (sha1 (open-input-string
            (string-append (dir-content-hash patches-dir) "|"
                           (dir-content-hash overlay-dir) "|"
-                          (dir-content-hash overlay-local-dir)))))
+                          (dir-content-hash overlay-local-dir) "|"
+                          (named-files-hash runtime-glue-dir link-glue-names) "|"
+                          (dir-content-hash wasm-deps-src-dir)))))
   ;; Identify each local package by its basename + a hash of its contents.
   (define locals
     (for/list ([p (in-list local-pkgs)])
