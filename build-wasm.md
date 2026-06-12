@@ -110,86 +110,84 @@ Open:
   varies run-to-run; surfaces in any "collection not found" error's
   search-path dump). `config_dir` is a plain single string and needs no
   terminator. Fixed 2026-06-11; requires a runtime rebuild to take effect.
-- **TCP/DNS hangs instead of erroring** (`tcp-listen`, `tcp-connect`,
-  resolving any hostname): rktio runs `getaddrinfo` on a background
-  **pthread** and the calling Racket thread blocks polling a pipe fd that
-  the worker writes when the lookup finishes. The WASM runtime is single-
-  threaded (Chez pb runs on the main thread; the integrated CS build's
-  `build/cs/c/rktio/rktio_config.h` still defines `RKTIO_USE_PTHREADS`
-  even though the standalone §1 rktio configure passes `--disable-pthread`),
-  so that worker never runs and the main thread spins in rktio's blocking
-  poll without ever yielding to the JS event loop — an unbreakable hang.
-  Fixed by gating the four async-`getaddrinfo`-in-thread `#if` blocks in
-  `racket/src/rktio/rktio_network.c` on `&& !defined(__EMSCRIPTEN__)`, so
-  Emscripten compiles the synchronous `#else` fallback (`do_getaddrinfo`
-  runs inline; the lookup reports ready immediately). The lookup now
-  returns at once — succeeding for numeric/local addresses or raising a
-  normal `exn:fail:network` — and `tcp-listen` proceeds to
-  `socket`/`bind`/`listen` rather than deadlocking. New delta patch
-  `patches/racket/src/rktio/rktio_network.c.patch`; requires a runtime
-  rebuild to take effect. Verified post-rebuild: `(tcp-listen 12345)`
-  returns instantly with `exn:fail:network` ("address-resolution error
-  … gai_err=-2") instead of hanging.
+- **TCP/DNS hung instead of erroring** (`tcp-listen`, `tcp-connect`, any
+  hostname lookup) — **fixed by `C1` alone.** The bug: rktio runs
+  `getaddrinfo` on a background **pthread** and the calling Racket thread
+  blocks polling a pipe the worker writes when done. The WASM runtime is
+  single-threaded (Chez pb on the main thread), so on Emscripten the worker
+  can't make progress while the main thread is blocked (it must yield to the
+  JS event loop for the worker to be created and for its main-thread-proxied
+  calls to complete) → unbreakable deadlock. rktio has **five** such
+  helper-thread sites (`getaddrinfo`, the SIGCHLD signal worker in
+  `rktio_process.c`, the background-sleep thread in `rktio_sleep.c`, the
+  pending-`open` thread in `rktio_file.c`) — all transitively gated by
+  `RKTIO_USE_PTHREADS` (`rktio_private.h` derives `SUPPORT_BACKGROUND_SLEEP_THREAD`
+  and `RKTIO_USE_PENDING_OPEN` from it).
 
-  **Why not `--disable-pthread` instead?** It looks like the deeper fix
-  (it's what flips off `RKTIO_USE_PTHREADS`), but it is *not viable* here.
-  `--enable-pthread`/`-pthread` are not an rktio-local choice: rktio's
-  sub-configure inherits them from the CS-level `cs/c/configure`, which
-  defaults `enable_pthread=yes` for this target. That same flag sets
-  `thread_prefix="t"`, which is what makes the machine type **`tpb32l`**
-  (threaded pb32) rather than `pb32l`. The *entire* port is built on
-  tpb32l: `build/config.rkt` hardcodes `target-machine "tpb32l"`, and the
-  boot images, `compile-xpatch.tpb32l`/`library-xpatch.tpb32l`, and the
-  cross-SDK/cross-root are all tpb32l-keyed. `cs/c/configure` also adds
-  `-pthread` to `CFLAGS` for the Emscripten case deliberately (its comment
-  ties it to avoiding pb `call_indirect` "function signature mismatch"
-  crashes — see the tpb32l rationale in Status). So `--disable-pthread`
-  would retarget the build to pb32l and invalidate every cached
-  tpb32l artifact, not merely change DNS. There is no knob to disable
-  pthreads for rktio alone. The only other `RKTIO_USE_PTHREADS` consumer,
-  `rktio_process.c`, just takes same-thread mutexes around child-status
-  bookkeeping (no cross-thread *blocking* like the DNS pipe) and gates
-  subprocess spawning that Emscripten can't do anyway, so it neither
-  hangs nor benefits from disabling. The narrow `__EMSCRIPTEN__` guard in
-  `rktio_network.c` is therefore the correct fix.
+  **C1 — disable rktio's own pthreads (keep `tpb32l`).** `setup-rktio`
+  (`lib.zuo`) appends `--disable-pthread` to the rktio sub-configure args when
+  `EMSCRIPTEN=t` (last wins over the CS-propagated `--enable-pthread`), so
+  `RKTIO_USE_PTHREADS` is **undefined** for the wasm `librktio` only. That
+  collapses all five thread-spawn sites to their synchronous fallbacks at once
+  — `getaddrinfo` then runs inline and the real Emscripten shim returns a
+  resolution error immediately (it does *not* block), so `tcp-listen` /
+  `tcp-connect` raise a clean `exn:fail:network` ("address-resolution error …
+  gai_err=-2"). Safe because rktio's pthread locks (`ghbn_lock`,
+  `child_status_lock`) exist for thread-safety under concurrent callers
+  (multiple Racket *places*), and single-threaded WASM never has any.
 
-  **Can the pthread itself be made to work (so any thread-spawning code is
-  safe), rather than guarded per-subsystem?** Investigated empirically; the
-  answer is surface-dependent. The deadlock has two parts: emscripten can't
-  *create* the worker (an empty pool needs the blocked thread's event loop)
-  and, even given a worker, the helper's result delivery is *proxied back to
-  the blocked thread*. Findings, each rebuilt and tested:
-  - `-sPTHREAD_POOL_SIZE=N` (pre-warm workers) alone: **insufficient.**
-    Worker creation stops being the bottleneck (`pthreadPoolReady` present),
-    but `tcp-listen` still hangs on node — the helper's pipe write / the JS
-    `getaddrinfo` shim is proxied to the blocked main thread (the runtime has
-    ~56 `proxyToMainThread` sites).
-  - `-sPROXY_TO_PTHREAD` (run Racket off the main thread so the real main
-    thread services the proxy queue) **+ pool: works on node** — the threaded
-    `getaddrinfo` path completes (`exn:fail:network`), REPL intact, boot
-    ~1.2 s. **But it does NOT work on the browser surface.** The browser
-    already runs Racket inside `shell-worker.js`, so PROXY nests a worker; the
-    threaded `tcp-listen` still hangs there (addition and normal Racket work
-    fine, so the runtime is healthy — it's the spawn-then-block helper that
-    deadlocks in the nested-worker + SAB topology). PROXY is therefore an
-    asymmetric, node-only capability with real cost (an always-on proxy worker
-    + N pooled workers at boot) and was **not adopted**; the synchronous guard
-    is uniform across both surfaces.
-- **The browser surface hangs in `tcp-listen` even WITH the DNS guard** — a
-  *second*, distinct bug from the threaded-DNS one above. With the guard,
-  `getaddrinfo` is synchronous (no thread), and on node `tcp-listen` errors
-  instantly. On the browser it still hangs: the same call (even with a numeric
-  host like `"127.0.0.1"`, which skips real DNS) blocks right after entry. So
-  the synchronous emscripten `getaddrinfo`/socket JS shims themselves block
-  when called from the `shell-worker` (worker) context — unrelated to the
-  pthread the guard removed. Browsers can't do raw TCP regardless; the proper
-  fix is an Emscripten-specific rktio network path that **fails fast**
-  (e.g. `ENOTSUP`) instead of calling the blocking JS shims, so browser
-  `tcp-listen`/`tcp-connect` raise a clean `exn:fail:network` rather than
-  hanging. Not yet done. (Verified with a headless Playwright harness driving
-  the IDE surface under `serve.rkt`'s COOP/COEP headers; `(+ 4 2)` and
-  `(require racket/tcp)` both succeed there, isolating the hang to the socket
-  call.)
+  Delta: `patches/racket/src/lib.zuo.patch` (one flag, no rktio source
+  patches). **Verified post-rebuild on both surfaces** (fresh `dist/`):
+  node + browser `tcp-listen` and `tcp-connect` (hostname and numeric) all
+  raise `exn:fail:network` with no hang; `(+ 4 2)` and `(require racket/tcp)`
+  fine on both. Requires a runtime rebuild (and a clean rktio dir, so
+  `--disable-pthread` regenerates `rktio_config.h`).
+
+  **`E` (a fail-fast `do_getaddrinfo → EAI_FAIL` under `__EMSCRIPTEN__`) was
+  tried and found UNNECESSARY.** The hypothesis was that the *synchronous*
+  Emscripten `getaddrinfo` shim would itself block in the `shell-worker`
+  (worker) context even after C1 removed the helper thread. A clean C1-only
+  rebuild (served from a fresh `dist/`) disproved it: the real shim returns
+  `gai_err=-2` instantly for listen, hostname-connect, and numeric-connect on
+  the browser. The earlier "browser needs E / the synchronous shim blocks"
+  belief was a **stale-asset measurement artifact** (see testing gotcha
+  below). E is not in the delta.
+
+  **Correction to an earlier note in this repo's history:** `--disable-pthread`
+  was at one point dismissed as "not viable, it would flip `tpb32l`→`pb32l`."
+  That conflated *two* `enable_pthread` knobs. The CS-level one
+  (`cs/c/configure`) does set `thread_prefix="t"` → the `tpb32l` machine type,
+  and flipping *that* is the risky path (C2). But `RKTIO_USE_PTHREADS` is
+  rktio's **own** independent flag (`rktio/configure.ac`), only *incidentally*
+  forced to match CS by the propagation at `cs/c/configure:6326`. Overriding
+  that for rktio alone (C1) disables rktio threading while Chez stays threaded
+  — no machine-type change, no source patches per rktio file. The first fix
+  here was a narrower `__EMSCRIPTEN__` guard on just the `getaddrinfo` thread
+  in `rktio_network.c`; it was **incomplete** (left the other four sites live)
+  and was superseded by C1.
+
+  **Alternative considered and rejected — make pthreads actually work
+  (`-sPROXY_TO_PTHREAD`).** Run Racket off the main thread so the real main
+  thread services the proxy queue. A pre-warmed pool (`-sPTHREAD_POOL_SIZE`)
+  alone is insufficient (worker creation is fixed but the helper's calls are
+  still proxied to the blocked main thread; the runtime has ~56
+  `proxyToMainThread` sites). PROXY+pool worked on **node** (threaded
+  `getaddrinfo` completes, REPL intact, ~1.2 s boot) but its precondition
+  ("relocate off *the* main thread") doesn't hold on the browser, which
+  already runs Racket inside `shell-worker.js`. It's an asymmetric, node-only
+  capability with real boot cost (an always-on proxy worker + N pooled
+  workers), so it was not adopted; C1+E is uniform across both surfaces.
+
+  **Testing gotcha (cost real time):** `runtime-glue/serve.rkt` roots at
+  `(current-directory)`, so it must be launched **from `dist/`** (`cd dist &&
+  racket ../runtime-glue/serve.rkt 8123`). Launching it elsewhere, or leaving
+  stale `serve.rkt` instances from earlier runs holding the port, silently
+  serves an **old** `scheme-web.*` — the headless Playwright harness then tests
+  a stale runtime (tell them apart by the version-date in the boot banner, e.g.
+  `…-2026-06-12-…`). Some earlier browser-only conclusions in this history
+  (PROXY/guard "hangs on browser") were measured against such stale assets and
+  are unreliable; the C1+E result above was confirmed against a freshly served
+  `dist/` and by a manual browser run.
 - The browser shell boots much more slowly than node and downloads the
   larger (~26 MB wasm + ~87 MB data) assets; worth profiling/trimming
   there (compression, streaming, lazy `/collects`).

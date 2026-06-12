@@ -1,5 +1,5 @@
 diff --git a/racket/src/lib.zuo b/racket/src/lib.zuo
-index f6703190fd..22f2580095 100644
+index f670319..db625a5 100644
 --- a/racket/src/lib.zuo
 +++ b/racket/src/lib.zuo
 @@ -245,6 +245,11 @@
@@ -27,7 +27,26 @@ index f6703190fd..22f2580095 100644
  					 (hash 'dir dir))]))))
                   (hash 'quiet? #t
                         'co-outputs (cdr outputs))))
-@@ -335,6 +344,7 @@
+@@ -329,12 +338,25 @@
+       [else
+        (configured-targets-at (hash
+                                'configure (build-path rktio-src-dir "configure")
+-                               'configure-args (shell->strings (hash-ref config 'RKTIO_CONFIGURE_ARGS ""))
++                               ;; On Emscripten, force rktio's own pthreads OFF while leaving
++                               ;; Chez threaded (tpb32l). The single-threaded WASM runtime never
++                               ;; has concurrent callers, so rktio's locks are unnecessary -- and
++                               ;; every rktio helper-thread (getaddrinfo, background sleep, pending
++                               ;; open, SIGCHLD reaper) is a spawn-then-block that deadlocks under
++                               ;; Emscripten. All of them hang off RKTIO_USE_PTHREADS, so one flag
++                               ;; disables the lot. `--disable-pthread` appended last wins over the
++                               ;; CS-propagated `--enable-pthread`; it affects librktio only (the
++                               ;; host rktio configure is a separate invocation).
++                               'configure-args (let ([args (shell->strings (hash-ref config 'RKTIO_CONFIGURE_ARGS ""))])
++                                                 (if (equal? (hash-ref config 'EMSCRIPTEN "f") "t")
++                                                     (append args (list "--disable-pthread"))
++                                                     args))
+                                'inputs (list (build-path rktio-src-dir "Makefile.in")
+                                              (build-path rktio-src-dir "rktio_config.h.in"))
                                 'outputs (list (build-path rktio-dir "Makefile")
                                                rktio_config.h)
                                 'script (build-path rktio-src-dir "build.zuo")
@@ -35,7 +54,7 @@ index f6703190fd..22f2580095 100644
                                 'vars config))]))
    (define librktio.a (find-target (~a "librktio." (if msvc? "lib" (hash-ref config 'LTA "a"))) rktio-targets))
  
-@@ -456,6 +466,7 @@
+@@ -456,6 +478,7 @@
                       self-root-config-flags
                       pre-raco-args
                       args
