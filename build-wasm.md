@@ -306,7 +306,8 @@ runtime + glue, plus a different page surface, into a different output dir."
 It wraps `build-runtime` (`build/stages.rkt`), differing only in the output
 `dest` and the page `surface-dir`. An app dir carries an `app.rkt` manifest that
 `(provide app)` a hash of those fields
-(`'pkgs 'wasm-libs 'public 'local-pkgs 'target`);
+(`'pkgs 'wasm-libs 'public 'local-pkgs 'target`, plus optional `'pre-js`/
+`'post-js`/`'extern-pre-js` and `'hooks`, below);
 `read-app-manifest` normalizes it and `run-app-manifest` builds it.
 `racket build/main.rkt app <dir>` builds into `<dir>/dist` (override `--dest`).
 `examples/hello/` is the minimal example: a non-IDE page that seeds a `main.rkt`
@@ -321,7 +322,8 @@ whose `dist/` is `scheme.{js,wasm,data}`, run directly as a Racket REPL with
 (`cmd-build` -> `run-app-manifest ide-app-dir` -> `make-wasm-racket`). The IDE's
 package / native-dep / surface config lives in `apps/ide/app.rkt` (the single
 source of truth -- `build/config.rkt` no longer hardcodes a default package
-set), and its page is `apps/ide/public/{index.html,ide.js}`. To ship a different
+set), and its page is `apps/ide/public/index.html` plus a `dist/ide.js` generated
+by a post-build hook from `apps/ide/ide.js` + `apps/ide/examples/` (see below). To ship a different
 surface or dep set, write an app and `build` it -- the IDE has no privileged path.
 
 **Local app packages (`#:local-pkgs`).** Catalog packages come from `#:pkgs`
@@ -362,6 +364,27 @@ a pre-js file relinks), together with the target — meaning an app *with* link 
 keys separately per surface, while link-JS-free apps key exactly as before and a
 node/browser pair still shares one cache entry. Like `LOCAL_PKGS`, the paths pass
 through a make var that is shell-split downstream, so they must not contain spaces.
+
+**Build hooks (`'hooks`).** The manifest may carry a `'hooks` field: a hash
+mapping a hook-name symbol to a procedure the build calls at that point. The only
+point so far is **`'post-build`**, called by `run-app-manifest` *after*
+`make-wasm-racket` returns — i.e. once `dist/` is fully assembled (binaries +
+glue + the verbatim `public/` copy + payload). The hook receives a context hash
+`(hash 'dist <dist-dir> 'app-dir <app-dir> 'target 'browser|'node)` and is free to
+generate or transform files in `dist/`. It runs on **every** build, outside the
+runtime cache, so it always re-fires even on a cache hit (handy for codegen whose
+inputs aren't part of the build-key). `read-app-manifest` validates `'hooks` is a
+hash of procedures; the hash is named generically so more hook points can be added
+without reshaping the manifest. The field is ignored by `package`/`cross-sdk`
+(they assemble no surface). **The IDE uses this** (`apps/ide/build-examples.rkt`,
+wired in `apps/ide/app.rkt`): its example programs live one-per-file under
+`apps/ide/examples/` (`NN-name.rkt`/`.rhm` — the `NN-` prefix orders them and,
+stripped along with the extension and with dashes→spaces, names the dropdown
+entry), and the page driver source lives at `apps/ide/ide.js` with an
+`__EXAMPLES__` placeholder token. Both sit *outside* `public/` so
+`collect-outputs` doesn't ship them verbatim; the hook reads the examples, builds
+the `[{name, code}, …]` JSON, splices it in place of the token, and writes
+`dist/ide.js`.
 
 #### Runtime cache (build isolation)
 

@@ -92,7 +92,8 @@
 ;; against the app dir: 'pkgs / 'wasm-libs (symbol/string lists as-is),
 ;; 'local-pkgs (absolute paths), 'public (absolute path or #f), 'target
 ;; ('browser/'node, default browser), 'pre-js / 'post-js / 'extern-pre-js
-;; (absolute paths to app-supplied emcc link JS), 'dir. This is
+;; (absolute paths to app-supplied emcc link JS), 'hooks (a hash of build-hook
+;; procedures, see below), 'dir. This is
 ;; the single source of truth for an app's build config (used by
 ;; `run-app-manifest`), so the IDE's package/dep set lives in one place:
 ;; apps/ide/app.rkt.
@@ -119,6 +120,17 @@
   (define (resolve-list k)
     (define v (ref k '()))
     (map resolve (if (or (string? v) (path? v)) (list v) v)))
+  ;; Optional build hooks: a hash mapping a hook-name symbol to a procedure the
+  ;; build calls at that point. Currently the only point is 'post-build, called
+  ;; once dist/ is fully assembled with a context hash (see `run-app-manifest`),
+  ;; e.g. to generate extra files into dist/. The hash is named generically so
+  ;; more hook points can be added without reshaping the manifest.
+  (define hooks (ref 'hooks (hash)))
+  (unless (hash? hooks)
+    (error 'app "~a: `hooks` must be a hash of hook-name -> procedure, got: ~s" manifest hooks))
+  (for ([(k v) (in-hash hooks)])
+    (unless (procedure? v)
+      (error 'app "~a: hook `~a` must be a procedure, got: ~s" manifest k v)))
   (hash 'dir           dir
         'pkgs          (ref 'pkgs '())
         'wasm-libs     (ref 'wasm-libs '())
@@ -129,7 +141,8 @@
         ;; the app's target surface only (see build/stages.rkt make-wasm).
         'pre-js        (resolve-list 'pre-js)
         'post-js       (resolve-list 'post-js)
-        'extern-pre-js (resolve-list 'extern-pre-js)))
+        'extern-pre-js (resolve-list 'extern-pre-js)
+        'hooks         hooks))
 
 ;; Load an app manifest and build it. `dest` defaults to <app-dir>/dist;
 ;; scheme/racket/force pass through from the CLI.
@@ -140,8 +153,9 @@
                           #:runtime-pkg [runtime-pkg #f]
                           #:force? [force? #f])
   (define m (read-app-manifest app-dir))
+  (define out (or dest (build-path (hash-ref m 'dir) "dist")))
   (make-wasm-racket
-   #:dest          (or dest (build-path (hash-ref m 'dir) "dist"))
+   #:dest          out
    #:pkgs          (hash-ref m 'pkgs)
    #:wasm-libs     (hash-ref m 'wasm-libs)
    #:local-pkgs    (hash-ref m 'local-pkgs)
@@ -153,7 +167,15 @@
    #:scheme        scheme
    #:racket        racket
    #:runtime-pkg   runtime-pkg
-   #:force?        force?))
+   #:force?        force?)
+  ;; Post-build hook: dist/ is fully assembled now (make-wasm-racket is
+  ;; synchronous). Hand the hook a context hash so it can generate/transform
+  ;; files into dist/ -- e.g. the IDE merges its examples into ide.js here.
+  (define post-build (hash-ref (hash-ref m 'hooks) 'post-build #f))
+  (when post-build
+    (post-build (hash 'dist    (path->complete-path (->path out))
+                      'app-dir  (hash-ref m 'dir)
+                      'target   (hash-ref m 'target)))))
 
 ;; Load an app manifest and emit a distributable binary package (runtime set +
 ;; build-metadata + a .tar.gz) for its config into `dest` (default

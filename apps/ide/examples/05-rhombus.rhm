@@ -1,0 +1,6 @@
+#lang rhombus
+
+import:
+  pict open
+
+circle(~size: 20, ~fill: "red")
