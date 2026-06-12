@@ -141,7 +141,15 @@
                   "-MCR" (format "~a:~a" (path->string hostzo) (path->string xtgt))
                   "--cross-compiler" target-machine (path->string cc-dir)
                   "-l-" "raco" "pkg" "install"
-                  "--scope" "user" "--batch" "--no-docs" "--deps" "search-auto")
+                  ;; `--force` waives "conflicts with existing installed item":
+                  ;; for a user-scope install raco scans ALL available scopes for
+                  ;; additional-installs (man pages, launchers, foreign libs), so a
+                  ;; FULL host distribution shadows the cross-installed closure (e.g.
+                  ;; its gui-lib already owns gracket.1). We install into a disposable
+                  ;; addon and only harvest .zo, so those collisions are irrelevant.
+                  ;; `--force` ignores conflicts ONLY; `--deps search-auto` still
+                  ;; resolves the closure (that's the separate `--deps` knob).
+                  "--scope" "user" "--batch" "--no-docs" "--force" "--deps" "search-auto")
             src-args))
   (define logf (build-path work "install.log"))
   (define code
