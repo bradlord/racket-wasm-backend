@@ -6,16 +6,16 @@
   <title>Racket WASM IDE</title>
   <style>
     :root {
-      --bg: #0d1117;
-      --panel: #161b22;
-      --border: #2f3b4f;
-      --text: #e6edf3;
-      --muted: #9fb0c3;
-      --accent: #f59e0b;
-      --accent-2: #38bdf8;
-      --danger: #f87171;
-      --ok: #34d399;
-      --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      --bg: #f4f6fb;
+      --panel: #ffffff;
+      --border: #d6dde6;
+      --text: #1b2530;
+      --muted: #5c6b7a;
+      --accent: #d97706;
+      --accent-2: #0284c7;
+      --danger: #dc2626;
+      --ok: #059669;
+      --shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
       --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
       --sans: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
     }
@@ -25,9 +25,9 @@
       min-height: 100vh;
       color: var(--text);
       background:
-        radial-gradient(circle at top left, rgba(56, 189, 248, 0.14), transparent 34%),
-        radial-gradient(circle at top right, rgba(245, 158, 11, 0.18), transparent 28%),
-        linear-gradient(180deg, #0b1220 0%, var(--bg) 48%, #081018 100%);
+        radial-gradient(circle at top left, rgba(2, 132, 199, 0.10), transparent 34%),
+        radial-gradient(circle at top right, rgba(217, 119, 6, 0.12), transparent 28%),
+        linear-gradient(180deg, #ffffff 0%, var(--bg) 48%, #e8edf4 100%);
       font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif;
     }
     .page {
@@ -62,8 +62,8 @@
     }
     @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
     .panel {
-      background: rgba(22, 27, 34, 0.88);
-      border: 1px solid rgba(159, 176, 195, 0.16);
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(27, 37, 48, 0.10);
       border-radius: 20px;
       box-shadow: var(--shadow);
       backdrop-filter: blur(16px);
@@ -74,7 +74,7 @@
     }
     .panel-header {
       padding: 14px 16px;
-      border-bottom: 1px solid rgba(159, 176, 195, 0.12);
+      border-bottom: 1px solid rgba(27, 37, 48, 0.08);
       display: flex; justify-content: space-between; align-items: center; gap: 12px;
       font-family: var(--sans);
     }
@@ -83,49 +83,49 @@
     .toolbar-group { display: flex; gap: 8px; align-items: center; min-width: 0; }
     .button {
       appearance: none;
-      border: 1px solid rgba(159, 176, 195, 0.18);
+      border: 1px solid rgba(27, 37, 48, 0.14);
       border-radius: 999px;
-      background: linear-gradient(180deg, rgba(56, 189, 248, 0.18), rgba(56, 189, 248, 0.08));
+      background: linear-gradient(180deg, rgba(2, 132, 199, 0.16), rgba(2, 132, 199, 0.06));
       color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
       font-family: var(--sans);
       padding: 8px 14px;
       white-space: nowrap; flex: none;
       transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
     }
-    .button:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(56, 189, 248, 0.45); }
+    .button:hover:not(:disabled) { transform: translateY(-1px); border-color: rgba(2, 132, 199, 0.55); }
     .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
     .button--primary {
-      background: linear-gradient(180deg, rgba(245, 158, 11, 0.45), rgba(245, 158, 11, 0.2));
-      border-color: rgba(245, 158, 11, 0.55);
+      background: linear-gradient(180deg, rgba(217, 119, 6, 0.30), rgba(217, 119, 6, 0.12));
+      border-color: rgba(217, 119, 6, 0.55);
     }
     .button--danger {
-      background: linear-gradient(180deg, rgba(248, 113, 113, 0.32), rgba(248, 113, 113, 0.12));
-      border-color: rgba(248, 113, 113, 0.55);
+      background: linear-gradient(180deg, rgba(220, 38, 38, 0.22), rgba(220, 38, 38, 0.08));
+      border-color: rgba(220, 38, 38, 0.5);
     }
     .button--xl { font-size: 16px; padding: 12px 24px; }
     .select {
       appearance: none;
-      border: 1px solid rgba(159, 176, 195, 0.18);
+      border: 1px solid rgba(27, 37, 48, 0.14);
       border-radius: 999px;
-      background: rgba(56, 189, 248, 0.10);
+      background: rgba(2, 132, 199, 0.08);
       color: var(--text); cursor: pointer; font: inherit; font-weight: 600;
       font-family: var(--sans); font-size: 13px;
       padding: 8px 30px 8px 14px;
       flex: 1 1 auto; min-width: 7ch; max-width: 26ch;
       text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
       background-image:
-        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%239fb0c3' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%235c6b7a' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
       background-repeat: no-repeat;
       background-position: right 12px center;
       transition: border-color 160ms ease;
     }
-    .select:hover { border-color: rgba(56, 189, 248, 0.45); }
-    .select:focus { outline: none; border-color: rgba(56, 189, 248, 0.55); }
+    .select:hover { border-color: rgba(2, 132, 199, 0.45); }
+    .select:focus { outline: none; border-color: rgba(2, 132, 199, 0.55); }
     .select option { background: var(--panel); color: var(--text); }
     .chip {
       display: inline-flex; align-items: center; gap: 8px;
       padding: 6px 10px; border-radius: 999px;
-      background: rgba(255, 255, 255, 0.04); color: var(--muted); font-size: 12px;
+      background: rgba(27, 37, 48, 0.05); color: var(--muted); font-size: 12px;
       font-family: var(--sans);
     }
     .chip[data-state="ok"]    { color: var(--ok); }
@@ -135,7 +135,7 @@
     #editor, #output, #input {
       width: 100%;
       border: none;
-      background: rgba(7, 14, 23, 0.85);
+      background: rgba(247, 249, 252, 0.9);
       color: var(--text);
       font-family: var(--mono);
       font-size: 14px;
@@ -153,7 +153,7 @@
       overflow-x: hidden;
       white-space: pre-wrap;
       word-break: break-word;
-      background: linear-gradient(180deg, rgba(4, 10, 18, 0.9), rgba(7, 14, 23, 0.96));
+      background: linear-gradient(180deg, rgba(244, 247, 251, 0.95), rgba(247, 249, 252, 0.98));
     }
 
     /* Interactions: inert until the program is run. While idle, show a
@@ -162,7 +162,7 @@
     .repl-idle {
       display: none;
       place-items: center; text-align: center; padding: 28px;
-      background: linear-gradient(180deg, rgba(4, 10, 18, 0.9), rgba(7, 14, 23, 0.96));
+      background: linear-gradient(180deg, rgba(244, 247, 251, 0.95), rgba(247, 249, 252, 0.98));
       font-family: var(--sans);
     }
     .repl-idle-card { max-width: 44ch; display: grid; gap: 18px; justify-items: center; }
@@ -174,24 +174,24 @@
     .input-row {
       display: grid; gap: 10px;
       padding: 12px 14px 14px;
-      border-top: 1px solid rgba(159, 176, 195, 0.12);
-      background: rgba(13, 17, 23, 0.6);
+      border-top: 1px solid rgba(27, 37, 48, 0.08);
+      background: rgba(244, 247, 251, 0.7);
     }
     #input {
       min-height: 76px; resize: vertical;
       border-radius: 12px;
-      border: 1px solid rgba(159, 176, 195, 0.18);
-      background: rgba(7, 14, 23, 0.85);
+      border: 1px solid rgba(27, 37, 48, 0.14);
+      background: rgba(247, 249, 252, 0.9);
       padding: 10px 12px;
     }
-    #input:focus { border-color: rgba(56, 189, 248, 0.55); }
+    #input:focus { border-color: rgba(2, 132, 199, 0.55); }
     #input:disabled { opacity: 0.6; }
     /* When the running process is blocked on stdin, highlight + ring the
        input box; while it's busy computing, dim it. Driven by the
        io-state flag the runtime sets (wasm_shell_io.c / shell-tty.js). */
     .input-row.waiting #input {
-      border-color: rgba(245, 158, 11, 0.7);
-      box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.16);
+      border-color: rgba(217, 119, 6, 0.7);
+      box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.18);
     }
     .input-row.busy #input { opacity: 0.65; }
     .input-state { font-weight: 600; }
@@ -204,20 +204,20 @@
     .panel-footer {
       padding: 10px 14px;
       display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-      border-top: 1px solid rgba(159, 176, 195, 0.12);
-      background: rgba(13, 17, 23, 0.6);
+      border-top: 1px solid rgba(27, 37, 48, 0.08);
+      background: rgba(244, 247, 251, 0.7);
       font-family: var(--sans); font-size: 13px; color: var(--muted);
     }
     kbd {
       font-family: var(--mono); font-size: 12px;
       padding: 2px 6px; border-radius: 4px;
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(27, 37, 48, 0.06);
+      border: 1px solid rgba(27, 37, 48, 0.12);
     }
     .site-footer {
       margin-top: 24px;
       padding-top: 16px;
-      border-top: 1px solid rgba(159, 176, 195, 0.12);
+      border-top: 1px solid rgba(27, 37, 48, 0.08);
       display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
       font-family: var(--sans); font-size: 13px; color: var(--muted);
     }
