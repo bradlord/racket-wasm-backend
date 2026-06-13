@@ -34,7 +34,7 @@ jobs:
       # if a delta/pin bump makes the cold build fail resolving that xpatch, pin
       # `version:` here to a matching snapshot (or supply --racket). See
       # build-wasm.md "CI".
-      - uses: Bogdanp/setup-racket@v1
+      - uses: Bogdanp/setup-racket@v1.15
         with:
           version: 'stable'
 
