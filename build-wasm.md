@@ -1614,6 +1614,57 @@ error trace, which fails because we drive the harness through stdin;
 the latter exercises subprocess/network features that rktio does not
 implement on Emscripten and hangs.)
 
+## Continuous integration
+
+`.github/workflows/ci.yml` builds the IDE and runs its tests on every push to
+`main` and on PRs. Two jobs:
+
+- **`build`** — `racket build/main.rkt build` (the IDE is the default app),
+  then the FFI draw-stack smoke (below), then it uploads `dist/` as the `dist`
+  artifact. It sets up host Racket, Node, and emsdk, and restores the
+  content-addressed runtime cache.
+- **`browser-tests`** — `needs: build`; it calls the reusable
+  `browser-tests.yml`, which downloads the `dist` artifact and runs the
+  Playwright smoke suite (`test/browser/`) in headless Chromium.
+
+**Why it's usually fast.** Cold builds are heavy (emsdk + a host threaded Chez +
+the emcc link, ~30–45 min), but a build whose key inputs are unchanged is a
+*clone-free, emsdk-free* cache assemble in seconds (`ensure-base-runtime!`
+returns straight from the cache without touching the clone — see "the two build
+layers"). `actions/cache` persists `.work/{runtime,sdk,app-payload}-cache` keyed
+on the same inputs the build-key is computed from — `upstream.lock`, `patches/`,
+`overlay/`, `wasm-deps/`, the `runtime-glue/` link-JS + `serve.rkt`,
+`apps/ide/app.rkt`, and `packages/web-repl/`. Any change to those busts the
+cache → a full cold rebuild; everything else (app/page/example/test edits) hits
+it. The clone (`.work/racket`) is **not** cached — it's huge and mutated, and a
+cold build re-`sync`s it on demand.
+
+**FFI draw-stack smoke.** `test/node/run-draw-stack.sh` wraps
+`draw-stack-test.rkt` into a pass/fail gate: it asserts `ffi-lib` resolves
+`libcairo` and that a real `cairo_image_surface_create_for_data` + paint reads
+back the expected `40 80 ff ff` pixel. It runs against the clone's node
+`scheme.js`, which exists **iff a cold build happened** — exactly when the
+cairo/png/freetype linkage (`wasm-deps`/delta) could have changed. On a warm
+cache-hit build the clone is absent and the runtime is byte-identical to a prior
+green run, so the wrapper skips (exit 0). It does *not* assert on the test's
+`dynamic-require racket/draw/unsafe/...` lines: the node base runtime bakes
+`PKGS=`, so the draw-lib *collection* isn't present and those requires error
+benignly (the live cairo paint is the real end-to-end proof).
+
+**Cold-build host-Racket caveat.** A cold full build needs a host Racket whose
+*version* matches the pinned upstream commit (`upstream.lock` — currently a
+master commit, not a release) so the cross-server xpatch loads. The warm
+assemble path only runs the orchestrator + `serve.rkt` and is happy with
+`setup-racket`'s `stable`. The **first CI run is always cold** (empty cache), so
+the first green build may need the workflow's `setup-racket` `version:` pinned to
+a matching snapshot (or a matching `--racket` supplied). Bump it alongside the
+pin.
+
+**Deploy** to Netlify (COOP/COEP headers already in
+`apps/ide/public/netlify.toml`) is intentionally left as a commented `deploy`
+sketch in `ci.yml`; wire it as a `needs: [build, browser-tests]` gate once the
+suite is trusted.
+
 ## Performance vs. native Racket CS
 
 `test/node/perf-bench.rktl` is a single-threaded, CPU-bound

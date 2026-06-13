@@ -1,0 +1,116 @@
+name: ci
+
+# Build the Racket WASM IDE and run its tests on every push to main (and on
+# PRs). The build is heavy (emsdk + a host threaded Chez + a host Racket), but
+# the orchestrator's content-addressed .work/ cache makes any push that does NOT
+# change the delta (patches/overlay/wasm-deps/pin/pkgs) a clone-free, emsdk-free
+# assemble in seconds. We persist that cache (see the `actions/cache` step) so
+# only the first run and delta/pin/pkg changes pay the ~30-45 min cold build.
+#
+# Deploy is intentionally NOT wired yet -- see the commented `deploy` sketch at
+# the bottom. Add it only once the tests are trusted as a gate.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# One in-flight run per ref; newer pushes cancel older ones.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Host Racket runs the orchestrator (build/main.rkt) and serve.rkt. A WARM
+      # (cache-hit) assemble -- the common case -- is happy with `stable`. A COLD
+      # full build additionally needs a host Racket whose VERSION matches the
+      # pinned upstream commit (upstream.lock) so the cross-server xpatch loads;
+      # if a delta/pin bump makes the cold build fail resolving that xpatch, pin
+      # `version:` here to a matching snapshot (or supply --racket). See
+      # build-wasm.md "CI".
+      - uses: Bogdanp/setup-racket@v1
+        with:
+          version: 'stable'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Provides emcc/emconfigure for the cold path (the emcc link). The action
+      # caches the emsdk install itself; harmless on warm runs (no link happens).
+      # Defaults to 'latest'; the repo's libffi 3.5.x is compatible with current
+      # emsdk. Pin `version:` here if a future emsdk breaks the link.
+      - uses: mymindstorm/setup-emsdk@v14
+
+      # Persist the three content-addressed runtime cache layers -- NOT the clone
+      # (.work/racket is huge, mutated, and re-synced on demand). The key mirrors
+      # the orchestrator's build-key inputs (delta + pkgs/local-pkgs), so any
+      # delta/pin/pkg change busts it -> full rebuild; otherwise a hit -> fast
+      # assemble. No restore-keys: content-addressed, so a partial restore is
+      # useless.
+      - name: Restore runtime cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .work/runtime-cache
+            .work/sdk-cache
+            .work/app-payload-cache
+          key: racket-wasm-cache-${{ runner.os }}-${{ hashFiles('upstream.lock', 'patches/**', 'overlay/**', 'wasm-deps/**', 'runtime-glue/*.js', 'runtime-glue/serve.rkt', 'apps/ide/app.rkt', 'packages/web-repl/**') }}
+
+      # macOS needs bash 5 for wasm-deps; ubuntu-latest already has it. Build the
+      # IDE (the default app). Warm = clone-free assemble; cold = sync + chez
+      # bootstrap + emcc link.
+      - name: Build IDE
+        run: racket build/main.rkt build
+
+      # End-to-end cairo/png/freetype FFI smoke against the node base runtime.
+      # Runs + asserts on a COLD build (clone present, FFI linkage could have
+      # changed); skips cleanly on a warm build (runtime byte-identical to a
+      # prior green run).
+      - name: FFI draw-stack test
+        run: bash test/node/run-draw-stack.sh
+
+      - name: Sanity-check dist/
+        run: |
+          test -f dist/index.html && test -f dist/scheme-web.js && test -f dist/scheme-web.wasm \
+            || { echo "dist/ is missing the browser assets"; ls -la dist || true; exit 1; }
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          if-no-files-found: error
+
+  # Reuses the existing reusable workflow: it downloads the `dist` artifact and
+  # runs the Playwright smoke suite (test/browser/) in headless Chromium.
+  browser-tests:
+    needs: build
+    uses: ./.github/workflows/browser-tests.yml
+    with:
+      dist-artifact: dist
+
+  # --- deploy (DISABLED until the tests are trusted as a gate) ----------------
+  # Drops in once you're confident in the suite. Publishes the same `dist`
+  # artifact to Netlify (COOP/COEP headers already live in
+  # apps/ide/public/netlify.toml). Needs NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID
+  # repo secrets.
+  #
+  # deploy:
+  #   needs: [build, browser-tests]
+  #   if: github.ref == 'refs/heads/main' && success()
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with: { name: dist, path: dist }
+  #     - name: Deploy to Netlify
+  #       run: npx netlify-cli deploy --dir=dist --prod
+  #       env:
+  #         NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+  #         NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
