@@ -55,6 +55,7 @@ jobs:
       # assemble. No restore-keys: content-addressed, so a partial restore is
       # useless.
       - name: Restore runtime cache
+        id: rtcache
         uses: actions/cache@v4
         with:
           path: |
@@ -63,11 +64,75 @@ jobs:
             .work/app-payload-cache
           key: racket-wasm-cache-${{ runner.os }}-${{ hashFiles('upstream.lock', 'patches/**', 'overlay/**', 'wasm-deps/**', 'runtime-glue/*.js', 'runtime-glue/serve.rkt', 'apps/ide/app.rkt', 'packages/web-repl/**') }}
 
-      # macOS needs bash 5 for wasm-deps; ubuntu-latest already has it. Build the
-      # IDE (the default app). Warm = clone-free assemble; cold = sync + chez
-      # bootstrap + emcc link.
+      # --- host toolchain (only matters on a COLD orchestrator build) ----------
+      # A cold build needs a NATIVE THREADED host Chez (--scheme) + a host Racket
+      # whose version matches the pin (--racket, for the cross-server xpatch).
+      # Neither exists on a stock runner, and the orchestrator can't bootstrap
+      # Chez (sync's `clean -ffdx` strips boot/pb and the pin vendors ChezScheme
+      # without boot files). So build BOTH from racket/racket at the pin:
+      # racket/src/configure auto-detects the absent boot/pb and falls back to a
+      # self-contained BC bootstrap (no boot files, no prior toolchain), yielding
+      # a threaded host Chez + a version-matched host racket in one tree. Cached
+      # on the pin SHA (rarely changes); a warm orchestrator cache makes all of
+      # this moot (the assemble is toolchain-free).
+      - name: Resolve upstream pin
+        id: pin
+        run: echo "sha=$(grep -oE '[0-9a-f]{40}' upstream.lock | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache host toolchain (Chez + Racket at the pin)
+        id: hosttc
+        uses: actions/cache@v4
+        with:
+          path: host-toolchain
+          key: host-toolchain-${{ runner.os }}-${{ steps.pin.outputs.sha }}
+
+      # Build only when we'll actually cold-build (orchestrator cache missed) AND
+      # we don't already have the toolchain cached.
+      - name: Build host toolchain
+        if: steps.rtcache.outputs.cache-hit != 'true' && steps.hosttc.outputs.cache-hit != 'true'
+        env:
+          PLT_SETUP_OPTIONS: --no-docs   # skip core-doc render (irrelevant to a cross-server)
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/racket/racket.git host-toolchain
+          git -C host-toolchain checkout --detach "${{ steps.pin.outputs.sha }}"
+          cd host-toolchain/racket/src
+          ./configure                                   # absent boot/pb -> BC bootstrap
+          make -j"$(nproc)"
+          make install
+          rm -rf "$GITHUB_WORKSPACE/host-toolchain/.git" # slim the cache
+
+      # Locate the binaries from the toolchain (freshly built OR cache-restored)
+      # and expose them to the build step. Skipped silently if absent (warm
+      # orchestrator build needs no host toolchain).
+      - name: Locate host toolchain
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/host-toolchain"
+          [ -d "$root" ] || { echo "no host toolchain (warm build)"; exit 0; }
+          scheme="$(find "$root/racket/src/build/cs/c/ChezScheme" -type f -path '*/bin/*/scheme' 2>/dev/null | head -1)"
+          racket="$root/racket/bin/racket"
+          if [ -x "$scheme" ] && [ -x "$racket" ]; then
+            echo "HOST_SCHEME=$scheme" >> "$GITHUB_ENV"
+            echo "HOST_RACKET=$racket" >> "$GITHUB_ENV"
+            echo "host Chez:   $scheme"
+            echo "host Racket: $racket"
+          elif [ "${{ steps.rtcache.outputs.cache-hit }}" != "true" ]; then
+            echo "cold build but host toolchain binaries not found: scheme=$scheme racket=$racket" >&2
+            exit 1
+          else
+            echo "host toolchain binaries not found, but orchestrator cache is warm -- not needed"
+          fi
+
+      # Build the IDE (the default app). Warm = clone-free assemble (no toolchain
+      # flags needed); cold = full build using the host Chez/Racket above.
       - name: Build IDE
-        run: racket build/main.rkt build
+        run: |
+          args=()
+          if [ -n "${HOST_SCHEME:-}" ]; then
+            args+=(--scheme "$HOST_SCHEME" --racket "$HOST_RACKET")
+          fi
+          racket build/main.rkt build "${args[@]}"
 
       # End-to-end cairo/png/freetype FFI smoke against the node base runtime.
       # Runs + asserts on a COLD build (clone present, FFI linkage could have

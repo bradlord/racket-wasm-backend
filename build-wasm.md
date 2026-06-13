@@ -1621,8 +1621,9 @@ implement on Emscripten and hangs.)
 
 - **`build`** — `racket build/main.rkt build` (the IDE is the default app),
   then the FFI draw-stack smoke (below), then it uploads `dist/` as the `dist`
-  artifact. It sets up host Racket, Node, and emsdk, and restores the
-  content-addressed runtime cache.
+  artifact. It sets up Racket/Node/emsdk, restores the content-addressed runtime
+  cache, and — only on a cold build — builds + caches a host toolchain (see
+  below) to pass as `--scheme/--racket`.
 - **`browser-tests`** — `needs: build`; it calls the reusable
   `browser-tests.yml`, which downloads the `dist` artifact and runs the
   Playwright smoke suite (`test/browser/`) in headless Chromium.
@@ -1651,14 +1652,25 @@ green run, so the wrapper skips (exit 0). It does *not* assert on the test's
 `PKGS=`, so the draw-lib *collection* isn't present and those requires error
 benignly (the live cairo paint is the real end-to-end proof).
 
-**Cold-build host-Racket caveat.** A cold full build needs a host Racket whose
-*version* matches the pinned upstream commit (`upstream.lock` — currently a
-master commit, not a release) so the cross-server xpatch loads. The warm
-assemble path only runs the orchestrator + `serve.rkt` and is happy with
-`setup-racket`'s `stable`. The **first CI run is always cold** (empty cache), so
-the first green build may need the workflow's `setup-racket` `version:` pinned to
-a matching snapshot (or a matching `--racket` supplied). Bump it alongside the
-pin.
+**Host toolchain for the cold path.** A cold build needs a native *threaded*
+host Chez (`--scheme`, the cross-compiler host) and a host Racket whose *version*
+matches the pin (`--racket`, so the cross-server xpatch loads). Neither exists on
+a stock runner, and the orchestrator can't bootstrap Chez itself: `sync`'s
+`clean -ffdx` strips `boot/pb`, and the pinned upstream *vendors* `ChezScheme`
+as a tree **without** `boot/` (so `build.zuo`'s pb path is unavailable). So CI
+builds both from `racket/racket` at the pin SHA: `racket/src/configure`
+auto-detects the absent `boot/pb` and falls back to a self-contained **BC
+bootstrap** (`--enable-boothelp` — build Racket BC, use it to bootstrap CS; no
+boot files, no prior toolchain), producing a threaded host Chez under
+`racket/src/build/cs/c/ChezScheme/<mach>/…/scheme` and a version-matched
+`racket/bin/racket` in one tree. The workflow caches that tree on the pin SHA
+(it rarely changes) and passes `--scheme/--racket` into the orchestrator. The
+host build is gated on the orchestrator cache *missing* (a warm assemble is
+toolchain-free, so it's skipped then). The **first CI run is cold**: host
+toolchain (~30–45 min BC→CS) **plus** the orchestrator's own cross-build; both
+are cached afterward. (Locally you sidestep all this by passing a prebuilt
+`--scheme`/`--racket`, which is why the in-orchestrator Chez bootstrap was never
+exercised.)
 
 **Deploy** to Netlify (COOP/COEP headers already in
 `apps/ide/public/netlify.toml`) is intentionally left as a commented `deploy`
