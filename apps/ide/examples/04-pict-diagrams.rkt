@@ -18,7 +18,7 @@
 ;; (see build-wasm.md "Browser text"); the "pict text" example does more.
 (define diagram
   (vc-append 12
-             (text "pict on Racket WASM" 'roman 22)
+             (colorize (text "pict on Racket WASM" 'roman 22) "red")
              shapes))
 
 ;; A bare pict result renders, so just evaluating it displays it.
