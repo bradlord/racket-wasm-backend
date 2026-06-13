@@ -2192,6 +2192,20 @@ which it can't once it boots Racket synchronously; PROXY is what frees it.
 Cost: an always-on proxy worker + a small pthread pool, and a modestly larger
 browser link. The node surface is unaffected (its link has no PROXY flag).
 
+**Page-side follow-up: PROXY reorders `ready` ahead of the loader-status drain.**
+With PROXY the worker posts `ready` (from `onRuntimeInitialized`) *before* the
+final Emscripten `setStatus("")` that fires as the file-packager drains its
+~thousands of per-file run-dependencies (one `removeRunDependency` per packaged
+`share.data` file, each also calling `setStatus`). The page driver
+(`apps/ide/ide.js`) showed "Running" on `ready`, then that one trailing
+`status ""` downgraded the chip back to "Assets loaded" and it stuck there --
+the runtime was actually up, but the surface looked hung (and headless tests
+that wait for `#status === "Running"` timed out). Fix: `ide.js`'s `status`
+handler ignores all loader status once `ioReady` is set (after `ready`) --
+Emscripten's loader status only describes boot and is meaningless once Racket is
+running. (`ide.js` is app surface, not part of the runtime cache key, so this is
+picked up by the post-build example-merge with no relink.)
+
 ## Calling WASM-specific primitives from Racket
 
 WASM-specific C functions (sync-XHR HTTP, pixel-buffer-to-canvas blit,

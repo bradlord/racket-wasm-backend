@@ -326,6 +326,13 @@
     if (!msg || !msg.type) return;
     switch (msg.type) {
       case "status": {
+        // Emscripten's loader status (download progress, "" once all run-
+        // dependencies clear) only describes boot. Under -sPROXY_TO_PTHREAD the
+        // `ready` message races AHEAD of the final dependency drain, so a last
+        // setStatus("") lands after we've shown "Running" and would downgrade
+        // the chip back to "Assets loaded". Once the runtime is up (ioReady),
+        // ignore all further loader status.
+        if (ioReady) return;
         var text = msg.text || "";
         var m = /^(.*)\((\d+(?:\.\d+)?)\/(\d+)\)$/.exec(text);
         if (m) setStatus("Downloading " + m[2] + "/" + m[3], "run");
