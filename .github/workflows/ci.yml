@@ -121,7 +121,7 @@ jobs:
           # leaves the pb (portable-bytecode) bootstrap scheme; the orchestrator
           # needs a native threaded scheme (t<arch>), so build one from the same
           # boot/pb-provisioned ChezScheme source.
-          ( cd "$chez" && ./configure --threads && make -j"$(nproc)" )
+          ( cd "$chez" && ./configure --threads --disable-x11 && make -j"$(nproc)" )
 
           rm -rf "$GITHUB_WORKSPACE/host-toolchain/.git" # slim the cache
 
