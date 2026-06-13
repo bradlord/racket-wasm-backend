@@ -39,7 +39,7 @@ jobs:
             || { echo "dist/ is missing the browser assets"; ls -la dist || true; exit 1; }
 
       # --- toolchain ----------------------------------------------------
-      - uses: Bogdanp/setup-racket@v1
+      - uses: Bogdanp/setup-racket@v1.15
         with:
           version: 'stable'        # only needs base libs to run serve.rkt
       - uses: actions/setup-node@v4
