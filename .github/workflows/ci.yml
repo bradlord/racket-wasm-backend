@@ -79,12 +79,15 @@ jobs:
         id: pin
         run: echo "sha=$(grep -oE '[0-9a-f]{40}' upstream.lock | head -1)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache host toolchain (Chez + Racket at the pin)
+      # restore-only here; we SAVE explicitly after a successful Locate so a
+      # failed/partial build never poisons the cache (the v2 key abandons any
+      # poisoned entry from earlier attempts).
+      - name: Restore host toolchain (Chez + Racket at the pin)
         id: hosttc
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: host-toolchain
-          key: host-toolchain-${{ runner.os }}-${{ steps.pin.outputs.sha }}
+          key: host-toolchain-v2-${{ runner.os }}-${{ steps.pin.outputs.sha }}
 
       # Build only when we'll actually cold-build (orchestrator cache missed) AND
       # we don't already have the toolchain cached.
@@ -122,22 +125,37 @@ jobs:
       # orchestrator build needs no host toolchain).
       - name: Locate host toolchain
         run: |
-          set -euo pipefail
+          set -uo pipefail
           root="$GITHUB_WORKSPACE/host-toolchain"
           [ -d "$root" ] || { echo "no host toolchain (warm build)"; exit 0; }
-          scheme="$(find "$root/racket/src/build/cs/c/ChezScheme" -type f -path '*/bin/*/scheme' 2>/dev/null | head -1)"
-          racket="$root/racket/bin/racket"
+          # In-tree build lands under racket/src/cs/c/ (NOT build/cs/c/). Find the
+          # threaded (t<arch>) standalone scheme, excluding the xc- cross workarea,
+          # and the racket exe -- search broadly so layout shifts don't break us.
+          scheme="$(find "$root" -type f -path '*/bin/*/scheme' -not -path '*/xc-*/*' 2>/dev/null | head -1)"
+          racket="$(find "$root" -type f -path '*/bin/racket' 2>/dev/null | head -1)"
           if [ -x "$scheme" ] && [ -x "$racket" ]; then
             echo "HOST_SCHEME=$scheme" >> "$GITHUB_ENV"
             echo "HOST_RACKET=$racket" >> "$GITHUB_ENV"
             echo "host Chez:   $scheme"
             echo "host Racket: $racket"
           elif [ "${{ steps.rtcache.outputs.cache-hit }}" != "true" ]; then
-            echo "cold build but host toolchain binaries not found: scheme=$scheme racket=$racket" >&2
+            echo "cold build but host toolchain binaries not found: scheme='$scheme' racket='$racket'" >&2
+            echo "--- scheme candidates ---"; find "$root" -type f -name scheme 2>/dev/null | head -20
+            echo "--- racket candidates ---"; find "$root" -type f -name racket 2>/dev/null | head -20
             exit 1
           else
             echo "host toolchain binaries not found, but orchestrator cache is warm -- not needed"
           fi
+
+      # Save the toolchain cache only after a verified-good build (Locate set
+      # HOST_SCHEME and didn't fail). Skipped on a restore hit. This is what keeps
+      # a failed/partial build from poisoning the cache.
+      - name: Save host toolchain cache
+        if: steps.hosttc.outputs.cache-hit != 'true' && env.HOST_SCHEME != ''
+        uses: actions/cache/save@v4
+        with:
+          path: host-toolchain
+          key: host-toolchain-v2-${{ runner.os }}-${{ steps.pin.outputs.sha }}
 
       # Host tools the orchestrator's native wasm-deps build shells out to
       # (glib/pango/cairo/... cross-built via emconfigure): meson drives ninja;
