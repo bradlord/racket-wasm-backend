@@ -139,6 +139,15 @@ jobs:
             echo "host toolchain binaries not found, but orchestrator cache is warm -- not needed"
           fi
 
+      # Host tools the orchestrator's native wasm-deps build shells out to
+      # (glib/pango/cairo/... cross-built via emconfigure): meson drives ninja;
+      # cmake + pkg-config + gperf are used by individual deps. cmake/pkg-config
+      # ship on ubuntu-latest; meson/ninja/gperf do not. Cheap, so unconditional.
+      - name: Install native-deps build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build cmake pkg-config gperf
+
       # Build the IDE (the default app). Warm = clone-free assemble (no toolchain
       # flags needed); cold = full build using the host Chez/Racket above.
       - name: Build IDE
