@@ -7,8 +7,9 @@ name: ci
 # assemble in seconds. We persist that cache (see the `actions/cache` step) so
 # only the first run and delta/pin/pkg changes pay the ~30-45 min cold build.
 #
-# Deploy is intentionally NOT wired yet -- see the commented `deploy` sketch at
-# the bottom. Add it only once the tests are trusted as a gate.
+# Deploy: on a green push to main, the `deploy` job publishes the `dist`
+# artifact to Netlify (gated behind build + browser-tests). Needs
+# NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID repo secrets.
 
 on:
   push:
@@ -214,21 +215,20 @@ jobs:
     with:
       dist-artifact: dist
 
-  # --- deploy (DISABLED until the tests are trusted as a gate) ----------------
-  # Drops in once you're confident in the suite. Publishes the same `dist`
-  # artifact to Netlify (COOP/COEP headers already live in
-  # apps/ide/public/netlify.toml). Needs NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID
-  # repo secrets.
-  #
-  # deploy:
-  #   needs: [build, browser-tests]
-  #   if: github.ref == 'refs/heads/main' && success()
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with: { name: dist, path: dist }
-  #     - name: Deploy to Netlify
-  #       run: npx netlify-cli deploy --dir=dist --prod
-  #       env:
-  #         NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
-  #         NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+  # --- deploy -----------------------------------------------------------------
+  # Publishes the same `dist` artifact to Netlify, gated behind a green build +
+  # browser-tests on a push to main (skipped on PRs). COOP/COEP headers ship in
+  # dist/netlify.toml (from apps/ide/public/netlify.toml). Needs
+  # NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID repo secrets.
+  deploy:
+    needs: [build, browser-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: dist, path: dist }
+      - name: Deploy to Netlify
+        run: npx netlify-cli deploy --dir=dist --prod
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
