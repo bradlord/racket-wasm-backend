@@ -1658,19 +1658,22 @@ matches the pin (`--racket`, so the cross-server xpatch loads). Neither exists o
 a stock runner, and the orchestrator can't bootstrap Chez itself: `sync`'s
 `clean -ffdx` strips `boot/pb`, and the pinned upstream *vendors* `ChezScheme`
 as a tree **without** `boot/` (so `build.zuo`'s pb path is unavailable). So CI
-builds both from `racket/racket` at the pin SHA: `racket/src/configure`
-auto-detects the absent `boot/pb` and falls back to a self-contained **BC
-bootstrap** (`--enable-boothelp` — build Racket BC, use it to bootstrap CS; no
-boot files, no prior toolchain), producing a threaded host Chez under
+builds both from `racket/racket` at the pin SHA. There is **no BC fallback** in
+Chez 10.x, so `racket/src/configure` needs `ChezScheme/boot/pb` for its CS-only
+bootstrap; the workflow provisions it from `racket/pb`, picking the branch that
+matches the vendored `scheme-version` (`#x0a050001` → 10.5.0.1 →
+`v10.5.0-pre-release.1-<rev>`, which carries `petite.boot`/`scheme.boot`). Then
+`make` builds a threaded host Chez under
 `racket/src/build/cs/c/ChezScheme/<mach>/…/scheme` and a version-matched
 `racket/bin/racket` in one tree. The workflow caches that tree on the pin SHA
 (it rarely changes) and passes `--scheme/--racket` into the orchestrator. The
 host build is gated on the orchestrator cache *missing* (a warm assemble is
-toolchain-free, so it's skipped then). The **first CI run is cold**: host
-toolchain (~30–45 min BC→CS) **plus** the orchestrator's own cross-build; both
-are cached afterward. (Locally you sidestep all this by passing a prebuilt
+toolchain-free, so it's skipped then). The **first CI run is cold**: the host
+toolchain build **plus** the orchestrator's own cross-build; both are cached
+afterward. (Locally you sidestep all this by passing a prebuilt
 `--scheme`/`--racket`, which is why the in-orchestrator Chez bootstrap was never
-exercised.)
+exercised.) On a pin bump that changes the Chez version, the `racket/pb` branch
+is re-derived automatically from the new `scheme-version`.
 
 **Deploy** to Netlify (COOP/COEP headers already in
 `apps/ide/public/netlify.toml`) is intentionally left as a commented `deploy`

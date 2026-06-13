@@ -69,12 +69,12 @@ jobs:
       # whose version matches the pin (--racket, for the cross-server xpatch).
       # Neither exists on a stock runner, and the orchestrator can't bootstrap
       # Chez (sync's `clean -ffdx` strips boot/pb and the pin vendors ChezScheme
-      # without boot files). So build BOTH from racket/racket at the pin:
-      # racket/src/configure auto-detects the absent boot/pb and falls back to a
-      # self-contained BC bootstrap (no boot files, no prior toolchain), yielding
-      # a threaded host Chez + a version-matched host racket in one tree. Cached
-      # on the pin SHA (rarely changes); a warm orchestrator cache makes all of
-      # this moot (the assemble is toolchain-free).
+      # as a tree WITHOUT boot/). So build BOTH from racket/racket at the pin:
+      # provision the pb boot files (racket/src/configure needs ChezScheme/boot/pb
+      # for its CS-only bootstrap -- there is no BC fallback in Chez 10.x), then
+      # `make` builds a threaded host Chez + a version-matched host racket in one
+      # tree. Cached on the pin SHA (rarely changes); a warm orchestrator cache
+      # makes all of this moot (the assemble is toolchain-free).
       - name: Resolve upstream pin
         id: pin
         run: echo "sha=$(grep -oE '[0-9a-f]{40}' upstream.lock | head -1)" >> "$GITHUB_OUTPUT"
@@ -96,8 +96,23 @@ jobs:
           set -euo pipefail
           git clone --filter=blob:none https://github.com/racket/racket.git host-toolchain
           git -C host-toolchain checkout --detach "${{ steps.pin.outputs.sha }}"
+          chez="host-toolchain/racket/src/ChezScheme"
+
+          # Provision the pb boot files matching the vendored ChezScheme version.
+          # scheme-version #x0a050001 -> 10.5.0.1; racket/pb keeps per-version
+          # branches `v<a>.<b>.<c>-pre-release.<d>-<rev>` carrying petite/scheme.boot.
+          hex=$(grep -oE 'scheme-version #x[0-9a-fA-F]+' "$chez/s/cmacros.ss" | grep -oE '[0-9a-fA-F]{8}$')
+          a=$((16#${hex:0:2})); b=$((16#${hex:2:2})); c=$((16#${hex:4:2})); d=$((16#${hex:6:2}))
+          if [ "$d" -ne 0 ]; then base="v${a}.${b}.${c}-pre-release.${d}"; else base="v${a}.${b}.${c}"; fi
+          branch=$(git ls-remote --heads https://github.com/racket/pb.git \
+                     | sed 's#.*refs/heads/##' | grep -E "^${base}-[0-9]+$" | sort -V | tail -1)
+          [ -n "$branch" ] || { echo "no racket/pb branch for ChezScheme $a.$b.$c.$d (base $base)"; exit 1; }
+          echo "pb boot branch: $branch"
+          git clone --depth 1 --branch "$branch" https://github.com/racket/pb.git "$chez/boot/pb"
+          rm -rf "$chez/boot/pb/.git"
+
           cd host-toolchain/racket/src
-          ./configure                                   # absent boot/pb -> BC bootstrap
+          ./configure                                   # finds boot/pb -> CS bootstrap
           make -j"$(nproc)"
           make install
           rm -rf "$GITHUB_WORKSPACE/host-toolchain/.git" # slim the cache
