@@ -87,7 +87,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: host-toolchain
-          key: host-toolchain-v2-${{ runner.os }}-${{ steps.pin.outputs.sha }}
+          key: host-toolchain-v3-${{ runner.os }}-${{ steps.pin.outputs.sha }}
 
       # Build only when we'll actually cold-build (orchestrator cache missed) AND
       # we don't already have the toolchain cached.
@@ -99,7 +99,7 @@ jobs:
           set -euo pipefail
           git clone --filter=blob:none https://github.com/racket/racket.git host-toolchain
           git -C host-toolchain checkout --detach "${{ steps.pin.outputs.sha }}"
-          chez="host-toolchain/racket/src/ChezScheme"
+          chez="$GITHUB_WORKSPACE/host-toolchain/racket/src/ChezScheme"
 
           # Provision the pb boot files matching the vendored ChezScheme version.
           # scheme-version #x0a050001 -> 10.5.0.1; racket/pb keeps per-version
@@ -114,10 +114,15 @@ jobs:
           git clone --depth 1 --branch "$branch" https://github.com/racket/pb.git "$chez/boot/pb"
           rm -rf "$chez/boot/pb/.git"
 
-          cd host-toolchain/racket/src
-          ./configure                                   # finds boot/pb -> CS bootstrap
-          make -j"$(nproc)"
-          make install
+          # Host racket (--racket): in-tree CS build, bootstrapped from boot/pb.
+          ( cd "$GITHUB_WORKSPACE/host-toolchain/racket/src" && ./configure && make -j"$(nproc)" && make install )
+
+          # Standalone THREADED host Chez (--scheme). The racket build above only
+          # leaves the pb (portable-bytecode) bootstrap scheme; the orchestrator
+          # needs a native threaded scheme (t<arch>), so build one from the same
+          # boot/pb-provisioned ChezScheme source.
+          ( cd "$chez" && ./configure --threads && make -j"$(nproc)" )
+
           rm -rf "$GITHUB_WORKSPACE/host-toolchain/.git" # slim the cache
 
       # Locate the binaries from the toolchain (freshly built OR cache-restored)
@@ -131,7 +136,7 @@ jobs:
           # In-tree build lands under racket/src/cs/c/ (NOT build/cs/c/). Find the
           # threaded (t<arch>) standalone scheme, excluding the xc- cross workarea,
           # and the racket exe -- search broadly so layout shifts don't break us.
-          scheme="$(find "$root" -type f -path '*/bin/*/scheme' -not -path '*/xc-*/*' 2>/dev/null | head -1)"
+          scheme="$(find "$root" -type f -path '*/bin/*/scheme' 2>/dev/null | grep -E '/t[a-z0-9]+/bin/t[a-z0-9]+/scheme$' | grep -v '/xc-' | head -1)"
           racket="$(find "$root" -type f -path '*/bin/racket' 2>/dev/null | head -1)"
           if [ -x "$scheme" ] && [ -x "$racket" ]; then
             echo "HOST_SCHEME=$scheme" >> "$GITHUB_ENV"
@@ -155,7 +160,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: host-toolchain
-          key: host-toolchain-v2-${{ runner.os }}-${{ steps.pin.outputs.sha }}
+          key: host-toolchain-v3-${{ runner.os }}-${{ steps.pin.outputs.sha }}
 
       # Host tools the orchestrator's native wasm-deps build shells out to
       # (glib/pango/cairo/... cross-built via emconfigure): meson drives ninja;

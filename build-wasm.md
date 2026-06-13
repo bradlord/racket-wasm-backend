@@ -1662,10 +1662,13 @@ builds both from `racket/racket` at the pin SHA. There is **no BC fallback** in
 Chez 10.x, so `racket/src/configure` needs `ChezScheme/boot/pb` for its CS-only
 bootstrap; the workflow provisions it from `racket/pb`, picking the branch that
 matches the vendored `scheme-version` (`#x0a050001` → 10.5.0.1 →
-`v10.5.0-pre-release.1-<rev>`, which carries `petite.boot`/`scheme.boot`). Then
-`make` builds a threaded host Chez under
-`racket/src/build/cs/c/ChezScheme/<mach>/…/scheme` and a version-matched
-`racket/bin/racket` in one tree. The workflow caches that tree on the pin SHA
+`v10.5.0-pre-release.1-<rev>`, which carries `petite.boot`/`scheme.boot`). The
+in-tree `racket/src` build then produces a version-matched `racket/bin/racket`
+(the `--racket`), but it only leaves the **pb** (portable-bytecode) bootstrap
+scheme — not a native threaded one — so the workflow *also* runs a standalone
+`cd racket/src/ChezScheme && ./configure --threads && make`, yielding the
+threaded host Chez at `racket/src/ChezScheme/<mach>/bin/<mach>/scheme` (the
+`--scheme`). The workflow caches that tree on the pin SHA
 (it rarely changes) and passes `--scheme/--racket` into the orchestrator. The
 host build is gated on the orchestrator cache *missing* (a warm assemble is
 toolchain-free, so it's skipped then). The **first CI run is cold**: the host
