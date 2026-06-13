@@ -16,6 +16,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Run the JS-based actions on Node 24 (Node 20 is deprecated and removed from
+# runners 2026-09; forced default 2026-06-16). The official opt-in; covers every
+# action uniformly, including the third-party setup-emsdk.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 # One in-flight run per ref; newer pushes cancel older ones.
 concurrency:
   group: ci-${{ github.ref }}
@@ -161,23 +167,6 @@ jobs:
         with:
           path: host-toolchain
           key: host-toolchain-v3-${{ runner.os }}-${{ steps.pin.outputs.sha }}
-
-      # The cold build's emcc whole-program link is memory-heavy (the build itself
-      # hints `--disable-wpo` when low on RAM) and OOM-kills on a stock 16 GB
-      # runner; the artifacts are also large. Free ~20 GB on / and add a big
-      # swapfile on the roomy /mnt disk so the link has headroom. Cold-only.
-      - name: Free disk + add swap
-        if: steps.rtcache.outputs.cache-hit != 'true'
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
-                      /usr/local/share/powershell /usr/share/swift 2>/dev/null || true
-          sudo docker image prune -af 2>/dev/null || true
-          sudo fallocate -l 14G /mnt/swapfile
-          sudo chmod 600 /mnt/swapfile
-          sudo mkswap /mnt/swapfile
-          sudo swapon /mnt/swapfile
-          free -h; df -h / /mnt
 
       # Host tools the orchestrator's native wasm-deps build shells out to
       # (glib/pango/cairo/... cross-built via emconfigure): meson drives ninja;
