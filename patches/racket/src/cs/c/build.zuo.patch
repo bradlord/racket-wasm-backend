@@ -1,5 +1,5 @@
 diff --git a/racket/src/cs/c/build.zuo b/racket/src/cs/c/build.zuo
-index b4e92ee..fb294f4 100644
+index b4e92ee..61a2d05 100644
 --- a/racket/src/cs/c/build.zuo
 +++ b/racket/src/cs/c/build.zuo
 @@ -54,6 +54,35 @@
@@ -168,7 +168,7 @@ index b4e92ee..fb294f4 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +791,303 @@
+@@ -691,6 +791,314 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -295,8 +295,19 @@ index b4e92ee..fb294f4 100644
 +                         '()))
 +                   (define dep-linkflags
 +                     (read-flag-lines (build-path wasm-deps-dir ".wasm-deps-linkflags.txt")))
++                   ;; The force-link list is thousands of -Wl,-u,<symbol> flags
++                   ;; (cairo/png/freetype). Inlining them makes the emcc link
++                   ;; command ~240KB; shell/wait runs the link via `sh -c`, and a
++                   ;; single argv string that large exceeds Linux's MAX_ARG_STRLEN
++                   ;; (128KB) -> "exec failed". Pass them as an emcc @response-file
++                   ;; (the file is already one flag per line) so the command stays
++                   ;; short. (macOS has no per-arg cap, so the inline form worked
++                   ;; there; this keeps the link portable to Linux/CI.)
++                   (define dep-uflags-file (build-path wasm-deps-dir "wasm_deps_uflags.txt"))
 +                   (define dep-uflags
-+                     (read-flag-lines (build-path wasm-deps-dir "wasm_deps_uflags.txt")))
++                     (if (null? (read-flag-lines dep-uflags-file))
++                         '()
++                         (list (~a "@" dep-uflags-file))))
 +                   (define (preload src dest) (list "--preload-file" (~a src "@" dest)))
 +                   ;; Installed packages (PKGS) are NOT preloaded here. Both
 +                   ;; surfaces ship the package tree (share/pkgs + links.rktd +
@@ -472,7 +483,7 @@ index b4e92ee..fb294f4 100644
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                  ,(lambda (path token)
                     (scheme "--script" (at-source "convert-to-boot.ss")
-@@ -765,7 +1148,11 @@
+@@ -765,7 +1173,11 @@
                                   token))])]
             [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                  (not (equal? (lookup 'RACKET) "")))
@@ -485,7 +496,7 @@ index b4e92ee..fb294f4 100644
              (when xpatch?
                (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
              `([:target bootfiles ()
-@@ -878,7 +1265,19 @@
+@@ -878,7 +1290,19 @@
                  ,(lambda (token)
                     (install #f)
                     (setup))]
@@ -506,7 +517,7 @@ index b4e92ee..fb294f4 100644
         [:target plain-install ()
                  ,(lambda (token)
                     (install #f))]
-@@ -1092,32 +1491,39 @@
+@@ -1092,32 +1516,39 @@
                   (list petite-v.boot scheme-v.boot racket-v.boot)
                   (list "petite.boot" "scheme.boot" "racket.boot")))])
  
@@ -569,7 +580,7 @@ index b4e92ee..fb294f4 100644
      (call-with-dest-racket
       (lambda (bindir dest-racket)
         (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
-@@ -1125,13 +1531,37 @@
+@@ -1125,13 +1556,37 @@
                                     (hash-set config 'copytree-prepared-setup-files #t)
                                     config))
         (maybe-copytree copytree-config dest-racket copytree-racket at-dir)

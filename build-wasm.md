@@ -1678,6 +1678,18 @@ afterward. (Locally you sidestep all this by passing a prebuilt
 exercised.) On a pin bump that changes the Chez version, the `racket/pb` branch
 is re-derived automatically from the new `scheme-version`.
 
+**emcc link arg-length (Linux portability).** The `wasm` link force-keeps the
+dep symbols cairo/png/freetype register (`-Wl,-u,<symbol>`) — thousands of them,
+read from `wasm_deps_uflags.txt`. Inlined onto the command line they make it
+~240 KB, and `build.zuo` runs the link via `shell/wait` (→ `sh -c "<cmd>"`); a
+single argv string that large exceeds Linux's `MAX_ARG_STRLEN` (128 KB) and the
+link dies instantly with zuo's "exec failed". macOS has no per-arg cap, so it
+worked locally. Fix (in `patches/racket/src/cs/c/build.zuo.patch`): pass that
+file to emcc as a `@response-file` instead of inlining it, keeping the command
+short. This touches the **delta**, so it shifts the build-key (the committed
+cache entry changes); it was hand-edited into the patch (re-running the fork
+extractor would need the same edit on the fork side).
+
 **Deploy** to Netlify (COOP/COEP headers already in
 `apps/ide/public/netlify.toml`) is intentionally left as a commented `deploy`
 sketch in `ci.yml`; wire it as a `needs: [build, browser-tests]` gate once the
