@@ -32,7 +32,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Host Racket runs the orchestrator (build/main.rkt) and serve.rkt. A WARM
       # (cache-hit) assemble -- the common case -- is happy with `stable`. A COLD
@@ -45,15 +45,15 @@ jobs:
         with:
           version: 'stable'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
 
       # Provides emcc/emconfigure for the cold path (the emcc link). The action
       # caches the emsdk install itself; harmless on warm runs (no link happens).
       # Defaults to 'latest'; the repo's libffi 3.5.x is compatible with current
       # emsdk. Pin `version:` here if a future emsdk breaks the link.
-      - uses: mymindstorm/setup-emsdk@v14
+      - uses: mymindstorm/setup-emsdk@v16
 
       # Persist the three content-addressed runtime cache layers -- NOT the clone
       # (.work/racket is huge, mutated, and re-synced on demand). The key mirrors
@@ -63,7 +63,7 @@ jobs:
       # useless.
       - name: Restore runtime cache
         id: rtcache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             .work/runtime-cache
@@ -91,7 +91,7 @@ jobs:
       # poisoned entry from earlier attempts).
       - name: Restore host toolchain (Chez + Racket at the pin)
         id: hosttc
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: host-toolchain
           key: host-toolchain-v3-${{ runner.os }}-${{ steps.pin.outputs.sha }}
@@ -164,7 +164,7 @@ jobs:
       # a failed/partial build from poisoning the cache.
       - name: Save host toolchain cache
         if: steps.hosttc.outputs.cache-hit != 'true' && env.HOST_SCHEME != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: host-toolchain
           key: host-toolchain-v3-${{ runner.os }}-${{ steps.pin.outputs.sha }}
@@ -201,7 +201,7 @@ jobs:
             || { echo "dist/ is missing the browser assets"; ls -la dist || true; exit 1; }
 
       - name: Upload dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist
@@ -217,15 +217,16 @@ jobs:
 
   # --- deploy -----------------------------------------------------------------
   # Publishes the same `dist` artifact to Netlify, gated behind a green build +
-  # browser-tests on a push to main (skipped on PRs). COOP/COEP headers ship in
-  # dist/netlify.toml (from apps/ide/public/netlify.toml). Needs
-  # NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID repo secrets.
+  # browser-tests. MANUAL ONLY: runs solely on a workflow_dispatch from main, so
+  # pushes (and PRs) build+test but never deploy -- you trigger a release by
+  # hand. COOP/COEP headers ship in dist/_headers + dist/netlify.toml (from
+  # apps/ide/public/). Needs NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID repo secrets.
   deploy:
     needs: [build, browser-tests]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { name: dist, path: dist }
       - name: Deploy to Netlify
         run: npx netlify-cli deploy --dir=dist --prod
