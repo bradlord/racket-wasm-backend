@@ -2,7 +2,7 @@ name: browser-tests
 
 # Headless browser tests for the Racket WASM IDE surface (test/browser/).
 #
-# These need a built dist/ (index.html + scheme-web.*). Building the
+# These need a built dist/ (index.html + racket-web.*). Building the
 # WASM image needs emsdk + a host Chez + a host Racket and is heavy, so the build
 # is a SEPARATE concern: this workflow obtains a prebuilt dist/ and runs the
 # tests against it. Wire the "obtain dist/" step to wherever you publish builds
@@ -39,7 +39,7 @@ jobs:
           path: dist
       - name: Sanity-check dist/
         run: |
-          test -f dist/index.html && test -f dist/scheme-web.js && test -f dist/scheme-web.wasm \
+          test -f dist/index.html && test -f dist/racket-web.js && test -f dist/racket-web.wasm \
             || { echo "dist/ is missing the browser assets"; ls -la dist || true; exit 1; }
 
       # --- toolchain ----------------------------------------------------

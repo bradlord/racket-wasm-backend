@@ -54,7 +54,7 @@
 ;;                build-key, so editing one rebuilds.
 ;;   #:scheme / #:racket  host toolchain paths, or #f to resolve/build.
 ;;   #:target     'browser (default) or 'node -- which surface to ship into dist:
-;;                browser = racket-web.* + share.data* + glue; node = scheme.*.
+;;                browser = racket-web.* + share.data* + glue; node = racket.*.
 ;;   #:pre-js / #:post-js / #:extern-pre-js  app-supplied emcc link JS (lists of
 ;;                paths) spliced into the #:target surface's link only. They feed
 ;;                the build-key (editing one relinks), and the targeted surface

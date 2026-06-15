@@ -44,7 +44,7 @@ cpp_args      = ['-pthread', '-s', 'USE_ZLIB=1',
 # (res_query, posix_spawnp, ...). We only care about the static
 # archives that ship alongside; ignore link-time misses for the
 # tool binaries so meson compile/install can complete. The final
-# scheme-web link uses build.sh and is not affected.
+# racket-web link uses build.sh and is not affected.
 c_link_args   = ['-pthread', '-s', 'USE_ZLIB=1',
                  '-sERROR_ON_UNDEFINED_SYMBOLS=0',
                  '-Wl,--unresolved-symbols=ignore-all']

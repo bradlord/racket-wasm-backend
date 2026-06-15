@@ -7,7 +7,7 @@
 #
 # Runs against the orchestrator's clone (.work/racket) by default; point
 # RACKET_WASM_CLONE at a different built tree to override. The clone's node
-# scheme.js exists iff a COLD build happened -- which is exactly when the FFI
+# racket.js exists iff a COLD build happened -- which is exactly when the FFI
 # linkage (wasm-deps/delta) could have changed. On a warm cache-hit build the
 # clone is absent and the runtime is byte-identical to a prior green run, so we
 # skip (exit 0) rather than chase the package-agnostic node files out of the
@@ -25,20 +25,20 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
 clone="${RACKET_WASM_CLONE:-$repo_root/.work/racket}"
 
-scheme_js="$clone/racket/src/build/cs/c/wasm/scheme.js"
+racket_js="$clone/racket/src/build/cs/c/wasm/racket.js"
 test_rkt="$here/draw-stack-test.rkt"
 
-if [ ! -f "$scheme_js" ]; then
+if [ ! -f "$racket_js" ]; then
   if [ -n "${RACKET_WASM_CLONE:-}" ]; then
-    echo "scheme.js not built: $scheme_js" >&2
+    echo "racket.js not built: $racket_js" >&2
     exit 1
   fi
-  echo "draw-stack: SKIP (no clone runtime at $scheme_js -- warm cache build, FFI stack unchanged)"
+  echo "draw-stack: SKIP (no clone runtime at $racket_js -- warm cache build, FFI stack unchanged)"
   exit 0
 fi
 [ -f "$test_rkt" ] || { echo "missing $test_rkt" >&2; exit 1; }
 
-out="$(tail -n +2 "$test_rkt" | node "$scheme_js" 2>&1)"
+out="$(tail -n +2 "$test_rkt" | node "$racket_js" 2>&1)"
 status=$?
 echo "$out"
 

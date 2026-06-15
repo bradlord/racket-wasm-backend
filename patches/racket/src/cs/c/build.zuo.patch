@@ -321,7 +321,7 @@ index b4e92ee..61a2d05 100644
 +                   ;; /pkgs roots now lives once, in the orchestrator
 +                   ;; (build/stages.rkt `links-pkgs-roots`). See build-wasm.md
 +                   ;; "Packages as a separate data file".
-+                   ;; Inputs shared by both surfaces (node `scheme.*` and
++                   ;; Inputs shared by both surfaces (node `racket.*` and
 +                   ;; browser `racket-web.*`). wasm_shell_io.o is NOT here --
 +                   ;; it is browser-only and appended in the browser link.
 +                   (define common-objs
@@ -399,7 +399,7 @@ index b4e92ee..61a2d05 100644
 +                            ;; share.data.js) by indirect-eval, the node analog
 +                            ;; of the worker's importScripts. Like the browser,
 +                            ;; node ships packages OUT of the link so a package
-+                            ;; change needn't relink scheme.*.
++                            ;; change needn't relink racket.*.
 +                            "--pre-js"        (build-path runtime-glue "node-load-share.js"))
 +                      ;; App link JS for the node surface only.
 +                      (if (equal? app-target "node") app-link-args (list))

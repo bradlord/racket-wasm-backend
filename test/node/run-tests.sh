@@ -24,10 +24,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
 clone="${RACKET_WASM_CLONE:-$repo_root/.work/racket}"
 
-scheme_js="$clone/racket/src/build/cs/c/wasm/scheme.js"
+racket_js="$clone/racket/src/build/cs/c/wasm/racket.js"
 tests_dir="$clone/pkgs/racket-test-core/tests/racket"
 
-[ -f "$scheme_js" ]                      || { echo "scheme.js not built: $scheme_js" >&2; exit 1; }
+[ -f "$racket_js" ]                      || { echo "racket.js not built: $racket_js" >&2; exit 1; }
 [ -f "$tests_dir/testing.rktl" ]         || { echo "test harness missing: $tests_dir/testing.rktl" >&2; exit 1; }
 
 DEFAULT=(
@@ -73,7 +73,7 @@ for t in "${tests[@]}"; do
   } > "$combined"
 
   out="$work/$t.out"
-  if ! node "$scheme_js" < "$combined" >"$out" 2>&1; then
+  if ! node "$racket_js" < "$combined" >"$out" 2>&1; then
     printf "%-14s ERROR (node exit)\n" "$t"
     fail=$((fail + 1))
     continue
