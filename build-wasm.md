@@ -490,8 +490,11 @@ The upshot: **a package change is a base + SDK cache hit + an emsdk-free
 `cross-install`** -- a full `build` of a package change runs with the emsdk
 entirely off `PATH` and **no clone mutation**. Native deps (`wasm-libs`, e.g. the
 cairo/pango stack `draw` links) stay in the base build (linked *into* the wasm
-binary, can't be layered on). Node (`racket.data`) bakes its tree at link time, so
-under `PKGS=` the node surface is package-less -- this serves the browser surface.
+binary, can't be layered on). Both surfaces consume the same surface-independent
+`share.data` payload: the browser loads it via `importScripts` (shell-worker.js),
+node via `node-load-share.js`'s indirect-eval (a `--pre-js` on the node link). So a
+package change is an emsdk-free `cross-install` for node too -- the node
+`racket.data` carries only the core (`/collects` + boot), never the app packages.
 
 > First-consume cost: with an empty catalog + compile shadows, the staging pass
 > regenerates the host-form + target bytecode of the new packages' dependency

@@ -124,7 +124,8 @@ EOF
 ;; surface. The single `wasm` make target builds BOTH surfaces, so a build always
 ;; produces (and the cache always stores) the union; an app's `target` then
 ;; selects which subset collect-outputs copies into dist/.
-;;   node    -- racket.{js,wasm,data}; packages are baked into racket.data.
+;;   node    -- racket.{js,wasm,data} + the separate package payload
+;;              share.data/share.data.js (loaded at runtime by node-load-share.js).
 ;;   browser -- racket-web.{js,wasm,data} + the separate package payload
 ;;              share.data/share.data.js (packed by build/pack.rkt, not the link).
 ;; Glue/surface are repo-side and copied separately, so they are NOT in this set.
@@ -155,10 +156,13 @@ EOF
     [(node) 'node]
     [else (error 'app "target must be 'browser or 'node, got: ~s" t)]))
 
-;; The runtime files a given target ships in dist/.
+;; The runtime files a given target ships in dist/. Both surfaces ship the
+;; separate package payload (share.data*): the browser loads it via importScripts,
+;; node via node-load-share.js's indirect-eval. node-runtime-names is the binaries
+;; only, so append the payload here.
 (define (runtime-names-for-target target)
   (case (normalize-target target)
-    [(node) node-runtime-names]
+    [(node) (append node-runtime-names pkg-payload-names)]
     [(browser) web-runtime-names]))
 
 ;; --- cross-compiler SDK -------------------------------------------------

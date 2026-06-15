@@ -93,12 +93,12 @@
 ;; runtime-glue/ and is run in place by `serve` -- it is NOT copied into dist/.
 (define browser-glue-files '("shell-worker.js"))
 
-;; The browser surface's package payload (share.data + share.data.js) is built
-;; as a SEPARATE data file by `pack-share-data` (build/pack.rkt) -- a pure-Racket
-;; file_packager, no emsdk -- instead of baking the package tree into the emcc
-;; link. This decouples package changes from the (expensive) relink: re-install
-;; packages and re-run pack, no emcc link needed. Node (racket.*) is unaffected
-;; -- it still bakes packages into racket.data.
+;; The package payload (share.data + share.data.js) is built as a SEPARATE data
+;; file by `pack-share-data` (build/pack.rkt) -- a pure-Racket file_packager, no
+;; emsdk -- instead of baking the package tree into the emcc link. This decouples
+;; package changes from the (expensive) relink: re-install packages and re-run
+;; pack, no emcc link needed. Both surfaces consume it -- the browser via
+;; importScripts in shell-worker.js, node via node-load-share.js's indirect-eval.
 
 ;; Assemble dist/: the runtime binaries from the clone's link output, the
 ;; host-side glue from the repo, and a page surface from the repo. `target`
@@ -341,7 +341,6 @@
                                                #:local-pkgs local-pkgs
                                                #:link-js link-js #:target target))
   (define full-key (key-from-components full-components))
-  (define browser? (eq? (normalize-target target) 'browser))
   (define has-pkgs? (or (not (string=? pkgs "")) (pair? local-pkgs)))
   (cond
     [runtime-pkg
@@ -357,13 +356,13 @@
      ;; cache.
      (collect-outputs #:dest dest #:surface-dir surface-dir #:target target
                       #:runtime-srcs (list (cache-dir-for base-key)))
-     ;; Only the browser ships the separate package payload, and only when the app
-     ;; adds packages: cross-install them (the only place PKGS flow) against the
-     ;; pure SDK and fold into the base share.data, emsdk-free; then overwrite
-     ;; dist's base share.data with the extended one. With no app packages the base
-     ;; share.data already shipped by collect-outputs is final. Node bakes its
-     ;; (package-less under PKGS=) tree at link time.
-     (when (and browser? has-pkgs?)
+     ;; When the app adds packages, ship the separate package payload (both
+     ;; surfaces): cross-install them (the only place PKGS flow) against the pure
+     ;; SDK and fold into the base share.data, emsdk-free; then overwrite dist's
+     ;; base share.data with the extended one. The browser loads share.data via
+     ;; importScripts, node via node-load-share.js's indirect-eval. With no app
+     ;; packages the base share.data already shipped by collect-outputs is final.
+     (when has-pkgs?
        (ensure-app-payload! pkg-key sdk-key base-key
                             #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs local-pkgs
                             #:scheme scheme-opt #:racket racket-opt #:force? force?)
