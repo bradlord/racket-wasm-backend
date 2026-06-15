@@ -74,7 +74,7 @@
                     (string-append "LINK_POST_JS=" (join-paths post-js))
                     (string-append "LINK_EXTERN_PRE_JS=" (join-paths extern-pre-js))
                     (string-append "APP_TARGET=" (symbol->string (normalize-target app-target)))
-                    ;; The built-in link JS glue (idbfs-init/shell-tty/node-*.js)
+                    ;; The built-in link JS glue (wasmfs-stdin/console/node-*.js)
                     ;; lives repo-side; cs/c/build.zuo's `wasm` link reads it from
                     ;; here. Hashed into the build key (cache.rkt link-glue-names).
                     (string-append "RUNTIME_GLUE_DIR="

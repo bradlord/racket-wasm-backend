@@ -10,8 +10,8 @@
  *     of looping on the error. Returning `null` is reserved for real EOF
  *     -- that ends the REPL cleanly.
  *
- *     This is the node analogue of `shell-tty.js` (the browser version
- *     that pulls from a shared-memory ring); without it, Emscripten's
+ *     This is the node analogue of the browser's ring-backed stdin
+ *     (wasmfs-stdin.js); without it, Emscripten's
  *     default $FS_stdin_getChar leaks an EAGAIN exception out of
  *     fs.readSync, the TTY device wraps it as EIO (errno 29), and rktio
  *     reports `error reading from stream port` in a tight loop.

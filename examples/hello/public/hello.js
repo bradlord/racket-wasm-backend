@@ -5,7 +5,7 @@
  * program's stdout from the shared-memory output ring onto the page. This is
  * the minimal counterpart to the IDE's ide.js: no editor, no REPL, no DOM RPC
  * -- just "run a module and show its output". The ring read/write protocol is
- * the same one wasm_shell_io.c / shell-tty.js define (see ide.js for the full,
+ * the same one wasm_shell_io.c / wasmfs-console.js define (see ide.js for the full,
  * interactive version).
  */
 "use strict";
@@ -76,12 +76,11 @@
           break;
       }
     };
-    // Run main.rkt as a module and exit. Seed it into MEMFS before main().
+    // Run main.rkt as a module and exit. Seed it into the FS before main().
     worker.postMessage({
       type: "init",
       argv: ["-u", "/tmp/main.rkt"],
       files: { "/tmp/main.rkt": programText },
-      idbfs: false,
     });
   }
 

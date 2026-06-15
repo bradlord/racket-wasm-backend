@@ -168,7 +168,7 @@ index b4e92ee..61a2d05 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +791,314 @@
+@@ -691,6 +791,323 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -350,7 +350,7 @@ index b4e92ee..61a2d05 100644
 +                             ;; "Text / Pango".
 +                             (preload (at-source "wasm-fonts/fonts.conf") "/etc/fonts/fonts.conf")
 +                             (preload (at-source "wasm-fonts/DejaVuSans.ttf") "/share/fonts/DejaVuSans.ttf")))
-+                   ;; Built-in link JS glue (idbfs-init.js, shell-tty.js,
++                   ;; Built-in link JS glue (wasmfs-stdin/console.js,
 +                   ;; node-*.js) lives outside the tree, in the racket-wasm
 +                   ;; orchestrator's runtime-glue/ dir, passed via the
 +                   ;; RUNTIME_GLUE_DIR make var.
@@ -419,11 +419,11 @@ index b4e92ee..61a2d05 100644
 +                      ;; Empty for the libffi-only default.
 +                      dep-uflags))
 +                   ;; The browser (`racket-web.*`) link: drives stdin/stdout and
-+                   ;; the DOM over SharedArrayBuffers from a worker, with IDBFS
-+                   ;; persistence. Adds wasm_shell_io.o, the idbfs/shell-tty JS,
-+                   ;; the SAB/DOM exports, and FORCE_FILESYSTEM + idbfs.js. The
-+                   ;; EXPORTED_FUNCTIONS list must match the addresses
-+                   ;; shell-worker.js / shell-tty.js read out of the module.
++                   ;; the DOM over SharedArrayBuffers from a worker, with an
++                   ;; OPFS-backed persistent home. Adds wasm_shell_io.o, the WasmFS
++                   ;; console glue (wasmfs-stdin.js + wasmfs-console.js), the
++                   ;; SAB/DOM exports, and -sWASMFS. The EXPORTED_FUNCTIONS list
++                   ;; must match the addresses shell-worker.js reads out of it.
 +                   (define browser-args
 +                     (append
 +                      (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"
@@ -431,8 +431,13 @@ index b4e92ee..61a2d05 100644
 +                      common-objs
 +                      (list wasm_shell_io.o)
 +                      dep-linkflags
-+                      (list "--pre-js"  (build-path runtime-glue "idbfs-init.js")
-+                            "--post-js" (build-path runtime-glue "shell-tty.js"))
++                      ;; WasmFS console glue (both --js-library): stdin (fd 0)
++                      ;; via a _wasmfs_stdin_get_char override; stdout/stderr
++                      ;; (fd 1/2) via a ring char device that
++                      ;; racket_wasm_browser_fs_init (wasm_shell_io.c) creates
++                      ;; -- on the proxied main pthread -- and dup2s onto.
++                      (list "--js-library" (build-path runtime-glue "wasmfs-stdin.js")
++                            "--js-library" (build-path runtime-glue "wasmfs-console.js"))
 +                      ;; App link JS for the browser surface only.
 +                      (if (equal? app-target "browser") app-link-args (list))
 +                      ;; Core preloads only: the package tree ships as a
@@ -462,7 +467,11 @@ index b4e92ee..61a2d05 100644
 +                                ;; loader uses minified locals; a separate
 +                                ;; script needs them exported on Module).
 +                                "FS_createPath,FS_createDataFile")
-+                            "-sFORCE_FILESYSTEM=1" "-lidbfs.js"
++                            ;; WasmFS (not the legacy MEMFS/IDBFS): gives the
++                            ;; OPFS backend mounted at /home/web_user in
++                            ;; wasm_shell_io.c -- synchronous, durable-on-close
++                            ;; persistence with no exit-window flush.
++                            "-sWASMFS=1"
 +                            ;; EXPERIMENT: run main()/Racket on a proxied pthread
 +                            ;; (a nested worker) so the shell worker stays free to
 +                            ;; service pthread_create + proxied main-thread ops --
@@ -471,8 +480,8 @@ index b4e92ee..61a2d05 100644
 +                            "-sPROXY_TO_PTHREAD" "-sPTHREAD_POOL_SIZE=4")
 +                      dep-uflags))
 +                   ;; The link emits ONLY the runtime (scheme*.{js,wasm,data})
-+                   ;; plus the glue baked in above (node-*.js, idbfs-init.js,
-+                   ;; shell-tty.js). Surface assets (ide.*) and host-side glue
++                   ;; plus the glue baked in above (node-*.js, wasmfs-stdin.js,
++                   ;; wasmfs-console.js). Surface assets (ide.*) + host-side glue
 +                   ;; (shell-worker.js, serve.rkt) are no longer staged here --
 +                   ;; the orchestrator (build/stages.rkt) copies them from the
 +                   ;; repo so a surface can be swapped without touching the link.
@@ -483,7 +492,7 @@ index b4e92ee..61a2d05 100644
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                  ,(lambda (path token)
                     (scheme "--script" (at-source "convert-to-boot.ss")
-@@ -765,7 +1173,11 @@
+@@ -765,7 +1182,11 @@
                                   token))])]
             [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                  (not (equal? (lookup 'RACKET) "")))
@@ -496,7 +505,7 @@ index b4e92ee..61a2d05 100644
              (when xpatch?
                (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
              `([:target bootfiles ()
-@@ -878,7 +1290,19 @@
+@@ -878,7 +1299,19 @@
                  ,(lambda (token)
                     (install #f)
                     (setup))]
@@ -517,7 +526,7 @@ index b4e92ee..61a2d05 100644
         [:target plain-install ()
                  ,(lambda (token)
                     (install #f))]
-@@ -1092,32 +1516,39 @@
+@@ -1092,32 +1525,39 @@
                   (list petite-v.boot scheme-v.boot racket-v.boot)
                   (list "petite.boot" "scheme.boot" "racket.boot")))])
  
@@ -580,7 +589,7 @@ index b4e92ee..61a2d05 100644
      (call-with-dest-racket
       (lambda (bindir dest-racket)
         (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
-@@ -1125,13 +1556,37 @@
+@@ -1125,13 +1565,37 @@
                                     (hash-set config 'copytree-prepared-setup-files #t)
                                     config))
         (maybe-copytree copytree-config dest-racket copytree-racket at-dir)

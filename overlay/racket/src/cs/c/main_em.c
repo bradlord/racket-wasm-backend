@@ -24,6 +24,14 @@
 #define BOOT_EXTERN extern
 #include "boot.h"
 
+/* Browser-surface filesystem + console setup: redirect stdout/stderr onto the
+ * per-byte ring device and mount the OPFS-backed persistent home. The strong
+ * definition lives in wasm_shell_io.c, which is linked into the browser surface
+ * (`racket-web.*`) only. main_em.o is shared with the node surface, so we give a
+ * weak no-op default here -- the node link, which never references WasmFS/OPFS,
+ * simply gets the no-op. */
+__attribute__((weak)) void racket_wasm_browser_fs_init(void) {}
+
 int main(int argc, char **argv) {
   racket_boot_arguments_t ba;
   const char *self = (argc > 0 && argv[0]) ? argv[0] : "racket";
@@ -101,6 +109,12 @@ int main(int argc, char **argv) {
   mkdir("/tmp", 0777);
   mkdir("/tmp/fontconfig", 0777);
   mkdir("/tmp/.cache", 0777);
+
+  /* Browser surface only (weak no-op on node): redirect stdout/stderr onto the
+     ring device and mount the OPFS-backed /home/web_user. Done here, before
+     racket_boot, so even the boot banner reaches the page's console and the
+     persistent home is ready before Racket touches it. */
+  racket_wasm_browser_fs_init();
 
   racket_boot(&ba);
   return 0;

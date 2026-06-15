@@ -266,8 +266,9 @@ That link target emits **both** runtime surfaces into
 - the **node** REPL -- `racket.{js,wasm,data}` (run with
   `echo '(+ 1 2)' | node racket.js`); and
 - the **browser** runtime -- `racket-web.{js,wasm,data}` (adds the
-  browser-only `wasm_shell_io.o`, the SAB/DOM exports, IDBFS, and the
-  `idbfs-init.js`/`shell-tty.js` glue baked in via `--pre`/`--post-js`).
+  browser-only `wasm_shell_io.o`, the SAB/DOM exports, WASMFS + an
+  OPFS-backed `/home/web_user`, and the `wasmfs-stdin.js` (`--js-library`)
+  / `wasmfs-console.js` (`--js-library`) console glue).
 
 **The link emits only the runtime, not the page.** As of the
 runtime/surface decoupling (project roadmap Phase 0), the `wasm` target no
@@ -363,7 +364,7 @@ string accepted as one). `read-app-manifest` resolves them to absolute paths;
 forwards them to the `zuo . wasm` invocation, `main.zuo` propagates them into the
 `cs/c` sub-build's vars, and the `wasm` link target in
 `racket/src/cs/c/build.zuo` shell-splits each and appends `--pre-js <path>` (etc.)
-**after** its own built-in glue (`node-tty.js`/`idbfs-init.js`, the
+**after** its own built-in glue (`node-tty.js`/`wasmfs-console.js`, the
 `node-locate-file.js` extern-pre-js), so an app's JS runs after — and can override
 — the runtime's. The JS lands in the app's **target surface only** (a node app's
 JS in `racket.*`, a browser app's in `racket-web.*`); the one `wasm` target still
@@ -721,7 +722,7 @@ deps" below.
 `make wasm` is now the only build path. The earlier per-stage
 `wasm-shell/*.sh` scripts (and the `wasm-shell/build.zuo` orchestrator)
 have been removed, and `wasm-shell/` itself is gone from the delta: the
-emcc link-time JS glue (`idbfs-init.js`, `shell-tty.js`, `node-tty.js`,
+emcc link-time JS glue (`wasmfs-stdin.js`, `wasmfs-console.js`, `node-tty.js`,
 `node-locate-file.js`, `node-load-share.js`) lives repo-side in
 `runtime-glue/` alongside the host-side glue, passed to the link via the
 `RUNTIME_GLUE_DIR` make var (the orchestrator sets it; a manual
@@ -1203,7 +1204,8 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      -lffi
 ```
 
-`runtime-glue/node-tty.js` is the node analogue of `shell-tty.js`: it
+`runtime-glue/node-tty.js` is the node analogue of the browser's
+ring-backed stdin (`wasmfs-stdin.js`): it
 overrides Emscripten's default TTY `get_char` to do a real `fs.readSync`
 on node's stdin and return `undefined` (EAGAIN) on a would-block rather
 than letting the default path leak EAGAIN out as EIO (errno 29). Without
@@ -1296,17 +1298,20 @@ choose:
   of `-l`/`-t`/`-e`/`-u` *suppresses* `racket/init`, leaving the REPL
   namespace bare (`#%top-interaction` unbound) -- require it from inside
   the REPL instead.
-- `files` -- `{ "/abs/path": "<text>" }` written into MEMFS during
+- `files` -- `{ "/abs/path": "<text>" }` written into the FS during
   `preRun` (before `main()`). The IDE uses this to drop the editor's
   source at `/tmp/main.rkt` before the runtime starts.
-- `idbfs` -- whether to mount `/home/web_user` on IDBFS. A persistent
-  surface passes `true`; the IDE's transient process-per-run passes
-  `false`. `idbfs-init.js` checks `Module._idbfsEnabled` and skips the
-  mount when off; `shell-worker`'s `onExit` likewise skips
-  `FS.syncfs(false)` when off.
 
-The rings (`wasm_shell_io.c`), `shell-tty.js`, and `idbfs-init.js`
-stay surface-agnostic.
+There is no longer an `idbfs` init field: persistence is unconditional.
+`/home/web_user` is mounted on an OPFS backend by
+`racket_wasm_browser_fs_init` (`wasm_shell_io.c`) early in `main()`, and
+OPFS is durable on `close()` -- so a transient process-per-run still sees
+files an earlier run wrote and closed, with no opt-in flag and no
+save-on-exit `FS.syncfs`. (Mount is fail-soft: an in-memory `/home/web_user`
+if OPFS is unavailable / single-tab-locked, emscripten #24648.)
+
+The rings (`wasm_shell_io.c`) and the console glue (`wasmfs-stdin.js`,
+`wasmfs-console.js`) stay surface-agnostic.
 
 The page therefore hosts the runtime in a dedicated Web Worker it
 spawns itself (`shell-worker.js`); `main()` runs on that worker's own
@@ -1318,14 +1323,23 @@ pthreads of its own):
 
 - `racket/src/cs/c/wasm_shell_io.c` reserves the rings in the shared
   heap and exports their addresses.
-- `runtime-glue/shell-tty.js` is linked in with
-  `emcc --post-js`. It replaces the TTY `get_char`/`put_char` ops:
-  `get_char` blocks on the input ring with `Atomics.wait` (legal on
-  the runtime worker), `put_char` pushes each byte into the output
-  ring (no newline buffering, so the REPL prompt appears immediately).
-  While parked in that `Atomics.wait` it sets the `shell_io_state` flag
-  to `1` (and back to `0` once input arrives) so the page can show a
-  "waiting for input" affordance -- see "IDE page".
+- The WASMFS console glue replaces the old `TTY`-ops override (WASMFS
+  has no `TTY.stream_ops`): `runtime-glue/wasmfs-stdin.js`
+  (`emcc --js-library`) overrides `_wasmfs_stdin_get_char` to block on
+  the input ring with `Atomics.wait` (legal on the runtime worker),
+  setting `shell_io_state` to `1` while parked (and `0` once input
+  arrives) for the page's "waiting for input" affordance.
+  `runtime-glue/wasmfs-console.js` (`emcc --js-library`) provides a
+  C-callable `rkt_console_setup` that registers a `/dev/console` char
+  device pushing each stdout/stderr byte into the output ring (no
+  newline buffering, so the REPL prompt appears immediately);
+  `racket_wasm_browser_fs_init` (`wasm_shell_io.c`) calls it and
+  `dup2`s fds 1/2 onto it. (WASMFS's built-in stdout would otherwise
+  line-buffer until a newline and hide the prompt. The setup runs from C
+  in `main()` -- on the proxied main pthread -- because WASMFS jsimpl
+  device ops run on the calling thread against per-thread JS state and
+  are not proxied, so the device must be created on the same pthread
+  that does the writes.)
 - `runtime-glue/shell-worker.js` is the worker bootstrap: it sets up
   `self.Module`, `importScripts("./racket-web.js")` synchronously,
   and on `onRuntimeInitialized` posts the shared `HEAPU8.buffer`
@@ -1336,8 +1350,9 @@ pthreads of its own):
   into the input ring followed by `Atomics.notify`.
 
 `make wasm`'s `wasm` target builds the browser runtime alongside the
-node one (it adds `wasm_shell_io.o`, the `--post-js shell-tty.js`, and
-the ring exports). It does **not** stage the page assets -- the worker glue
+node one (it adds `wasm_shell_io.o`, the `--js-library wasmfs-stdin.js`
++ `--js-library wasmfs-console.js` console glue, `-sWASMFS=1`, and the
+ring exports). It does **not** stage the page assets -- the worker glue
 `shell-worker.js` and the surface `ide.*` are copied into `dist/` from the repo
 by the orchestrator's `collect-outputs`, not from the clone (`serve.rkt` is
 repo-side glue run in place, not copied; see the runtime/surface split note near
@@ -1357,7 +1372,8 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
      em-tpb32l/lz4/lib/liblz4.a \
      ../rktio/build-em/librktio.a \
      -L ../build-libffi-em/install/lib \
-     --post-js runtime-glue/shell-tty.js \
+     --js-library runtime-glue/wasmfs-stdin.js \
+     --js-library runtime-glue/wasmfs-console.js \
      --preload-file ../build-cs-tpb32l/petite-pbchunk.boot@petite.boot \
      --preload-file ../build-cs-tpb32l/scheme-pbchunk.boot@scheme.boot \
      --preload-file ../build-cs-tpb32l/racket-pbchunk.boot@racket.boot \
@@ -1431,7 +1447,7 @@ Lifecycle is **process-per-run**. The Interactions pane is inert until
 
 1. Tears down any existing worker and clears the output.
 2. Spawns a fresh worker with
-   `{argv:[], files:{"/tmp/main.rkt": <editor text>}, idbfs:false}` -- a
+   `{argv:[], files:{"/tmp/main.rkt": <editor text>}}` -- a
    plain interactive REPL (argv `[]` keeps `racket/init`, so the
    namespace has the full `racket` bindings), with the editor text
    dropped at `/tmp/main.rkt`.
@@ -1521,7 +1537,7 @@ reader does its own multi-line handling against the same ring.
 **Waiting-for-input affordance.** Because the program's `read-line` and
 the REPL's own prompt-read are the same fd, they are indistinguishable
 at the I/O layer -- there is no way to label one block "stdin" and the
-other "REPL". Instead a single honest signal covers both: `shell-tty.js`
+other "REPL". Instead a single honest signal covers both: `wasmfs-stdin.js`
 flips the `shell_io_state` flag (`wasm_shell_io.c`, exported as
 `_shell_io_state_addr`, posted to the page as `stateBase`) to `1` while
 parked in `Atomics.wait` on the stdin ring, back to `0` once input is
@@ -2026,8 +2042,8 @@ and gates `run()` via `addRunDependency` until `share.data` is in MEMFS — so
 Two runtime methods the externally-loaded loader reaches by name —
 `FS_createPath` and `FS_createDataFile` — plus `addRunDependency` /
 `removeRunDependency` are added to each link's `-sEXPORTED_RUNTIME_METHODS` (the
-browser already exported the latter two for IDBFS; the in-link core loader uses
-minified locals and needs none exported). If the loader references a method not
+two `RunDependency` helpers are also used by the share.data loader itself; the
+in-link core loader uses minified locals and needs none exported). If the loader references a method not
 yet exported, boot aborts with an "X is not exported" error — add it to that list
 and rebuild. (The pure packer deliberately uses only these four, the same set
 `file_packager` reached for, so the export list is unchanged.)
@@ -2545,31 +2561,97 @@ below).
    exception-field tests pass. The same suite on a native build
    takes a few seconds.
 
-3. **Persistent home via IDBFS, properly (transparent flush).**
-   v0 is *shipped*: `/home/web_user` is mounted on IDBFS in
-   `runtime-glue/idbfs-init.js` (`--pre-js`); the boot path runs
-   `FS.syncfs(true)` so any previous session's files are present
-   when Racket starts; a "Save & Restart" button on the page sends
-   `(exit 0)` to the runtime over the input ring, the worker's
-   event loop is finally free during `Module.onExit` and runs
-   `FS.syncfs(false)`, the page tears down the worker and respawns
-   a fresh one. Works, but REPL state is lost on every save.
+3. **Persistent home via WASMFS + OPFS (shipped 2026-06).**
+   The browser surface runs on **WASMFS** (`-sWASMFS=1`, replacing the
+   old `-sFORCE_FILESYSTEM=1 -lidbfs.js`), with `/home/web_user`
+   mounted on an **OPFS** backend. OPFS gives synchronous
+   `FileSystemSyncAccessHandle` I/O **directly on the Racket pthread**,
+   durable on `close()`/`flush()` -- so persistence needs *no*
+   exit-window flush and *no* clean `(exit 0)`: anything Racket has
+   written and closed is already on disk. The IDE's
+   process-per-run (`apps/ide/ide.js` still `worker.terminate()`s on
+   Run/Stop) therefore persists user files across runs for free; only
+   files left *open* at terminate are lost (as with any process kill).
 
-   The structural cause is that the runtime worker's JS event loop
-   is monopolized by `main()` -- our blocking `Atomics.wait` inside
-   `shell-tty.js`'s `stream_ops.read` never returns to the event
-   loop, so async IDB callbacks queued by `FS.syncfs(false)` cannot
-   fire while Racket is alive. Transparent persistence (no
-   restart) needs one of:
-     - **`-sASYNCIFY=1`** plus a small `emscripten_sleep(0)` yield
-       inside `shell-tty.js`'s read; ~1.5-3× runtime slowdown,
-       ~25% larger wasm; *the right small-cost fix*.
-     - **WASMFS + OPFS** via `wasmfs_create_opfs_backend()`; would
-       give synchronous `FileSystemSyncAccessHandle` I/O from the
-       worker, no Asyncify needed. Requires rewriting stdin/stdout
-       because WASMFS replaces the legacy JS FS layer that our
-       `shell-tty.js` overrides (see the trial in commit history
-       for details).
+   **As-built wiring** (all browser-only; the node surface stays on
+   legacy FS):
+     - **Mount + redirect**, in C: `racket_wasm_browser_fs_init`
+       (`overlay/.../wasm_shell_io.c`, called from `main_em.c` before
+       `racket_boot`) does `wasmfs_create_opfs_backend()` +
+       `wasmfs_create_directory("/home/web_user", ...)`, **fail-soft**
+       to an in-memory dir if OPFS is unavailable or single-tab-locked
+       (emscripten #24648). `wasm_shell_io.o` is linked into
+       `racket-web.*` only, so `main_em.c` declares the symbol
+       `__attribute__((weak))` with a no-op default for the node link.
+     - **stdin (fd 0)**: `runtime-glue/wasmfs-stdin.js` (`--js-library`)
+       overrides `_wasmfs_stdin_get_char` (which WASMFS's
+       `StdinFile::read` loops over -- `special_files.cpp`), backed by
+       the existing SAB input ring, with the *block-on-first-empty /
+       `-1`-once-the-line-drains* discipline that dodges the per-char
+       loop trap. It also flips the io-state flag (the old
+       `shell-tty.js` job).
+     - **stdout/stderr (fds 1/2)**: WASMFS's `WritingStdFile::writeToJS`
+       (`special_files.cpp`) **line-buffers until `\n`/`\0`** before
+       calling `emscripten_out`, which would swallow the bare REPL
+       prompt and unterminated `(display ...)`. So we bypass it:
+       `runtime-glue/wasmfs-console.js` (`--js-library`) exposes a
+       C-callable `rkt_console_setup` that registers a write-only char
+       device at `/dev/console` whose `write` pushes each byte straight
+       to the SAB output ring (no newline buffering);
+       `racket_wasm_browser_fs_init` calls it and `dup2`s fds 1/2 onto
+       it. Two subtleties forced this shape: a JS-only `emscripten_out`
+       override could *not* fix the buffering (it is upstream of that
+       hook, in C); and the device must be created **on the proxied main
+       pthread** (from C in `main()`), not in `preRun`, because WASMFS
+       jsimpl device ops are dispatched on the calling thread against
+       per-thread JS state with no proxying (`js_impl_backend.h`) -- and
+       every Racket write() runs on that pthread.
+
+   **Why not the cheaper routes** (investigated 2026-06; answers the
+   old "maybe proxy-to-pthread fixed mid-run flush?" TODO -- it did
+   not). The browser link uses `-sPROXY_TO_PTHREAD` (the GLib
+   font-helper-thread deadlock fix -- see the link flags), so `main()`
+   runs on a child pthread and, *under legacy FS*, the canonical
+   Emscripten FS lives on the shell-worker main thread (pthread
+   syscalls proxied there). That main thread is **parked servicing the
+   proxy for the entire run**, even while Racket idles in
+   `Atomics.wait` on stdin -- so a legacy `FS.syncfs` can only run at
+   `preRun`/`onExit`, never mid-run. Empirically (toy build +
+   Playwright): a `postMessage` flush handler never ran mid-session; a
+   `setInterval` armed in `onRuntimeInitialized` fired ~2 ticks then
+   went silent; and `self.addEventListener("message", ...)` *broke
+   PROXY_TO_PTHREAD boot* (collides with the proxy's message channel --
+   only `self.onmessage` replacement is safe). The two rejected
+   alternatives: **`-sASYNCIFY=1`** + an `emscripten_sleep(0)` yield in
+   the stdin read (a real ~1.5-3x runtime / ~25% size tax on every
+   build), and **page-mediated write-through** (hook FS writes, ship
+   bytes over a SAB ring to the always-free page, have it write
+   IndexedDB -- generic but you reimplement incremental FS-op mirroring
+   + delivery guarantees). OPFS sidesteps both: durability is on the
+   pthread itself, no parked thread in the path.
+
+   The migration was de-risked by three standalone `emcc` spikes
+   (emsdk 5.0.7, `-sWASMFS -pthread -sPROXY_TO_PTHREAD`, headless
+   Chromium), all passing: (1) OPFS from the proxied pthread persists
+   across loads (off the page main thread, so the main-thread OPFS
+   deadlock emscripten #20650 doesn't apply); (2) the
+   `_wasmfs_stdin_get_char` override works JS-only; (3) both packaging
+   paths -- `--preload-file` (boot/collects) and the separate
+   `share.data`/`share.data.js` `file_packager` artifact (via
+   `FS_createDataFile`/`FS_createPath`/`addRunDependency`, all present
+   in WASMFS) -- still deliver files to `main()`.
+
+   **Verify on the next real build** (not yet exercised end-to-end):
+   the prompt/`display`-without-newline now reaching the page through
+   the ring device; `--use-preload-cache` still functioning under
+   WASMFS (kept in the browser link); a write-then-reload persistence
+   round-trip; and that `racket/draw` text still renders (the GLib
+   font-helper thread -- the reason `PROXY_TO_PTHREAD` exists -- under
+   WASMFS). A lower-blast-radius alternative that was **not** taken
+   ("Route B"): keep legacy FS + console and write a *custom legacy-FS
+   OPFS backend* mounted only at the persistent path -- rejected
+   because it reimplements the async-acquire-then-sync-I/O proxy that
+   WASMFS provides for free.
 
 4. **Networking, real TCP via a WebSocket-bridged `rktio_network`.**
    *Partially shipped*: the browser build has a `wasm_http_get` C

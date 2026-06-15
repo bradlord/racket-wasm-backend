@@ -11,12 +11,9 @@
  *                 module and exits; `["-e","(form)"]` runs an
  *                 expression. The IDE uses `[]` (a plain REPL) and then
  *                 requires racket/enter + `enter!`s the program itself.
- *   - `files`  -- { "/abs/path": "<text>" } seeded into MEMFS during
+ *   - `files`  -- { "/abs/path": "<text>" } seeded into the FS during
  *                 preRun (before main()). Used by the IDE to drop the
  *                 editor's source at /tmp/main.rkt before main() runs.
- *   - `idbfs`  -- whether to mount IDBFS at /home/web_user. A
- *                 persistent surface passes true; the IDE's transient
- *                 process-per-run passes false.
  *
  * After init, importScripts("./racket-web.js") boots the runtime on
  * this worker's own thread. Once it is up, we hand the page:
@@ -28,20 +25,16 @@
  *
  * The page then writes typed bytes into the input ring and polls the
  * output ring. Because the rings live in the same SharedArrayBuffer,
- * Atomics.wait/notify in shell-tty.js coordinate this worker (consumer
- * of stdin) with the page (producer of stdin).
+ * Atomics.wait/notify (the stdin half in wasmfs-stdin.js) coordinate this
+ * worker (consumer of stdin) with the page (producer of stdin).
  *
- * IDBFS persistence (legacy-FS / save-and-restart flavor):
- *   - Boot:  /home/web_user is mounted on IDBFS and FS.syncfs(true)
- *            runs during preRun, before the event loop is monopolized
- *            by Racket. See wasm-shell/idbfs-init.js (--pre-js). It
- *            checks Module._idbfsEnabled and skips mounting if false.
- *   - Save:  the page sends `(exit 0)\n` over the input ring on a
- *            user-initiated "Save & Restart"; Racket exits cleanly,
- *            Module.onExit runs (event loop now free), we flush
- *            MEMFS -> IDB via FS.syncfs(false), then post `exit` to
- *            the page so it can terminate this worker and spawn a
- *            fresh one. When _idbfsEnabled is false we skip syncfs.
+ * Persistence (WasmFS + OPFS):
+ *   - A persistent home is mounted at /home/web_user on an OPFS backend
+ *     by racket_wasm_browser_fs_init (wasm_shell_io.c), early in main().
+ *   - OPFS is synchronous and durable on close()/flush() directly on the
+ *     Racket pthread, so -- unlike the old IDBFS path -- there is NO
+ *     exit-window flush to perform here: anything Racket has written and
+ *     closed is already on disk. onExit only signals the page.
  */
 "use strict";
 
@@ -50,7 +43,6 @@ function post(msg) { self.postMessage(msg); }
 function buildModule(init) {
   return {
     arguments: Array.isArray(init.argv) ? init.argv.slice() : [],
-    _idbfsEnabled: init.idbfs !== false,   // default on
 
     locateFile: function (path) { return path; },
 
@@ -78,15 +70,29 @@ function buildModule(init) {
 
     preRun: [
       function () {
-        // Seed any page-supplied files into MEMFS before main() runs.
+        // Seed any page-supplied files into the FS before main() runs.
+        //
+        // Under WASMFS the FS is implemented in wasm, so FS.mkdirTree /
+        // FS.writeFile here (preRun, before initRuntime) would call native
+        // _wasmfs_* functions and abort ("called before runtime
+        // initialization"). FS_createPath / FS_createDataFile are the
+        // preload-safe API: in preRun they cache the dirs/files in JS, and
+        // WASMFS materialises them after init but before main() (the same
+        // mechanism the share.data loader and --preload-file rely on).
+        // Pass bytes, not a string -- the string path needs intArrayFromString,
+        // which isn't included.
+        var M = self.Module;
         var files = init.files || {};
         var paths = Object.keys(files);
+        var enc = new TextEncoder();
         for (var i = 0; i < paths.length; i++) {
           var p = paths[i];
-          var parent = p.replace(/\/[^/]*$/, "");
-          try { if (parent) FS.mkdirTree(parent); } catch (_) {}
+          var parent = p.replace(/\/[^/]*$/, "");        // "/tmp" for "/tmp/main.rkt"
           try {
-            FS.writeFile(p, files[p]);
+            if (parent) M["FS_createPath"]("/", parent.replace(/^\//, ""), true, true);
+          } catch (_) {}
+          try {
+            M["FS_createDataFile"](p, null, enc.encode(files[p]), true, true, true);
           } catch (e) {
             post({ type: "fs-error", path: p, error: String(e && e.message || e) });
           }
@@ -101,7 +107,7 @@ function buildModule(init) {
       var outAddr = M["_shell_out_addr"]();
       var outCap  = M["_shell_out_cap"]();
       /* io-state flag: 1 while the runtime is blocked on stdin (see
-         wasm_shell_io.c / shell-tty.js). The page polls it to show a
+         wasm_shell_io.c / wasmfs-stdin.js). The page polls it to show a
          "waiting for input" affordance. */
       var ioStateAddr = M["_shell_io_state_addr"] ? M["_shell_io_state_addr"]() : 0;
       /* DOM RPC slots (see racket/src/cs/c/wasm_dom.c). The page-
@@ -141,17 +147,10 @@ function buildModule(init) {
     },
 
     onExit: function (code) {
-      // Final IDB flush. The runtime has just exited so the worker's
-      // JS thread is no longer monopolized; IDB async callbacks can
-      // now actually fire. The page waits for our { type: "exit" }
-      // message before terminating us.
-      var done = function (err) {
-        post({ type: "exit", code: code | 0, syncErr: err && (err.message || String(err)) });
-      };
-      if (!self.Module._idbfsEnabled) { done(null); return; }
-      try {
-        self.Module.FS.syncfs(false, done);
-      } catch (e) { done(e); }
+      // OPFS is durable on close(), so there is no save-on-exit flush to do
+      // (unlike the old IDBFS path). Just tell the page the process is gone so
+      // it can terminate this worker and spawn a fresh one.
+      post({ type: "exit", code: code | 0 });
     },
   };
 }

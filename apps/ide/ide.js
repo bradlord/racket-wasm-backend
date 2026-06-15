@@ -7,10 +7,12 @@
  *   - Teardown any existing worker, clear the Interactions output.
  *   - Spawn a fresh shell-worker.js with
  *       { type:"init", argv:[],
- *         files:{"/tmp/main.rkt": <editor text>}, idbfs:false }
+ *         files:{"/tmp/main.rkt": <editor text>} }
  *     i.e. a plain interactive REPL (argv [] keeps the default
  *     racket/init, so the namespace has the full `racket` bindings). The
- *     editor text lands at /tmp/main.rkt in MEMFS.
+ *     editor text lands at /tmp/main.rkt. (The persistent home
+ *     /home/web_user is OPFS-backed by the runtime, durable on close, so
+ *     a new run still sees files an earlier run wrote -- no opt-in flag.)
  *   - On "ready", inject one line into the stdin ring (not echoed):
  *       (require racket/enter)
  *       (install the web-repl bitmap printer, guarded)
@@ -28,8 +30,8 @@
  *     Cmd/Ctrl+Enter in the editor re-runs too, stopping a live run first.
  *
  * Shares all of the worker/ring/canvas/DOM-RPC plumbing with the pages it
- * replaces; see shell-worker.js, shell-tty.js, wasm_shell_io.c,
- * wasm_canvas.c, wasm_dom.c.
+ * replaces; see shell-worker.js, wasmfs-stdin.js, wasmfs-console.js,
+ * wasm_shell_io.c, wasm_canvas.c, wasm_dom.c.
  */
 (function () {
   "use strict";
@@ -129,7 +131,7 @@
   var inBase = 0, inCap = 0;
   var outBase = 0, outCap = 0;
   var outHead = 0;
-  var stateBase = 0;   // io-state flag index (set by shell-tty.js)
+  var stateBase = 0;   // io-state flag index (set by wasmfs-stdin.js)
   var ioWaiting = -1;  // last reflected flag value (-1 = not yet known)
   var pollHandle = 0;
   var encoder = new TextEncoder();
@@ -283,11 +285,14 @@
     // and leave the namespace bare). The editor text is dropped at
     // /tmp/main.rkt before main() runs; we require racket/enter and
     // `enter!` it once the REPL is ready (see "ready" below).
+    // The persistent home (/home/web_user) is mounted on OPFS by the runtime
+    // itself (wasm_shell_io.c); it is durable on close(), so a new
+    // process-per-run still sees files an earlier run wrote and closed -- no
+    // opt-in flag and no save-on-exit handshake needed.
     worker.postMessage({
       type: "init",
       argv: [],
       files: { "/tmp/main.rkt": editor.value },
-      idbfs: false,
     });
   }
 

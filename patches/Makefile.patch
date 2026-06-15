@@ -42,7 +42,7 @@ index c10c9e2..8997629 100644
 +APP_TARGET =
 +
 +# WebAssembly: directory holding the built-in emcc link JS glue
-+# (idbfs-init.js, shell-tty.js, node-tty.js, node-locate-file.js,
++# (wasmfs-stdin.js, wasmfs-console.js, node-tty.js, node-locate-file.js,
 +# node-load-share.js). Required for `make wasm`; the racket-wasm
 +# orchestrator sets it to its repo-side runtime-glue/ dir (absolute
 +# path, no spaces -- BUILD_VARS re-expands through the shell).

@@ -34,7 +34,7 @@
 ;; these into the delta-hash -- NOT the whole dir, so editing the host-side glue
 ;; like shell-worker.js doesn't force a relink).
 (define link-glue-names
-  '("idbfs-init.js" "shell-tty.js"
+  '("wasmfs-stdin.js" "wasmfs-console.js"
     "node-tty.js" "node-locate-file.js" "node-load-share.js"))
 ;; Repo-side wasm-deps recipe sources (build-deps.sh + per-dep recipes), passed
 ;; to cs/c/build.zuo's `wasm-deps` target via the WASM_DEPS_SRC_DIR make var.
