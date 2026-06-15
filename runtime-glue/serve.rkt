@@ -12,7 +12,7 @@
 ;; A plain static server (`python3 -m http.server`, `raco static-files`, ...)
 ;; does not send these, so SharedArrayBuffer is unavailable and the runtime
 ;; never starts. Run this from the directory that holds index.html and the
-;; generated scheme-web.* assets:
+;; generated racket-web.* assets:
 ;;
 ;;     racket serve.rkt [port]      # default port 8123
 ;;

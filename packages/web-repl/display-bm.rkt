@@ -9,7 +9,7 @@
 ;;   ... draw into bm ...
 ;;   (display-bm bm)
 ;;
-;; Browser shell only. Under `node scheme.js` there is no page to
+;; Browser shell only. Under `node racket.js` there is no page to
 ;; receive the message; the blit returns -1 and display-bm says so.
 
 (require racket/class           ; `send`

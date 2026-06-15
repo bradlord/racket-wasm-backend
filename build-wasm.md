@@ -82,8 +82,8 @@ Done:
   chunk C files are recompiled with emcc and linked, with `boot.c`
   built `-DPBCHUNK_REGISTER`. This replaces interpreted boot bytecode
   with compiled C and **dropped boot from ~5 minutes to ~2 seconds**
-  under `node scheme.js`. The cost is binary size: `scheme.wasm` grows
-  ~1 MB → ~26 MB and `scheme.data` ~47 MB → ~87 MB (irrelevant for the
+  under `node racket.js`. The cost is binary size: `racket.wasm` grows
+  ~1 MB → ~26 MB and `racket.data` ~47 MB → ~87 MB (irrelevant for the
   node CLI; matters more for the browser shell's download).
 - Verified end-to-end through Racket: `(+ 4 2)` → `6`, a `for/sum`
   loop, and `(require racket/list)` (collection load from `/collects`)
@@ -181,7 +181,7 @@ Open:
 
   **Correction (later):** the "precondition doesn't hold on the browser" claim
   was wrong -- `-sPROXY_TO_PTHREAD` *does* work on the browser once
-  `Module.mainScriptUrlOrBlob` points the pthread pool at `scheme-web.js` (the
+  `Module.mainScriptUrlOrBlob` points the pthread pool at `racket-web.js` (the
   `importScripts` host otherwise can't supply its own URL). It is now enabled on
   the browser link to fix the GLib **font** deadlock (a different deadlock than
   this TCP/DNS one, which C1 still handles). See "Browser text: the GLib thread
@@ -191,7 +191,7 @@ Open:
   `(current-directory)`, so it must be launched **from `dist/`** (`cd dist &&
   racket ../runtime-glue/serve.rkt 8123`). Launching it elsewhere, or leaving
   stale `serve.rkt` instances from earlier runs holding the port, silently
-  serves an **old** `scheme-web.*` — the headless Playwright harness then tests
+  serves an **old** `racket-web.*` — the headless Playwright harness then tests
   a stale runtime (tell them apart by the version-date in the boot banner, e.g.
   `…-2026-06-12-…`). Some earlier browser-only conclusions in this history
   (PROXY/guard "hangs on browser") were measured against such stale assets and
@@ -263,9 +263,9 @@ target in `racket/src/cs/c/build.zuo`.
 That link target emits **both** runtime surfaces into
 `racket/src/build/cs/c/wasm/`, with the target `.zo` packaged in:
 
-- the **node** REPL -- `scheme.{js,wasm,data}` (run with
-  `echo '(+ 1 2)' | node scheme.js`); and
-- the **browser** runtime -- `scheme-web.{js,wasm,data}` (adds the
+- the **node** REPL -- `racket.{js,wasm,data}` (run with
+  `echo '(+ 1 2)' | node racket.js`); and
+- the **browser** runtime -- `racket-web.{js,wasm,data}` (adds the
   browser-only `wasm_shell_io.o`, the SAB/DOM exports, IDBFS, and the
   `idbfs-init.js`/`shell-tty.js` glue baked in via `--pre`/`--post-js`).
 
@@ -284,9 +284,9 @@ roadmap.
 builds *both* surfaces (so the runtime cache stores the union), an app declares
 which one it ships via its manifest's `'target` field -- `'browser` (default) or
 `'node`. `collect-outputs` copies only that subset into `dist/`: a browser app
-gets `scheme-web.{js,wasm,data}` + the separate package payload
+gets `racket-web.{js,wasm,data}` + the separate package payload
 `share.data`/`share.data.js` + the worker glue `shell-worker.js`; a node app gets
-`scheme.{js,wasm,data}` only (packages are baked into `scheme.data`, and it needs
+`racket.{js,wasm,data}` only (packages are baked into `racket.data`, and it needs
 no browser glue). `target` is *not* part of the build-key -- it only filters the
 copy, so a browser and a node app with the same `pkgs`/`wasm-libs` share one
 cache entry. `serve.rkt` is repo-side glue and is **not** copied into `dist/`;
@@ -323,8 +323,8 @@ It wraps `build-runtime` (`build/stages.rkt`), differing only in the output
 into MEMFS, runs it (`argv ["-u" "/tmp/main.rkt"]`), and drains its stdout from
 the output ring -- the smallest counterpart to `ide.js`. `apps/node-repl/` is the
 node-target counterpart: a manifest-only app (`'target 'node`, no page surface)
-whose `dist/` is `scheme.{js,wasm,data}`, run directly as a Racket REPL with
-`node apps/node-repl/dist/scheme.js`.
+whose `dist/` is `racket.{js,wasm,data}`, run directly as a Racket REPL with
+`node apps/node-repl/dist/racket.js`.
 
 **The IDE is just an app (dogfood).** There is no bespoke IDE build:
 `racket build/main.rkt build` builds **`apps/ide`** through this same path
@@ -366,7 +366,7 @@ forwards them to the `zuo . wasm` invocation, `main.zuo` propagates them into th
 **after** its own built-in glue (`node-tty.js`/`idbfs-init.js`, the
 `node-locate-file.js` extern-pre-js), so an app's JS runs after — and can override
 — the runtime's. The JS lands in the app's **target surface only** (a node app's
-JS in `scheme.*`, a browser app's in `scheme-web.*`); the one `wasm` target still
+JS in `racket.*`, a browser app's in `racket-web.*`); the one `wasm` target still
 builds both surfaces, `APP_TARGET` just selects which link gets the JS. Because
 the JS changes the linked binary, its **contents feed the build-key** (so editing
 a pre-js file relinks), together with the target — meaning an app *with* link JS
@@ -434,7 +434,7 @@ cross-installing them against a pure SDK (the same path an external consumer use
 - **Base runtime** (`ensure-base-runtime!`, clone+emsdk) -- `make wasm` with
   `PKGS=`, then `pack-packages` packs the package-agnostic **base `share.data`**
   (the clone's core tree, emsdk-free). The browser link bakes only boot images +
-  collects into `scheme-web.data`; packages are never in the link (they're the
+  collects into `racket-web.data`; packages are never in the link (they're the
   separate `share.data`, see "Packages as a separate data file"). Binaries + base
   `share.data` cache together under **base-key** (omits `pkgs`/`local-pkgs`) -- one
   emcc link + one base pack, reused by every app on the same (delta, `wasm-deps`,
@@ -490,7 +490,7 @@ The upshot: **a package change is a base + SDK cache hit + an emsdk-free
 `cross-install`** -- a full `build` of a package change runs with the emsdk
 entirely off `PATH` and **no clone mutation**. Native deps (`wasm-libs`, e.g. the
 cairo/pango stack `draw` links) stay in the base build (linked *into* the wasm
-binary, can't be layered on). Node (`scheme.data`) bakes its tree at link time, so
+binary, can't be layered on). Node (`racket.data`) bakes its tree at link time, so
 under `PKGS=` the node surface is package-less -- this serves the browser surface.
 
 > First-consume cost: with an empty catalog + compile shadows, the staging pass
@@ -822,7 +822,7 @@ What is **not** yet folded in (still needs new work):
    stubs the libc functions the deps reference -- `getprogname`,
    `copy_file_range`, `res_query`, `pthread_setname_np`, ...) are compiled
    and linked. It emits **both** the §5 **node** link
-   (`scheme.{js,wasm,data}`) and the **browser** `scheme-web.*` variant
+   (`racket.{js,wasm,data}`) and the **browser** `racket-web.*` variant
    with its shell JS + staged page assets. Still missing: the trimmed
    cross-root collects (item 4, so it currently preloads the full source
    tree). Whether it actually boots also depends on item 1 (the kernel's
@@ -1069,7 +1069,7 @@ Once everything above (rktio, libffi, host pb, `racket.boot`) exists, the
 whole compile-and-link of the WASM runtime is performed by `make wasm`'s
 final stages: the `wasm` target (re)compiles `main_em.o`, `boot.o`,
 `init_rktio.o`, and (on first run) the 30 pbchunk objects, then links
-**both** `scheme.{js,wasm,data}` (node) and `scheme-web.{js,wasm,data}`
+**both** `racket.{js,wasm,data}` (node) and `racket-web.{js,wasm,data}`
 (browser) and stages the page assets. The rest of this section explains
 what that stage runs and why, so the recipe can be reproduced or modified
 by hand.
@@ -1177,7 +1177,7 @@ Finally link everything, including `librktio.a` and `-lffi`:
 
 ```sh
 emcc -O2 -pthread -s USE_ZLIB=1 \
-     -o em-tpb32l/bin/tpb32l/scheme.html \
+     -o em-tpb32l/bin/tpb32l/racket.html \
      em-tpb32l/boot/tpb32l/main_em.o \
      em-tpb32l/boot/tpb32l/boot.o \
      em-tpb32l/boot/tpb32l/init_rktio.o \
@@ -1204,19 +1204,19 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
 overrides Emscripten's default TTY `get_char` to do a real `fs.readSync`
 on node's stdin and return `undefined` (EAGAIN) on a would-block rather
 than letting the default path leak EAGAIN out as EIO (errno 29). Without
-it, `node scheme.js` with a non-blocking stdin (e.g. `child_process.spawn`,
+it, `node racket.js` with a non-blocking stdin (e.g. `child_process.spawn`,
 or any non-piped invocation) loops on `error reading from stream port`.
 
 `runtime-glue/node-locate-file.js` fixes data-file resolution under node so
-that `node path/to/scheme.js` works from any directory, not just from
+that `node path/to/racket.js` works from any directory, not just from
 inside the build dir. The trap: Emscripten's internal `locateFile(path)`
-resolves against `scriptDirectory` (the dir of `scheme.js`), which is why
-`scheme.wasm` always loads -- but the `--preload-file` data loader does
+resolves against `scriptDirectory` (the dir of `racket.js`), which is why
+`racket.wasm` always loads -- but the `--preload-file` data loader does
 **not** go through it. It reads `Module["locateFile"]` directly and, when
-that hook is unset, falls back to the bare relative string `"scheme.data"`,
+that hook is unset, falls back to the bare relative string `"racket.data"`,
 which `fs.readFileSync` resolves against the *process CWD*. So a plain
-`echo ... | node racket/src/build/cs/c/wasm/scheme.js` dies with
-`ENOENT: ... open 'scheme.data'`. The shim defines `Module["locateFile"]`
+`echo ... | node racket/src/build/cs/c/wasm/racket.js` dies with
+`ENOENT: ... open 'racket.data'`. The shim defines `Module["locateFile"]`
 to join relative names onto the script's `__dirname` under node.
 
 It must be linked with **`--extern-pre-js`, not `--pre-js`**: the
@@ -1233,7 +1233,7 @@ browser surface (no node `process`).
 
 ```sh
 cd em-tpb32l/bin/tpb32l
-echo '(+ 1 2)' | node scheme.js
+echo '(+ 1 2)' | node racket.js
 ```
 
 With `main_em.c` linked in, you will see Chez's Petite banner print,
@@ -1242,11 +1242,11 @@ into rktio succeed, and the boot-arguments struct is now populated so
 startup proceeds past the old `expected ... to start` error.
 
 With pbchunk wired in (below), boot is fast: `echo '(+ 4 2)' | node
-scheme.js` returns `6` in **~2 seconds** wall time (down from ~5
+racket.js` returns `6` in **~2 seconds** wall time (down from ~5
 minutes of pure interpretation), e.g.:
 
 ```
-$ /usr/bin/time -p node scheme.js <<< '(+ 4 2)'
+$ /usr/bin/time -p node racket.js <<< '(+ 4 2)'
 Welcome to Racket v9.2.0.5 [cs].
 > 6
 real 1.82
@@ -1264,7 +1264,7 @@ profiling is no longer needed.
 
 The browser shell is a
 **shared runtime + per-surface host** design: one
-`scheme-web.{js,wasm,data}` binary backs every browser surface. Today
+`racket-web.{js,wasm,data}` binary backs every browser surface. Today
 there is one surface -- `index.html`/`ide.js`, the DrRacket-like IDE (see
 "IDE page" below) -- but the architecture is deliberately surface-
 agnostic (future doc widgets / embeds / canvas GUIs are just another
@@ -1272,7 +1272,7 @@ HTML+JS pair that drives the same worker with a different init
 payload).
 
 It needs a **separate, browser-specific build** of the runtime,
-because the node `scheme.js` runs `main()` on the calling thread: in a
+because the node `racket.js` runs `main()` on the calling thread: in a
 browser that would be the page's main thread, and Racket's blocking
 REPL stdin read would freeze the event loop.
 
@@ -1280,7 +1280,7 @@ REPL stdin read would freeze the event loop.
 
 `shell-worker.js` no longer loads the runtime at top level. It waits
 for an `init` message from the page, then sets `self.Module` and
-`importScripts("./scheme-web.js")`. The init payload lets the page
+`importScripts("./racket-web.js")`. The init payload lets the page
 choose:
 
 - `argv` -- becomes `Module.arguments`, which Racket sees as its
@@ -1324,7 +1324,7 @@ pthreads of its own):
   to `1` (and back to `0` once input arrives) so the page can show a
   "waiting for input" affordance -- see "IDE page".
 - `runtime-glue/shell-worker.js` is the worker bootstrap: it sets up
-  `self.Module`, `importScripts("./scheme-web.js")` synchronously,
+  `self.Module`, `importScripts("./racket-web.js")` synchronously,
   and on `onRuntimeInitialized` posts the shared `HEAPU8.buffer`
   (a `SharedArrayBuffer`) plus the ring offsets back to the page.
 - `ide.js` runs on the page: it spawns the worker via
@@ -1344,7 +1344,7 @@ flags are what the `wasm` target emits):
 
 ```sh
 emcc -O2 -pthread -s USE_ZLIB=1 \
-     -o em-tpb32l/bin/tpb32l/scheme-web.html \
+     -o em-tpb32l/bin/tpb32l/racket-web.html \
      em-tpb32l/boot/tpb32l/main_em.o \
      em-tpb32l/boot/tpb32l/boot.o \
      em-tpb32l/boot/tpb32l/init_rktio.o \
@@ -1372,12 +1372,12 @@ emcc -O2 -pthread -s USE_ZLIB=1 \
 `node-args`, in `cs/c/build.zuo`). It makes the generated `.data` loader
 stash the preload package in IndexedDB keyed by package name + total
 size, so a returning browser reads the (large) boot/collects/etc
-payload from IDB instead of re-fetching `scheme-web.data` over the
+payload from IDB instead of re-fetching `racket-web.data` over the
 network on every load. The cache self-invalidates when the package size
 changes, so a rebuild that alters the preload set transparently refreshes
 it. The node surface has no persistent IndexedDB to cache into, so the
 flag is omitted there. (The browser's *package* tree no longer rides in
-`scheme-web.data` — it ships as a separate `share.data`/`share.data.js`
+`racket-web.data` — it ships as a separate `share.data`/`share.data.js`
 that caches itself the same way; see "Packages as a separate data file".)
 
 The base browser link historically omitted `-sPROXY_TO_PTHREAD`: an even
@@ -1389,7 +1389,7 @@ keystrokes. By owning the worker ourselves, the FS and `main()` share a thread,
 **However, that thread-sharing is exactly what deadlocks GLib's font path**, so
 the browser link now *does* enable `-sPROXY_TO_PTHREAD` again -- but with the
 shell worker owned by us as the *proxy-pump* thread (not running Racket), and
-`mainScriptUrlOrBlob` pointing the pthread pool at `scheme-web.js`. The FS now
+`mainScriptUrlOrBlob` pointing the pthread pool at `racket-web.js`. The FS now
 lives on the proxied pthread with `main()`, so `get_char` still blocks cleanly;
 the page main thread only pumps the proxy queue. See "Browser text: the GLib
 thread deadlock and its fix" for the full account.
@@ -1574,7 +1574,7 @@ checked-in Racket core tests (the `.rktl` files in
 `pkgs/racket-test-core/tests/racket/`) under the WASM/node build. Each
 `.rktl` is a flat script that expects to be `load`ed inside a session
 that already evaluated `testing.rktl`, so the script concatenates the
-two and pipes them through `node scheme.js`, then greps for the per-test
+two and pipes them through `node racket.js`, then greps for the per-test
 summary line. It runs against the orchestrator's clone (`.work/racket`)
 by default; set `RACKET_WASM_CLONE` to point at a different built tree.
 
@@ -1644,7 +1644,7 @@ cold build re-`sync`s it on demand.
 `draw-stack-test.rkt` into a pass/fail gate: it asserts `ffi-lib` resolves
 `libcairo` and that a real `cairo_image_surface_create_for_data` + paint reads
 back the expected `40 80 ff ff` pixel. It runs against the clone's node
-`scheme.js`, which exists **iff a cold build happened** — exactly when the
+`racket.js`, which exists **iff a cold build happened** — exactly when the
 cairo/png/freetype linkage (`wasm-deps`/delta) could have changed. On a warm
 cache-hit build the clone is absent and the runtime is byte-identical to a prior
 green run, so the wrapper skips (exit 0). It does *not* assert on the test's
@@ -1708,7 +1708,7 @@ through either runtime's stdin REPL:
 # native host racket
 racket < test/node/perf-bench.rktl | grep BENCH
 # WASM under node (against the orchestrator's clone)
-node .work/racket/racket/src/build/cs/c/wasm/scheme.js < test/node/perf-bench.rktl | grep BENCH
+node .work/racket/racket/src/build/cs/c/wasm/racket.js < test/node/perf-bench.rktl | grep BENCH
 ```
 
 Measured on an Apple M3 Pro, node v22.16.0 (arm64). Native is
@@ -1950,8 +1950,8 @@ link. Changing packages then means: re-install + repack (`pack-pkgs`),
 
 The split (in `cs/c/build.zuo`, the `wasm` target): the link preloads only
 `core-preloads` (boot images + `/collects` + `/etc`, which change only on a
-Racket-version rebuild) into the MEMFS, for both the node (`scheme.*`) and
-browser (`scheme-web.*`) surfaces. The package tree is no longer referenced in
+Racket-version rebuild) into the MEMFS, for both the node (`racket.*`) and
+browser (`racket-web.*`) surfaces. The package tree is no longer referenced in
 the link at all.
 
 The orchestrator's `pack-share-data` (`build/pack.rkt`) is a **pure-Racket
@@ -1978,7 +1978,7 @@ repack-without-relink path.
 >
 > One sharp edge the loader must respect: it does **all** FS work
 > (`FS_createPath`/`FS_createDataFile`) inside its `preRun` callback, never at
-> import time — `shell-worker.js` `importScripts`es it *before* `scheme-web.js`,
+> import time — `shell-worker.js` `importScripts`es it *before* `racket-web.js`,
 > so the runtime and those hooks don't exist yet when the loader is first
 > evaluated. (A loader that calls `FS_createPath` at import silently hangs the
 > worker.)
@@ -2009,10 +2009,10 @@ and gates `run()` via `addRunDependency` until `share.data` is in MEMFS — so
 `/share/pkgs` is present before `main()`, exactly as when it was in-link:
 
 - **Browser:** `shell-worker.js` does `importScripts("./share.data.js")`
-  **before** `importScripts("./scheme-web.js")`. The loader runs in the worker's
+  **before** `importScripts("./racket-web.js")`. The loader runs in the worker's
   global scope, where its self-declared `var Module` binds to the `self.Module`
   the worker set up.
-- **Node:** `scheme.js`'s `Module` is module-scoped (not global) and there is no
+- **Node:** `racket.js`'s `Module` is module-scoped (not global) and there is no
   `importScripts`, so the baked-in `--pre-js` `node-load-share.js` reproduces the
   worker's environment: it puts this module's `Module` and `require` on
   `globalThis`, then runs `./share.data.js` via **indirect** `eval` (global
@@ -2245,12 +2245,12 @@ small changes, no source patches to GLib/Pango, no shell-IO rewrite:
    thread spawns and `g_cond_wait` completes. The SAB stdin/stdout/DOM rings are
    shared memory, so they keep working across the thread boundary unchanged.
 2. **`runtime-glue/shell-worker.js`** sets `Module.mainScriptUrlOrBlob =
-   "./scheme-web.js"`. Without it, Emscripten spawns its pthread pool by
+   "./racket-web.js"`. Without it, Emscripten spawns its pthread pool by
    `new Worker(_scriptName)` where `_scriptName` is the *current* worker's URL
    (`shell-worker.js`, because the module is loaded via `importScripts` and
    can't discover its own URL) -- spawning useless extra `shell-worker.js`
    instances so the proxied `main()` never boots (stuck at "Downloading…").
-   Pointing it at the real module makes the pool spawn `scheme-web.js` in
+   Pointing it at the real module makes the pool spawn `racket-web.js` in
    pthread mode.
 3. **`wasm_canvas.c`** delivers the pixel blit via `MAIN_THREAD_EM_ASM` instead
    of `EM_JS`. Under PROXY the blit runs on the Racket pthread, whose
@@ -2451,7 +2451,7 @@ evaluation verified. The browser shell hosts the runtime in a
 dedicated Web Worker with `Atomics.wait`-blocked stdin, swapped from
 an xterm to a plain textarea + scrolling output pane so the browser
 handles all editing. ~319,500 Racket core-test assertions pass under
-`node scheme.js` (one known PRNG corner-case failure, documented
+`node racket.js` (one known PRNG corner-case failure, documented
 below).
 
 ### Capability gaps (concrete TODOs)
@@ -2537,7 +2537,7 @@ below).
    itself is *correct* on WASM, just unusably slow; once this is
    addressed it should re-join the default test slice.
 
-   **Measured**: a full run of `port.rktl` under `node scheme.js`
+   **Measured**: a full run of `port.rktl` under `node racket.js`
    takes about **6m49s wall time**, all 797 value tests + 278
    exception-field tests pass. The same suite on a native build
    takes a few seconds.

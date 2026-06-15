@@ -1,4 +1,4 @@
-/* idbfs-init.js -- linked into scheme-web.js via `emcc --pre-js`.
+/* idbfs-init.js -- linked into racket-web.js via `emcc --pre-js`.
  *
  * Mount IDBFS at /home/web_user during Module.preRun, when we are
  * still inside the module's IIFE (so `IDBFS`, `FS`, `addRunDependency`

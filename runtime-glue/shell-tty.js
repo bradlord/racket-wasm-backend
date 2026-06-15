@@ -1,4 +1,4 @@
-/* shell-tty.js  --  linked into scheme-web.js via `emcc --post-js`.
+/* shell-tty.js  --  linked into racket-web.js via `emcc --post-js`.
  *
  * This runs inside the Emscripten module closure (on the runtime
  * worker -- see shell-worker.js), so it can see the internal `TTY`,

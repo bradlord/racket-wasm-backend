@@ -1,16 +1,16 @@
-/* node-load-share.js -- linked into the node `scheme.js` build via
+/* node-load-share.js -- linked into the node `racket.js` build via
  * `emcc --pre-js`.
  *
  * The node surface's package tree (the `/share/pkgs` + `/share/links.rktd`
  * payload) ships as a SEPARATE Emscripten data file -- `share.data` +
  * `share.data.js`, built by the orchestrator's `pack-pkgs` step -- instead of
  * being baked into the emcc link. That way changing packages needn't relink
- * the (expensive) `scheme.*` surface. The boot images + /collects + /etc stay
+ * the (expensive) `racket.*` surface. The boot images + /collects + /etc stay
  * in the link (they only change on a Racket-version rebuild).
  *
  * The browser worker loads share.data.js with `importScripts`, which runs it
  * in the worker's global scope where the `file_packager` loader binds to the
- * global `Module`. Node has no `importScripts`, and `scheme.js`'s `Module` is
+ * global `Module`. Node has no `importScripts`, and `racket.js`'s `Module` is
  * MODULE-scoped (a hoisted top-level `var`, set by node-locate-file.js), not on
  * `globalThis`. So we reproduce the worker's environment by hand:
  *
@@ -39,7 +39,7 @@
   var loader = path.join(__dirname, "share.data.js");
   if (!fs.existsSync(loader)) return;
 
-  // `Module` resolves to scheme.js's module-scoped runtime object (this file is
+  // `Module` resolves to racket.js's module-scoped runtime object (this file is
   // concatenated into that scope as a --pre-js); `require` is this module's.
   // Indirect eval runs the loader in global scope, where both must be reachable.
   globalThis.Module = Module;

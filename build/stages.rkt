@@ -97,13 +97,13 @@
 ;; as a SEPARATE data file by `pack-share-data` (build/pack.rkt) -- a pure-Racket
 ;; file_packager, no emsdk -- instead of baking the package tree into the emcc
 ;; link. This decouples package changes from the (expensive) relink: re-install
-;; packages and re-run pack, no emcc link needed. Node (scheme.*) is unaffected
-;; -- it still bakes packages into scheme.data.
+;; packages and re-run pack, no emcc link needed. Node (racket.*) is unaffected
+;; -- it still bakes packages into racket.data.
 
 ;; Assemble dist/: the runtime binaries from the clone's link output, the
 ;; host-side glue from the repo, and a page surface from the repo. `target`
-;; selects which surface's runtime ships (browser = scheme-web.* + share.data*;
-;; node = scheme.*), defaulting to browser. The surface dir defaults to the IDE
+;; selects which surface's runtime ships (browser = racket-web.* + share.data*;
+;; node = racket.*), defaulting to browser. The surface dir defaults to the IDE
 ;; -- make-wasm-racket overrides #:surface-dir / #:dest / #:target to assemble an
 ;; arbitrary app from its own public/ dir.
 (define (collect-outputs #:dest        [dest dist-dir]

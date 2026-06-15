@@ -86,7 +86,7 @@ index b4e92ee..61a2d05 100644
 +  (define wasm-prim-objs (map (lambda (n) (at-dir (~a n ".o"))) wasm-prim-names))
 +  ;; Browser-only primitive: wasm_shell_io.c backs the SAB-based stdin/stdout
 +  ;; the browser shell worker drives. It is linked into the browser surface
-+  ;; (`scheme-web.*`) only, never the node surface (`scheme.*`).
++  ;; (`racket-web.*`) only, never the node surface (`racket.*`).
 +  (define wasm_shell_io.src (at-source "wasm_shell_io.c"))
 +  (define wasm_shell_io.o (at-dir "wasm_shell_io.o"))
    (define boot-objs
@@ -215,7 +215,7 @@ index b4e92ee..61a2d05 100644
 +              wasm-prim-srcs wasm-prim-objs)
 +
 +       ;; Browser-only primitive object (see wasm_shell_io.o above). Same
-+       ;; compile rule as the wasm-prim objects; linked only into scheme-web.
++       ;; compile rule as the wasm-prim objects; linked only into racket-web.
 +       [:target ,wasm_shell_io.o (,wasm_shell_io.src)
 +                ,(lambda (path token)
 +                   (c-compile wasm_shell_io.o wasm_shell_io.src
@@ -263,7 +263,7 @@ index b4e92ee..61a2d05 100644
 +                   (build/dep (find-target main_em.o the-targets) token)
 +                   (build/dep (find-target init_rktio.o the-targets) token)
 +                   (for-each (lambda (o) (build/dep (find-target o the-targets) token)) wasm-prim-objs)
-+                   ;; Browser-only object (linked into scheme-web only).
++                   ;; Browser-only object (linked into racket-web only).
 +                   (build/dep (find-target wasm_shell_io.o the-targets) token)
 +                   (build/dep (find-target boot.o the-targets) token)
 +                   (build/dep librktio.a token)
@@ -322,7 +322,7 @@ index b4e92ee..61a2d05 100644
 +                   ;; (build/stages.rkt `links-pkgs-roots`). See build-wasm.md
 +                   ;; "Packages as a separate data file".
 +                   ;; Inputs shared by both surfaces (node `scheme.*` and
-+                   ;; browser `scheme-web.*`). wasm_shell_io.o is NOT here --
++                   ;; browser `racket-web.*`). wasm_shell_io.o is NOT here --
 +                   ;; it is browser-only and appended in the browser link.
 +                   (define common-objs
 +                     (append (list main_em.o boot.o init_rktio.o)
@@ -378,18 +378,18 @@ index b4e92ee..61a2d05 100644
 +                             (link-js-args "--pre-js" 'LINK_PRE_JS)
 +                             (link-js-args "--post-js" 'LINK_POST_JS)))
 +                   (define app-target (lookup 'APP_TARGET "browser"))
-+                   ;; The node (`scheme.*`) link: REPL over Node's stdio.
++                   ;; The node (`racket.*`) link: REPL over Node's stdio.
 +                   (define node-args
 +                     (append
 +                      (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"
-+                            "-o" (build-path out-dir "scheme.html"))
++                            "-o" (build-path out-dir "racket.html"))
 +                      common-objs
 +                      ;; Recipe-dep -L/-l flags (libffi + any WASM_DEPS),
 +                      ;; in final link order.
 +                      dep-linkflags
 +                      ;; node-locate-file.js (extern-pre-js): resolve
-+                      ;; scheme.data relative to the script dir, not the
-+                      ;; process CWD, so `node path/to/scheme.js` works from
++                      ;; racket.data relative to the script dir, not the
++                      ;; process CWD, so `node path/to/racket.js` works from
 +                      ;; anywhere. Must be extern-pre-js -- the --preload-file
 +                      ;; loader runs at parse time, before ordinary --pre-js.
 +                      (list "--extern-pre-js" (build-path runtime-glue "node-locate-file.js")
@@ -418,7 +418,7 @@ index b4e92ee..61a2d05 100644
 +                      ;; them before init_foreign takes their address).
 +                      ;; Empty for the libffi-only default.
 +                      dep-uflags))
-+                   ;; The browser (`scheme-web.*`) link: drives stdin/stdout and
++                   ;; The browser (`racket-web.*`) link: drives stdin/stdout and
 +                   ;; the DOM over SharedArrayBuffers from a worker, with IDBFS
 +                   ;; persistence. Adds wasm_shell_io.o, the idbfs/shell-tty JS,
 +                   ;; the SAB/DOM exports, and FORCE_FILESYSTEM + idbfs.js. The
@@ -427,7 +427,7 @@ index b4e92ee..61a2d05 100644
 +                   (define browser-args
 +                     (append
 +                      (list emcc "-O2" "-pthread" "-sUSE_ZLIB=1"
-+                            "-o" (build-path out-dir "scheme-web.html"))
++                            "-o" (build-path out-dir "racket-web.html"))
 +                      common-objs
 +                      (list wasm_shell_io.o)
 +                      dep-linkflags

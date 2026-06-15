@@ -1,87 +1,28 @@
-Overall Goal: The scripts in this repo should let me create custom Racket/WASM-based web applications, rather than just the IDE/web-repl and the node repl. Eventually, I should be able to point to a directory with HTML/JS/Racket and some configuration (preferably written in racket), and have it output a usable web page (including the WASM and .data files needed to run it.)
-
-=== Progress (branch wasm-custom-apps; see build-wasm.md + ~/.claude/plans) ===
-The core goal is MET: `racket build/main.rkt app <dir>` (or make-wasm-racket)
-builds an arbitrary HTML/JS/Racket app + a racket config into dist/.
-  Phase 0 (commit 887c17f) - decoupled the runtime binary from the page surface;
-    the emcc link emits only the runtime, collect-outputs assembles dist/ from
-    runtime + repo-side glue (runtime-glue/) + a surface dir.
-  Phase 1 (887c17f) - make-wasm-racket API + `app <dir>` subcommand + app.rkt
-    manifest; examples/hello is a minimal non-IDE app.
-  Phase 2 (887c17f) - local packages via `raco pkg install --copy` (out of clone).
-  Phase 3 (887c17f) - content-complete runtime cache keyed by build inputs, so
-    differing app configs don't fight over the one clone.
-  Phase 4 (commit fdc00fb) - the IDE is now just an app (apps/ide), built by the
-    same make-wasm-racket path (dogfood). Validated via a full binary-catalog
-    rebuild from cleared caches.
-Still open: main-thread build variant, RACKET=auto, GitHub deploy workflow,
-semi-permanent install dir for cheap single-package adds, extra-C hooks.
-(See annotations below.)
-
-- Review files in overlay and patches folder for pieces that can be removed or used outside of racket repo.
-    - DONE. We probably don't need any gitignore updates on the racket repo, since we won't be committing.
-        The three .gitignore patches are removed (cosmetic only; sync's `git clean -fdx`
-        ignores .gitignore anyway). Also dropped the dead install-wasm-browser-shell.rkt
-        (it copied wasm-shell files that had already moved to runtime-glue/ + apps/ide/public/).
-    - DONE. build-wasm-binary-pkgs.rkt was dropped from the delta when the SDK-keyed
-        catalog (build/consume.rkt) superseded the clone-bound strip.
-    - DONE. ~everything in wasm-shell/ is now outside the racket repo checkout:
-        Phase 0: shell-worker.js + serve.rkt -> runtime-glue/, ide.* -> apps/ide/public/.
-        Final: the emcc link-JS glue (node-locate-file.js, node-tty.js, node-load-share.js,
-        shell-tty.js, idbfs-init.js) -> runtime-glue/, passed to the link via the
-        RUNTIME_GLUE_DIR make var; test files (run-tests.sh, perf-bench.rktl,
-        draw-stack-test.rkt) -> test/node/. overlay/wasm-shell is gone.
-        The link-JS subset is hashed into the build key (cache.rkt link-glue-names).
-    - DONE. Dependency building code: the recipe sources (build-deps.sh, deps.sh,
-        symgen.sh, wasm-emscripten.cross, deps/*.sh) moved overlay -> repo-root
-        wasm-deps/, passed via the WASM_DEPS_SRC_DIR make var; hashed into the
-        build key. Only the recipe OUTPUTS land in the clone's build tree.
-- Investigate a separate build for a main thread version vs the worker thread version.
 - Build the same-version host racket automatically. (RACKET=auto)
-- Github workflow to build and deploy web-repl
-- Improve process for building binary package catalog. I think we could keep around a semi-permanent directory to which we'd install the full t32pbl packages, and then extract the binary catalog from there. That way, adding a single new package wouldn't require re-building every other package.
-    [not done. Phase 3's runtime cache is whole-config (no clobbering between apps) but NOT
-     incremental single-package adds; this semi-permanent install dir is still open.]
-- DONE (Phase 2). Improve handling of locally defined packages. Instead of adding them to the racket repo's pkgs directory, maybe just `raco pkg install --copy --binary(?) <path>`.
-    Local packages are now passed as #:local-pkgs paths -> the LOCAL_PKGS make var ->
-    main.zuo `raco pkg install/update --copy` into share/pkgs (clone stays pure upstream).
-    web-repl moved overlay-local/pkgs/web-repl -> packages/web-repl. Used --copy (not --binary):
-    the cross raco setup compiles the copied source to tpb32l .zo, which ships in share.data.
-- Instead of passing the packages to install via PKGS, maybe we should set PKGS= (i.e., blank) when building and then install requested packages via raco pkg install
-    - Maybe reuse this bare racket directory as a starting point for later builds
-    [not done. We still install named catalog PKGS up front + local-pkgs via --copy; a bare
-     PKGS= base reused across builds is the semi-permanent-dir idea above.]
-- DONE. Maybe include the packages as a whole separate emscripten data file so we don't need to re-link every time.
-    python $EMSDK/upstream/emscripten/tools/file_packager.py \
-        share.data \
-        --preload someplace/share/@/share \
-        --js-output=share.data.js \
-        --use-preload-cache \
-        --indexeddb-name="racket-webpl-share"
 
-- WON'T DO. ~I wonder if we could do a single link to generate a racket.wasm, and then build scheme.{html,js} and scheme-web.{html,js} with a separate emcc pointing to racket.wasm. The idea being to avoid multiple links just because they have different prejs/postjs/etc.~ (This probably wouldn't be worth the effort in the short term, since it would save ~20 seconds per build.)
+- Investigate pre-compiling fewer dependencies to tpb32l
+    - Start up time vs size
+    - We'll probably want to include (most of?) the core collections.
+    - Maybe specify which packages to pre-compile?
 
-- DONE (Phase 1). Make this scriptable via racket. I should be able to define apps using instructions along these lines:
-    Implemented as build/app.rkt `make-wasm-racket` (#:dest #:pkgs #:wasm-libs #:local-pkgs
-    #:public). An app dir carries app.rkt providing an `app` hash; `racket build/main.rkt
-    app <dir>` builds it. The #:public tree is copied into dist/ (the copy-files step).
-    NOT YET: additional C files, and --pre-js/--post-js hooks (the commented questions below).
-  (define (build-web-repl)
-    (define build-dir "./dest")
-    (define pkgs '(draw-lib pict-lib))
-    ; We'll probably need a separate workspace in which we can install packages before installing them.
-    (define local-pkgs (list "web-repl/pkgs/web-repl"))
-    (define wasm-libs '(cairo etc))
-    ; Should it be possible to specify additional C files that should be build/linked?
-    ; Maybe also somehow adjust --pre-js/--post-js, etc
-    (make-wasm-racket #:dest build-dir
-                      #pkgs pkgs
-                      #local-pkgs local-pkgs
-                      #wasm-libs libs)
-    (copy-files "./web-repl/public" build-dir))
+- Investigate caching .zo files in IndexedDB.
+    - We'll need to work out the issues with the browser event loop being blocked when wating for stdin. Maybe proxy-to-pthread already fixed this?
 
-- Some way to run racket code at different steps of the build process. 
-    - Before build: I can't think of anything right now, but I'll think more later.
-    - After build: Might generate html or js from racket and put in dist folder. Should accept path to dist folder as an argument to a function.
+- Investigate dynamic library loading.
+  - https://emscripten.org/docs/compiling/Dynamic-Linking.html
+  - Can we get it to work at all?
+  - Effect on size?
 
-- Make data loading code do the equivalent of --use-preload-cache https://github.com/emscripten-core/emscripten/blob/main/tools/file_packager.py
+- node.js runtime improvements
+    - Optional websocket -> socket proxy
+    - Optional host filesystem access (via some sort of proxy?)
+
+- Prevent web-repl from importing draw-lib, pict-lib, net-lib. If we need to dow
+
+- Investigate switching from the app.rkt format to use using a `#lang info` info.rkt with some custom-defined fields
+    - Then we'd really just be pointing to a module to package.
+
+- Investigate a separate build for a main thread version vs the worker thread version.
+
+- Confirm whether the libffi 3.5.x dep is really necessary or if we can somehow ignore deprecation warning with the bundle libffi
+  - "3.5.x is required; 3.4.x uses deprecated Emscripten JS-library names (generateFuncType, uleb128Encode) that newer emsdk renames."

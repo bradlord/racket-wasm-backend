@@ -26,6 +26,6 @@
    ;; The page surface (html/js/racket) lives here, resolved relative to this
    ;; app dir. Every file in it is copied next to the runtime in the output.
    'public    "public"
-   ;; Which runtime surface to ship: 'browser (default) emits scheme-web.* +
-   ;; share.data* + the worker glue; 'node emits scheme.* only. Omit for browser.
+   ;; Which runtime surface to ship: 'browser (default) emits racket-web.* +
+   ;; share.data* + the worker glue; 'node emits racket.* only. Omit for browser.
    'target    'browser))

@@ -15,10 +15,10 @@
 ;;
 ;; Run from the clone's build dir:
 ;;   cd .work/racket/racket/src/build/cs/c/wasm
-;;   node scheme.js -u .../test/node/draw-stack-test.rkt
+;;   node racket.js -u .../test/node/draw-stack-test.rkt
 ;;
 ;; (Pipe via stdin if you don't have file access into MEMFS yet:
-;;    cat draw-stack-test.rkt | tail -n +2 | node scheme.js
+;;    cat draw-stack-test.rkt | tail -n +2 | node racket.js
 ;;  -- the `tail -n +2` skips the #lang line since the REPL reads
 ;;  top-level forms, not modules.)
 

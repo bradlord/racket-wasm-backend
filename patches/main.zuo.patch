@@ -96,7 +96,7 @@ index 84c516d..0e6eb4f 100644
 +                                      ;; it targets, consumed by cs/c/build.zuo's
 +                                      ;; `wasm` link. Space-joined absolute paths
 +                                      ;; (the orchestrator's make-wasm); the link
-+                                      ;; appends them to scheme.* or scheme-web.*
++                                      ;; appends them to racket.* or racket-web.*
 +                                      ;; per APP_TARGET only.
 +                                      'LINK_PRE_JS (lookup 'LINK_PRE_JS "")
 +                                      'LINK_POST_JS (lookup 'LINK_POST_JS "")

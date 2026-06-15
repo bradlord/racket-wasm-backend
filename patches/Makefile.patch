@@ -83,7 +83,7 @@ index c10c9e2..8997629 100644
 +#   make wasm SCHEME=/path/to/scheme RACKET=/path/to/racket
 +# Add the cairo/pango stack for racket/draw with WASM_DEPS="draw":
 +#   make wasm WASM_DEPS="draw" SCHEME=... RACKET=...
-+# Produces racket/src/build/cs/c/wasm/scheme.{js,wasm,data}. See
++# Produces racket/src/build/cs/c/wasm/racket.{js,wasm,data}. See
 +# build-wasm.md.
 +wasm: $(ZUO)
 +	$(RUN_ZUO) wasm $(BUILD_VARS)

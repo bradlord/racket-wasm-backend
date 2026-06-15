@@ -10,7 +10,7 @@
 ;; ABI the runtime already exports: FS_createPath / FS_createDataFile /
 ;; addRunDependency / removeRunDependency. The loader does all FS work inside a
 ;; `preRun` callback, never at import time -- shell-worker.js importScripts() this
-;; BEFORE scheme-web.js, so the runtime (and those hooks) don't exist yet at
+;; BEFORE racket-web.js, so the runtime (and those hooks) don't exist yet at
 ;; import. See build-wasm.md "Packages as a separate data file".
 (require racket/file
          racket/path
@@ -346,7 +346,7 @@ Module['expectedDataFileDownloads']++;
     }
 
     function runWithFS(Module) {
-      // The runtime (scheme-web.js) is instantiated AFTER this loader is
+      // The runtime (racket-web.js) is instantiated AFTER this loader is
       // imported, so FS_createPath / FS / addRunDependency only exist now, in
       // preRun -- never at import time. (See shell-worker.js import order.)
 " create-paths "
@@ -397,7 +397,7 @@ Module['expectedDataFileDownloads']++;
 "))
 
 ;; Pack the clone's installed package tree into `dest` (default the wasm out dir,
-;; next to scheme-web.*, ready for collect-outputs), with no emsdk. This is the
+;; next to racket-web.*, ready for collect-outputs), with no emsdk. This is the
 ;; build's `pack-share-data` -- both the full build (after a cache-miss `make`)
 ;; and the standalone `pack-pkgs` repack call it.
 (define (pack-share-data #:dest [dest (clone-wasm-out)] #:clone [clone clone-dir])

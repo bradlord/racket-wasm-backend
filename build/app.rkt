@@ -12,7 +12,7 @@
 ;;
 ;; It wraps stages.rkt's `build-runtime` (the same engine the CLI `build` uses),
 ;; differing only in the output `dest` and the page `surface-dir`. The runtime
-;; binary is surface-agnostic, so any app rides the same scheme-web.*.
+;; binary is surface-agnostic, so any app rides the same racket-web.*.
 ;;
 ;; An app is described by a manifest module (`app.rkt` in the app dir) that
 ;; `(provide app)` a hash of the keyword fields below; `run-app-manifest` loads
@@ -54,7 +54,7 @@
 ;;                build-key, so editing one rebuilds.
 ;;   #:scheme / #:racket  host toolchain paths, or #f to resolve/build.
 ;;   #:target     'browser (default) or 'node -- which surface to ship into dist:
-;;                browser = scheme-web.* + share.data* + glue; node = scheme.*.
+;;                browser = racket-web.* + share.data* + glue; node = scheme.*.
 ;;   #:pre-js / #:post-js / #:extern-pre-js  app-supplied emcc link JS (lists of
 ;;                paths) spliced into the #:target surface's link only. They feed
 ;;                the build-key (editing one relinks), and the targeted surface

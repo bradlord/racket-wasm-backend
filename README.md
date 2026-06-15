@@ -43,7 +43,7 @@ These and the rest of the design history are written up in
 
 ## Hosting a generated bundle
 
-The output is just static files (`scheme-web.{js,wasm,data}`, `index.html`, and
+The output is just static files (`racket-web.{js,wasm,data}`, `index.html`, and
 the worker glue), but the page **must be served cross-origin isolated**. The
 host has to send:
 
@@ -59,7 +59,7 @@ the dev server `runtime-glue/serve.rkt` sends them on every response, and the
 Netlify deploy ships a `netlify.toml`/`_headers` with them.
 
 **Size caveat.** The runtime payload is large — roughly **~26 MB
-`scheme.wasm` + ~87 MB `scheme.data`** with the fast-boot images. That's fine
+`racket.wasm` + ~87 MB `racket.data`** with the fast-boot images. That's fine
 for demos, playgrounds, and teaching, but likely impractical for a production
 web app where download size matters.
 

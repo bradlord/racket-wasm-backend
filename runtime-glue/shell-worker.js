@@ -2,7 +2,7 @@
  * Worker.
  *
  * The page (ide.js) spawns this script as a worker. The worker waits
- * for an `init` message from the page before loading scheme-web.js, so
+ * for an `init` message from the page before loading racket-web.js, so
  * that the page gets to choose:
  *
  *   - `argv`   -- becomes Module.arguments. Racket sees these as its
@@ -18,11 +18,11 @@
  *                 persistent surface passes true; the IDE's transient
  *                 process-per-run passes false.
  *
- * After init, importScripts("./scheme-web.js") boots the runtime on
+ * After init, importScripts("./racket-web.js") boots the runtime on
  * this worker's own thread. Once it is up, we hand the page:
  *
  *   - the SharedArrayBuffer that backs WASM linear memory (sharable
- *     because scheme-web.js is built with -pthread), and
+ *     because racket-web.js is built with -pthread), and
  *   - the int32 offsets and capacities of the stdin/stdout rings
  *     defined in wasm_shell_io.c.
  *
@@ -57,11 +57,11 @@ function buildModule(init) {
     // Under -sPROXY_TO_PTHREAD, Emscripten spawns its pthread workers (the
     // proxied main + the pool) via `new Worker(pthreadMainJs)`, where
     // pthreadMainJs defaults to `_scriptName` -- which is THIS worker's URL
-    // (shell-worker.js), because scheme-web.js is loaded via importScripts and
+    // (shell-worker.js), because racket-web.js is loaded via importScripts and
     // cannot discover its own URL. That spawns useless extra shell-worker.js
     // instances and the proxied main never boots. Point it at the real
-    // Emscripten module so pthread workers run scheme-web.js in pthread mode.
-    mainScriptUrlOrBlob: "./scheme-web.js",
+    // Emscripten module so pthread workers run racket-web.js in pthread mode.
+    mainScriptUrlOrBlob: "./racket-web.js",
 
     // setStatus messages from Emscripten include the download
     // "loaded/total" suffix; the page parses both.
@@ -162,16 +162,16 @@ self.onmessage = function (event) {
   self.onmessage = null;
   self.Module = buildModule(msg);
   // Load the package payload loader first. Unlike the boot/collects payload
-  // (baked into scheme-web.js by the emcc link), the Racket package tree
+  // (baked into racket-web.js by the emcc link), the Racket package tree
   // ships as a SEPARATE file_packager artifact -- share.data + share.data.js,
   // built by the orchestrator's `pack-pkgs` step -- so changing packages
-  // needn't relink scheme-web.*. This loader pushes onto Module.preRun and
+  // needn't relink racket-web.*. This loader pushes onto Module.preRun and
   // gates run() via addRunDependency until share.data is fetched into MEMFS,
   // so /share/pkgs is present before main(), exactly as when it was in-link.
-  // It must run before scheme-web.js so its preRun registers in time; it
+  // It must run before racket-web.js so its preRun registers in time; it
   // reaches FS/addRunDependency (exported on Module) once the runtime is up.
   importScripts("./share.data.js");
   // Synchronously instantiate the runtime; Emscripten's generated
   // wrapper reads self.Module that we set above.
-  importScripts("./scheme-web.js");
+  importScripts("./racket-web.js");
 };

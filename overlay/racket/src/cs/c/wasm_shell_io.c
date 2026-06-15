@@ -4,7 +4,7 @@
  *
  * The browser build runs the runtime inside a dedicated Web Worker that
  * the page (ide.js) spawns explicitly -- shell-worker.js
- * `importScripts`'s scheme-web.js and `main()` runs on that worker's
+ * `importScripts`'s racket-web.js and `main()` runs on that worker's
  * own thread, leaving the page's main thread free to drive xterm.js.
  * The two threads exchange console bytes through these ring buffers,
  * which live in the module's *shared* linear memory (the build uses

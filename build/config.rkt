@@ -29,7 +29,7 @@
 ;; (`link-glue-names`), passed to cs/c/build.zuo's `wasm` link via the
 ;; RUNTIME_GLUE_DIR make var. See build-wasm.md and the project roadmap.
 (define runtime-glue-dir  (at-root "runtime-glue"))
-;; The link-input subset of runtime-glue/: baked into scheme.* / scheme-web.* by
+;; The link-input subset of runtime-glue/: baked into racket.* / racket-web.* by
 ;; the emcc link, so they are part of the build key (cache.rkt folds exactly
 ;; these into the delta-hash -- NOT the whole dir, so editing the host-side glue
 ;; like shell-worker.js doesn't force a relink).
@@ -124,14 +124,14 @@ EOF
 ;; surface. The single `wasm` make target builds BOTH surfaces, so a build always
 ;; produces (and the cache always stores) the union; an app's `target` then
 ;; selects which subset collect-outputs copies into dist/.
-;;   node    -- scheme.{js,wasm,data}; packages are baked into scheme.data.
-;;   browser -- scheme-web.{js,wasm,data} + the separate package payload
+;;   node    -- racket.{js,wasm,data}; packages are baked into racket.data.
+;;   browser -- racket-web.{js,wasm,data} + the separate package payload
 ;;              share.data/share.data.js (packed by build/pack.rkt, not the link).
 ;; Glue/surface are repo-side and copied separately, so they are NOT in this set.
 (define node-runtime-names
-  '("scheme.js" "scheme.wasm" "scheme.data"))
+  '("racket.js" "racket.wasm" "racket.data"))
 (define web-runtime-names
-  '("scheme-web.js" "scheme-web.wasm" "scheme-web.data"
+  '("racket-web.js" "racket-web.wasm" "racket-web.data"
     "share.data" "share.data.js"))
 ;; The full set a build emits and the cache snapshots (both surfaces).
 (define runtime-output-names (append node-runtime-names web-runtime-names))

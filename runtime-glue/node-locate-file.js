@@ -1,16 +1,16 @@
-/* node-locate-file.js -- linked into the node `scheme.js` build via
+/* node-locate-file.js -- linked into the node `racket.js` build via
  * `emcc --extern-pre-js`.
  *
  * Emscripten's internal `locateFile(path)` resolves files against
- * `scriptDirectory` (the directory of scheme.js under node), which is why
- * `scheme.wasm` loads regardless of the process CWD. The data-package
+ * `scriptDirectory` (the directory of racket.js under node), which is why
+ * `racket.wasm` loads regardless of the process CWD. The data-package
  * loader emitted by `--preload-file`, however, does NOT use that path: it
  * calls `Module["locateFile"]` directly and, when that hook is undefined,
- * falls back to the bare relative string ("scheme.data"), which
+ * falls back to the bare relative string ("racket.data"), which
  * `fs.readFileSync` then resolves against the *current working directory*.
  *
- * The result is that `node scheme.js` only finds `scheme.data` when run
- * from inside the build dir; `node path/to/scheme.js` fails with ENOENT.
+ * The result is that `node racket.js` only finds `racket.data` when run
+ * from inside the build dir; `node path/to/racket.js` fails with ENOENT.
  *
  * This MUST be an `--extern-pre-js`, not a `--pre-js`: the file-packager
  * loader runs `loadPackage()` synchronously at parse time, *before* the

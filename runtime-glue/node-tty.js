@@ -1,4 +1,4 @@
-/* node-tty.js -- linked into the node `scheme.js` build via `emcc --pre-js`.
+/* node-tty.js -- linked into the node `racket.js` build via `emcc --pre-js`.
  *
  * Replaces the default TTY get_char/put_char so that:
  *
