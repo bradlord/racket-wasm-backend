@@ -58,19 +58,49 @@ authored in the tracked dir and copied into the gui-lib checkout
   the page producer must mirror live here.
 - **`init.rkt`** — starts the pump at load (like gtk/cocoa init.rkt).
 
-**Still to write (the irreducible, runtime-validated core):**
-- `window.rkt`, `frame.rkt`, `canvas.rkt`, `panel.rkt` — the wx-window/top/
-  canvas/panel protocol (geometry, show, paint, event delivery via
-  `handle-gui-event` → `mouse-event%`/`key-event%`). Port the GTK structure,
-  replacing GtkWidget FFI with our logical-widget + page-`<canvas>` model. Their
-  correctness is *runtime* (the host compile-check only validates requires/
-  shapes), so they need the wasm build-load loop, not just `raco make`.
-- `platform.rkt` — require the above + export `platform-values` (the full ~70
-  names), pulling classes from `stubs.rkt` for the unimplemented ones.
-- Selector patch to `mred/private/wx/platform.rkt`: in the `unix` branch, pick
-  `wx/wasm/platform.rkt` when `(getenv "PLT_WASM_GUI")` is set.
+**`platform.rkt`** (PROBE) — assembles `platform-values`; the not-yet-written
+core classes (`frame`/`canvas`/`window`/`panel`/`canvas-panel`) are inline
+error-on-use stubs. This probe verified (see below) that the selector +
+scaffold load under the real runtime.
+
+**Wired via `package-patches/gui-lib/`** (both dry-run + build clean):
+- `01-platform-selector.patch` — `mred/private/wx/platform.rkt` `unix` branch
+  picks `wx/wasm/platform.rkt` when `(getenv "PLT_WASM_GUI")` is set.
+- `02-wasm-backend.patch` — creates the `wx/wasm/*.rkt` files.
+
+### VERIFIED milestone + key finding (node, PLT_WASM_GUI)
+
+A full build cross-compiled the backend into share.data, and on the node
+surface:
+
+    node racket.js -e '(putenv "PLT_WASM_GUI" "1")' \
+                   -e '(dynamic-require (quote racket/gui/base) #f)'
+
+- The selector picks `wx/wasm` (no more GTK FFI load) and the whole scaffold —
+  `init.rkt`'s pump, `procs`, `stubs`, and the `vm-eval` foreign procedures —
+  **instantiates under the real runtime**. (Set `PLT_WASM_GUI` via `putenv`
+  inside Racket: Emscripten's `getenv` does NOT see the shell/`process.env`.
+  For real use the worker must `setenv`/seed ENV before boot.)
+- Loading then reached `wxme/editor-canvas.rkt`, which does `(inherit refresh)`
+  from the platform `canvas%`. **Finding: the mred core SUBCLASSES the platform
+  `canvas%`/`window%`/`frame%`/`panel%` and uses `inherit`, so their full method
+  surface must exist at class-definition time** — error-on-use stubs for the
+  core classes don't even let racket/gui load.
+
+**Still to write (the irreducible core):**
+- `window.rkt`, `frame.rkt`, `canvas.rkt`, `panel.rkt` — port the FULL public
+  method surface from the GTK backend (lean bodies OK, but every method the core
+  `inherit`s must be present), replacing GtkWidget FFI with our logical-widget +
+  page-`<canvas>` model; event delivery via `handle-gui-event` →
+  `mouse-event%`/`key-event%`. Then swap them into `platform.rkt` for the
+  inline stubs. Iterate with the build→node-load loop (it pinpoints each missing
+  method, e.g. `refresh`).
 - Page producer (`apps/.../ide.js` or a demo page): canvas DOM listeners →
   ring records (+`Atomics.notify`); per-frame `<canvas>` for blits.
+
+> Build-loop cost note: `package-patches/` content feeds the SDK build key, so
+> editing a patch triggers a full SDK rebuild + cross-install (~10 min). Use the
+> host `raco make` (methods-exist/syntax) to catch as much as possible first.
 
 ## The gating spike (Step 2) — resolve before building out the pump
 

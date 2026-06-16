@@ -1,0 +1,507 @@
+diff --git a/gui-lib/mred/private/wx/wasm/dc.rkt b/gui-lib/mred/private/wx/wasm/dc.rkt
+new file mode 100644
+index 00000000..014c5ef8
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/dc.rkt
+@@ -0,0 +1,66 @@
++#lang racket/base
++;; dc.rkt -- the wasm backend drawing context.
++;;
++;; Far simpler than the GTK/Cocoa dc%: there are no native pixmaps or GL.
++;; Everything draws into a plain Cairo image bitmap% (backing-dc%'s default
++;; make-backing-bitmap), and a flush ships that bitmap's pixels to the page
++;; with `canvas-blit-argb`, which putImageData's them onto the frame's
++;; <canvas>. Editors/snips/picts all render through this dc<%>, so they work
++;; once a canvas has one.
++
++(require racket/class
++         racket/draw/private/bitmap
++         racket/draw/private/local
++         racket/draw/unsafe/cairo
++         "../common/backing-dc.rkt"
++         "ffi.rkt")
++
++(provide (protect-out dc%
++                      do-backing-flush))
++
++(define dc%
++  (class backing-dc%
++    (init [(cnvs canvas)]
++          transparentish?)
++    (define canvas cnvs)
++    (super-new [transparent? transparentish?])
++
++    ;; No GL surface in the browser backend (yet).
++    (define/override (get-gl-context) #f)
++
++    ;; Backing store is sized to the canvas's client area.
++    (define/override (get-backing-size xb yb)
++      (send canvas get-client-size xb yb))
++
++    (define/override (get-size)
++      (let ([xb (box 0)] [yb (box 0)])
++        (send canvas get-virtual-size xb yb)
++        (values (unbox xb) (unbox yb))))
++
++    ;; Ask the canvas to schedule a blit of the backing store to the page.
++    (define/override (queue-backing-flush)
++      (send canvas queue-backing-flush))
++
++    (define/override (flush)
++      (send canvas flush))))
++
++;; Render the dc's backing store and ship it to the page. `on-backing-flush`
++;; hands us either a recorded-drawing procedure or a bitmap%; we paint it into
++;; a client-sized image bitmap, pull straight-ARGB pixels, and blit.
++;; `backing-draw-bm` (common/backing-dc.rkt) handles both bm shapes via a
++;; throwaway cairo dc.
++(define (do-backing-flush canvas dc)
++  (define wb (box 0)) (define hb (box 0))
++  (send canvas get-client-size wb hb)
++  (define w (max 1 (unbox wb)))
++  (define h (max 1 (unbox hb)))
++  (send dc on-backing-flush
++        (lambda (bm)
++          (define target (make-object bitmap% w h #f #t))
++          (define cr (cairo_create (send target get-cairo-surface)))
++          (backing-draw-bm bm cr w h 0 0 1.0)
++          (cairo_destroy cr)
++          (define px (make-bytes (* w h 4)))
++          (send target get-argb-pixels 0 0 w h px)
++          (canvas-blit-argb w h px)
++          (send target release-bitmap-storage))))
+diff --git a/gui-lib/mred/private/wx/wasm/ffi.rkt b/gui-lib/mred/private/wx/wasm/ffi.rkt
+new file mode 100644
+index 00000000..f2bbc6c3
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/ffi.rkt
+@@ -0,0 +1,31 @@
++#lang racket/base
++;; ffi.rkt -- the wasm backend's foreign entry points.
++;;
++;; No dlopen under WASM: Sforeign_symbol-registered names are reached via
++;; (ffi/unsafe/vm)'s vm-eval + Chez foreign-procedure, NOT ffi-lib. vm-eval
++;; runs at instantiation in the wasm image (where the symbols exist); it
++;; must never run during the host/cross `raco setup`, which only compiles
++;; this module to .zo. See packages/web-repl/canvas.rkt and build-wasm.md.
++
++(require ffi/unsafe/vm)
++
++(provide canvas-blit-argb
++         gui-events-poll-raw
++         GUI-EVT-FIELDS)
++
++;; Copy a straight-ARGB pixel buffer (racket/draw `get-argb-pixels` order)
++;; out to the page; the page putImageData's it onto a <canvas>. Returns 0 in
++;; the browser worker, -1 where self.postMessage is unavailable (node).
++;; (Frame-tagged / dirty-rect blitting is a Step-4 extension of the C side;
++;;  the first milestone uses the single-surface blit.)
++(define canvas-blit-argb
++  (vm-eval '(foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int)))
++
++;; Must match GUI_EVT_FIELDS in racket/src/cs/c/wasm_gui_events.c.
++(define GUI-EVT-FIELDS 6)
++
++;; Drain up to max-records GUI input-event records from the page->worker ring
++;; into `out` (a byte buffer of >= max-records*FIELDS*4 bytes holding LE
++;; int32); returns the record count (0 if empty). Non-blocking.
++(define gui-events-poll-raw
++  (vm-eval '(foreign-procedure "wasm_gui_events_poll" (u8* int) int)))
+diff --git a/gui-lib/mred/private/wx/wasm/init.rkt b/gui-lib/mred/private/wx/wasm/init.rkt
+new file mode 100644
+index 00000000..42d6119e
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/init.rkt
+@@ -0,0 +1,6 @@
++#lang racket/base
++;; init.rkt -- start the wasm backend event pump at load (required by
++;; platform.rkt, mirroring gtk/init.rkt and cocoa/init.rkt).
++(require "queue.rkt")
++
++(define pump-thread (wasm-start-event-pump))
+diff --git a/gui-lib/mred/private/wx/wasm/platform.rkt b/gui-lib/mred/private/wx/wasm/platform.rkt
+new file mode 100644
+index 00000000..e77fc375
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/platform.rkt
+@@ -0,0 +1,50 @@
++#lang racket/base
++;; platform.rkt -- the wasm backend's platform-values bundle.
++;;
++;; PROBE STAGE: the real window/frame/canvas/panel are not written yet, so
++;; they are inline error-on-use stubs here alongside the controls in
++;; stubs.rkt. This lets racket/gui LOAD under wasm (selected via PLT_WASM_GUI)
++;; and verifies the scaffold (procs/stubs/queue/init + the vm-eval foreign
++;; procedures) instantiates under the real runtime. Once window/frame/canvas/
++;; panel.rkt exist they replace these stubs.
++
++(require racket/class
++         "init.rkt"       ; starts the event pump at load
++         "procs.rkt"
++         "stubs.rkt")
++
++(provide (protect-out platform-values))
++
++;; Inline error-on-use stubs for the not-yet-written core classes.
++(define-syntax-rule (define-core-stub name)
++  (define name
++    (class object%
++      (super-new)
++      (error 'name "wasm GUI backend: core class not yet implemented"))))
++(define-core-stub frame%)
++(define-core-stub canvas%)
++(define-core-stub canvas-panel%)
++(define-core-stub panel%)
++(define-core-stub window%)
++
++(define (platform-values)
++  (values
++   button% canvas% canvas-panel% check-box% choice% clipboard-driver%
++   cursor-driver% dialog% frame% gauge% group-panel% item% list-box%
++   menu% menu-bar% menu-item% message% panel% printer-dc% radio-box%
++   slider% tab-panel% window%
++   can-show-print-setup? show-print-setup id-to-menu-item file-selector
++   is-color-display? get-display-depth has-x-selection? hide-cursor bell
++   display-size display-origin display-count display-bitmap-resolution
++   flush-display get-current-mouse-state fill-private-color cancel-quit
++   get-control-font-face get-control-font-size get-control-font-size-in-pixels?
++   get-double-click-time file-creator-and-type location->window
++   shortcut-visible-in-label? unregister-collecting-blit register-collecting-blit
++   find-graphical-system-path play-sound get-panel-background
++   font-from-user-platform-mode get-font-from-user color-from-user-platform-mode
++   get-color-from-user special-option-key special-control-key
++   any-control+alt-is-altgr get-highlight-background-color
++   get-highlight-text-color get-label-foreground-color get-label-background-color
++   make-screen-bitmap make-gl-bitmap check-for-break key-symbol-to-menu-key
++   needs-grow-box-spacer? graphical-system-type white-on-black-panel-scheme?
++   tab-panel-available?))
+diff --git a/gui-lib/mred/private/wx/wasm/procs.rkt b/gui-lib/mred/private/wx/wasm/procs.rkt
+new file mode 100644
+index 00000000..ac185dcf
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/procs.rkt
+@@ -0,0 +1,127 @@
++#lang racket/base
++;; procs.rkt -- system procedures for the wasm backend.
++;;
++;; Mostly trivial constants/no-ops for the first milestone; several come
++;; straight from common/default-procs.rkt. Display geometry is fixed for now
++;; (a DOM-RPC query of window.innerWidth/Height is a later refinement), and
++;; the font/selection helpers return sane defaults. Anything genuinely
++;; unsupported is a no-op rather than an error so racket/gui loads.
++
++(require racket/class
++         racket/draw
++         "../common/default-procs.rkt")
++
++(provide
++ (protect-out
++  color-from-user-platform-mode
++  get-font-from-user
++  font-from-user-platform-mode
++  play-sound
++  find-graphical-system-path
++  register-collecting-blit
++  unregister-collecting-blit
++  shortcut-visible-in-label?
++  get-double-click-time
++  get-control-font-face
++  get-control-font-size
++  get-control-font-size-in-pixels?
++  cancel-quit
++  bell
++  hide-cursor
++  get-display-depth
++  is-color-display?
++  id-to-menu-item
++  can-show-print-setup?
++  get-highlight-background-color
++  get-highlight-text-color
++  get-label-background-color
++  get-label-foreground-color
++  check-for-break
++  has-x-selection?
++  get-current-mouse-state)
++ file-selector
++ show-print-setup
++ display-origin
++ display-size
++ display-count
++ display-bitmap-resolution
++ flush-display
++ location->window
++ make-screen-bitmap
++ make-gl-bitmap
++ file-creator-and-type
++ special-control-key
++ special-option-key
++ any-control+alt-is-altgr
++ get-panel-background
++ fill-private-color
++ white-on-black-panel-scheme?
++ get-color-from-user
++ key-symbol-to-menu-key
++ needs-grow-box-spacer?
++ graphical-system-type
++ tab-panel-available?)
++
++;; --- display geometry (fixed for the first milestone) ---
++(define (display-size xb yb [all? #f] [n 0] [fail void])
++  (set-box! xb 1024)
++  (set-box! yb 768))
++(define (display-origin xb yb [all? #f] [n 0] [fail void])
++  (set-box! xb 0)
++  (set-box! yb 0))
++(define (display-count) 1)
++(define (display-bitmap-resolution n fail) 1.0)
++(define (flush-display) (void))
++
++;; --- fonts / colors ---
++(define (get-control-font-face) "Sans")
++(define (get-control-font-size) 12)
++(define (get-control-font-size-in-pixels?) #f)
++(define (get-double-click-time) 250)
++(define (get-display-depth) 32)
++(define (is-color-display?) #t)
++(define (get-highlight-background-color) (make-object color% 180 200 255))
++(define (get-highlight-text-color) #f)
++(define (get-label-background-color) (make-object color% 220 220 220))
++(define (get-label-foreground-color) (make-object color% 0 0 0))
++(define (white-on-black-panel-scheme?) #f)
++(define (color-from-user-platform-mode) #f)
++(define (font-from-user-platform-mode) #f)
++(define (get-font-from-user . _) #f)
++(define (get-color-from-user . _) #f)
++
++;; --- misc system ---
++(define (cancel-quit) (void))
++(define (play-sound . _) #f)
++(define (bell) (void))
++(define (hide-cursor) (void))
++(define (check-for-break) #f)
++(define (needs-grow-box-spacer?) #f)
++(define (graphical-system-type) 'wasm)
++(define (tab-panel-available?) #t)
++(define (can-show-print-setup?) #t)
++(define (show-print-setup . _) (void))
++(define (id-to-menu-item i) i)
++(define (has-x-selection? . _) #f)
++(define (key-symbol-to-menu-key sym) #f)
++(define (shortcut-visible-in-label? [mbar? #f]) #t)
++(define (find-graphical-system-path what) #f)
++(define (location->window x y) #f)
++
++;; Mouse state: (values point-or-#f mods-list). No global pointer poll yet.
++(define (get-current-mouse-state)
++  (values (make-object point% 0 0) null))
++
++;; Collecting blits (caret/selection flashing) -- delegate to the canvas.
++(define (register-collecting-blit canvas x y w h on off on-x on-y off-x off-y)
++  (send canvas register-collecting-blit x y w h on off on-x on-y off-x off-y))
++(define (unregister-collecting-blit canvas)
++  (send canvas unregister-collecting-blits))
++
++;; Off-screen bitmaps are plain Cairo image surfaces.
++(define (make-screen-bitmap w h)
++  (make-object bitmap% w h #f #t))
++(define (make-gl-bitmap w h c)
++  (make-object bitmap% w h #f #t))
++
++(define (file-selector . _) #f)
+diff --git a/gui-lib/mred/private/wx/wasm/queue.rkt b/gui-lib/mred/private/wx/wasm/queue.rkt
+new file mode 100644
+index 00000000..57df76e0
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/queue.rkt
+@@ -0,0 +1,102 @@
++#lang racket/base
++;; queue.rkt -- the wasm backend event pump.
++;;
++;; The page produces GUI input records into the SAB ring (wasm_gui_events.c);
++;; this pump drains them and turns them into eventspace events. For the first
++;; milestone the pump does NOT idle-wake: it wakes ~60 times/second (a 16ms
++;; sync timeout) and drains the ring each time. (0%-idle wake via
++;; unsafe-poll-ctx-fd-wakeup / Atomics.wait-with-timeout is a later
++;; refinement -- see gui-backend/README.md.) Draining is also wired into
++;; yield via set-platform-queue-sync!.
++;;
++;; Dispatch is late-bound: a window registers itself under a small integer
++;; "frame id" that the page tags its events with; the pump looks the wx up and
++;; calls (send wx handle-gui-event ...). Using `send` (not a static require)
++;; keeps queue.rkt free of a dependency cycle with window/frame/canvas.
++
++(require racket/class
++         "../common/queue.rkt"
++         "ffi.rkt")
++
++(provide (protect-out wasm-start-event-pump
++                      register-gui-window!
++                      unregister-gui-window!
++                      next-frame-id
++                      ;; event type codes (mirror in the page producer JS):
++                      EVT-MOUSE-DOWN EVT-MOUSE-UP EVT-MOUSE-MOVE
++                      EVT-KEY-DOWN EVT-KEY-UP EVT-RESIZE
++                      EVT-ENTER EVT-LEAVE EVT-WHEEL
++                      MOD-SHIFT MOD-CONTROL MOD-ALT MOD-META)
++         ;; re-exports from common/queue:
++         current-eventspace
++         queue-event
++         yield)
++
++;; Event type codes -- must match racket/src/cs/c/wasm_gui_events.c usage and
++;; the page producer in ide.js.
++(define EVT-MOUSE-DOWN 1)
++(define EVT-MOUSE-UP   2)
++(define EVT-MOUSE-MOVE 3)
++(define EVT-KEY-DOWN   4)
++(define EVT-KEY-UP     5)
++(define EVT-RESIZE     6)
++(define EVT-ENTER      7)
++(define EVT-LEAVE      8)
++(define EVT-WHEEL      9)
++
++(define MOD-SHIFT   1)
++(define MOD-CONTROL 2)
++(define MOD-ALT     4)
++(define MOD-META    8)
++
++;; frame-id -> wx object (a frame%, which routes to its canvas).
++(define windows (make-hasheqv))
++(define frame-id-counter 0)
++(define (next-frame-id)
++  (set! frame-id-counter (add1 frame-id-counter))
++  frame-id-counter)
++(define (register-gui-window! id wx) (hash-set! windows id wx))
++(define (unregister-gui-window! id) (hash-remove! windows id))
++
++;; Scratch buffer for a batch of records (reused across drains).
++(define MAX-BATCH 64)
++(define batch-buf (make-bytes (* MAX-BATCH GUI-EVT-FIELDS 4)))
++
++(define (rec-field r f)
++  (define base (* (+ (* r GUI-EVT-FIELDS) f) 4))
++  (integer-bytes->integer batch-buf #t #f base (+ base 4)))
++
++;; Drain all pending records and queue them onto their target eventspaces.
++;; Called from the pump thread and from yield (set-platform-queue-sync!).
++(define (drain-gui-events!)
++  (let loop ()
++    (define n (gui-events-poll-raw batch-buf MAX-BATCH))
++    (when (> n 0)
++      (for ([r (in-range n)])
++        (define type  (rec-field r 0))
++        (define id    (rec-field r 1))
++        (define x     (rec-field r 2))
++        (define y     (rec-field r 3))
++        (define k     (rec-field r 4))
++        (define mods  (rec-field r 5))
++        (define wx (hash-ref windows id #f))
++        (when wx
++          (define es (send wx get-eventspace))
++          (queue-event es
++                       (lambda ()
++                         (send wx handle-gui-event type x y k mods)))))
++      ;; If we filled the batch there may be more; keep going.
++      (when (= n MAX-BATCH) (loop)))))
++
++(set-check-queue! (lambda () #f))
++(set-platform-queue-sync! (lambda () (drain-gui-events!)))
++
++;; The pump: wake each ~16ms (or sooner on a Racket-side event) and drain.
++(define (wasm-start-event-pump)
++  (thread
++   (lambda ()
++     (let loop ()
++       (sync/timeout 0.016 queue-evt boundary-tasks-ready-evt)
++       (pre-event-sync #t)
++       (drain-gui-events!)
++       (loop)))))
+diff --git a/gui-lib/mred/private/wx/wasm/stubs.rkt b/gui-lib/mred/private/wx/wasm/stubs.rkt
+new file mode 100644
+index 00000000..d4e0aa41
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/stubs.rkt
+@@ -0,0 +1,83 @@
++#lang racket/base
++;; stubs.rkt -- placeholder platform classes for the wasm backend.
++;;
++;; The first milestone is frame% + canvas% + dc% (canvas-only rendering).
++;; Controls, menus, dialogs, and the printer dc are not implemented yet:
++;; they only need to EXIST as named classes so platform.rkt can export them
++;; and racket/gui can load. Nothing instantiates them unless a program
++;; actually creates a button/menu/etc., at which point construction errors
++;; with a clear "not yet implemented" message. clipboard-driver% and
++;; cursor-driver% ARE constructed (the former at load, via common's
++;; the-clipboard), so they get minimal working bodies.
++
++(require racket/class)
++
++(provide (protect-out clipboard-driver%
++                      cursor-driver%
++                      printer-dc%
++                      button%
++                      check-box%
++                      choice%
++                      gauge%
++                      group-panel%
++                      list-box%
++                      message%
++                      radio-box%
++                      slider%
++                      tab-panel%
++                      item%
++                      menu%
++                      menu-bar%
++                      menu-item%
++                      dialog%))
++
++;; A class that errors when actually instantiated. It declares no inits, so
++;; it both compiles and (never being constructed in the milestone) never
++;; fires; if a program does create one, instantiation errors -- either on the
++;; unexpected by-name init or on the body error below -- which is the intent.
++(define-syntax-rule (define-unsupported name)
++  (define name
++    (class object%
++      (super-new)
++      (error 'name "not yet implemented in the wasm GUI backend"))))
++
++(define-unsupported button%)
++(define-unsupported check-box%)
++(define-unsupported choice%)
++(define-unsupported gauge%)
++(define-unsupported group-panel%)
++(define-unsupported list-box%)
++(define-unsupported message%)
++(define-unsupported radio-box%)
++(define-unsupported slider%)
++(define-unsupported tab-panel%)
++(define-unsupported item%)
++(define-unsupported menu%)
++(define-unsupported menu-bar%)
++(define-unsupported menu-item%)
++(define-unsupported dialog%)
++(define-unsupported printer-dc%)
++
++;; Minimal clipboard: holds nothing useful yet, but constructs and answers
++;; the queries common/clipboard.rkt's clipboard% forwards (it builds one at
++;; module load). Browser clipboard access would route through DOM-RPC later.
++(define clipboard-driver%
++  (class object%
++    (init-field [x-selection? #f])
++    (super-new)
++    (define client #f)
++    (define/public (get-client) client)
++    (define/public (set-client c orig-types) (set! client c))
++    (define/public (get-data type) #f)
++    (define/public (get-text-data) #f)
++    (define/public (get-bitmap-data) #f)
++    (define/public (set-bitmap-data bm timestamp) (void))))
++
++;; Minimal cursor: constructs and accepts standard/image cursors as no-ops.
++(define cursor-driver%
++  (class object%
++    (super-new)
++    (define/public (set-standard sym) (void))
++    (define/public (set-image image hot-x hot-y) (void))
++    (define/public (get-handle) #f)
++    (define/public (ok?) #t)))

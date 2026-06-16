@@ -1,0 +1,15 @@
+diff --git a/gui-lib/mred/private/wx/platform.rkt b/gui-lib/mred/private/wx/platform.rkt
+index dab93503..642786ed 100644
+--- a/gui-lib/mred/private/wx/platform.rkt
++++ b/gui-lib/mred/private/wx/platform.rkt
+@@ -15,7 +15,9 @@
+                      gtk-lib
+                      '(lib "mred/private/wx/win32/platform.rkt"))]
+       [(macosx) '(lib "mred/private/wx/cocoa/platform.rkt")]
+-      [(unix) gtk-lib])))
++      [(unix) (if (getenv "PLT_WASM_GUI")
++                  '(lib "mred/private/wx/wasm/platform.rkt")
++                  gtk-lib)])))
+ 
+ (define-values (button%
+                 canvas%
