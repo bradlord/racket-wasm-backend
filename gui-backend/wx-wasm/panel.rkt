@@ -72,5 +72,12 @@
               (send c handle-gui-event type (- x cx) (- y cy) k mods)
               (loop (cdr cs))))))
 
+    ;; Paint the container's children onto the frame surface, each translated
+    ;; by its own geometry (children added most-recently-first, so paint in
+    ;; reverse for natural front-to-back order).
+    (define/override (paint-self dc dx dy)
+      (for ([child (in-list (reverse children))])
+        (send child paint-self dc (+ dx (send child get-x)) (+ dy (send child get-y)))))
+
     ;; Start with a minimum size, like the GTK panel.
     (set-size 0 0 1 1)))

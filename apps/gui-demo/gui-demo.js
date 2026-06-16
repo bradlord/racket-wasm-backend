@@ -1,8 +1,8 @@
 /* gui-demo.js -- page driver for the wasm racket/gui demo.
  *
  * Boots the Racket runtime in shell-worker.js, runs a #lang racket/gui program
- * that shows a frame% with a custom canvas%, and wires the two browser-specific
- * halves of the mred backend:
+ * (apps/gui-demo/demo.rkt -- a frame% with drawn controls: message%, button%,
+ * check-box%) and wires the two browser-specific halves of the mred backend:
  *
  *   blit-out: each { type:"canvas", w, h, pixels } message from the runtime
  *     (wasm_canvas_blit_argb, driven by the backend's dc% flush) is the frame's
@@ -49,44 +49,10 @@
   var pollHandle = 0;
   var decoder = new TextDecoder("utf-8");
 
-  /* The demo program. Dropped at /tmp/main.rkt before main() runs. */
-  var PROGRAM = [
-    "#lang racket/gui",
-    "",
-    "(define frame (new frame% [label \"wasm gui\"] [width 320] [height 240]))",
-    "(define hits 0)",
-    "(define last \"none\")",
-    "",
-    "(define demo-canvas%",
-    "  (class canvas%",
-    "    (inherit refresh)",
-    "    (super-new)",
-    "    (define/override (on-event e)",
-    "      (when (send e button-down?)",
-    "        (set! hits (add1 hits))",
-    "        (set! last (format \"~a,~a\" (send e get-x) (send e get-y)))",
-    "        (printf \"click #~a at ~a\\n\" hits last)",
-    "        (flush-output)",
-    "        (refresh)))))",
-    "",
-    "(define (paint cv dc)",
-    "  (send dc set-background \"white\")",
-    "  (send dc clear)",
-    "  (send dc set-pen \"black\" 1 'solid)",
-    "  (send dc set-brush \"tomato\" 'solid)",
-    "  (send dc draw-rectangle 24 24 150 70)",
-    "  (send dc set-text-foreground \"white\")",
-    "  (send dc draw-text \"racket/gui on wasm\" 34 50)",
-    "  (send dc set-text-foreground \"black\")",
-    "  (send dc draw-text (format \"clicks: ~a   last: ~a\" hits last) 24 130))",
-    "",
-    "(define c (new demo-canvas% [parent frame] [paint-callback paint]))",
-    "(send frame show #t)",
-    "(printf \"GUI-DEMO-READY\\n\")",
-    "(flush-output)",
-    "(yield (make-semaphore))",
-    "",
-  ].join("\n");
+  /* The demo program (apps/gui-demo/demo.rkt), spliced in by the app's
+   * post-build hook (build-demo.rkt) as a JSON string. Dropped at
+   * /tmp/main.rkt before main() runs. */
+  var PROGRAM = __PROGRAM__;
 
   /* ---- stdout drain (program printf -> #log) ---------------------- */
   function drainOutput() {

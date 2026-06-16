@@ -60,38 +60,54 @@ async function main() {
     await page.locator('#log').filter({ hasText: 'GUI-DEMO-READY' }).waitFor({ timeout: 180_000 });
     process.stderr.write('GUI-DEMO-READY seen\n');
 
-    // The frame should have painted: canvas non-blank.
+    // The first blit lands just after GUI-DEMO-READY (show queues the repaint,
+    // which runs once the program parks in yield); settle before reading pixels.
+    await page.waitForTimeout(600);
+    // The frame paints its drawn controls onto a light-gray (236) surface, so
+    // count *ink* pixels -- ones that differ from the background by more than a
+    // little -- to confirm the controls (text, button border, check) rendered.
     const painted = await page.$eval('#frame', (cv) => {
       const ctx = cv.getContext('2d');
       const { data } = ctx.getImageData(0, 0, cv.width, cv.height);
-      let nonWhite = 0;
+      let ink = 0;
       for (let i = 0; i < data.length; i += 4) {
-        if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255) nonWhite++;
+        if (Math.abs(data[i] - 236) > 40 || Math.abs(data[i + 1] - 236) > 40 ||
+            Math.abs(data[i + 2] - 236) > 40) ink++;
       }
-      return { w: cv.width, h: cv.height, nonWhite };
+      return { w: cv.width, h: cv.height, ink };
     });
-    process.stderr.write(`canvas ${painted.w}x${painted.h}, non-white px: ${painted.nonWhite}\n`);
+    process.stderr.write(`canvas ${painted.w}x${painted.h}, control ink px: ${painted.ink}\n`);
     await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-1-painted.png` });
 
-    // Click on the canvas (inside the drawn rectangle area). The demo's
-    // canvas on-event printf's "click #N", proving the event round-tripped
-    // through the GUI ring -> pump -> frame -> panel -> canvas.
+    // Click the button (laid out ~ (2,55) 92x31) then the check-box (~ (2,102)
+    // 141x25). Each click round-trips page -> GUI ring -> pump -> frame -> panel
+    // -> control -> callback, which printf's a line we wait for. Coordinates are
+    // canvas pixels (offsetX/offsetY), 1:1 with frame coords.
     const box = await page.locator('#frame').boundingBox();
-    await page.mouse.click(box.x + 60, box.y + 50);
+    await page.mouse.click(box.x + 40, box.y + 70);
 
     let clicked = false;
     try {
-      await page.locator('#log').filter({ hasText: 'click #1' }).waitFor({ timeout: 15_000 });
+      await page.locator('#log').filter({ hasText: 'button clicked #1' }).waitFor({ timeout: 15_000 });
       clicked = true;
     } catch {}
-    // Let the click's (refresh) repaint+blit land before the final screenshot.
+
+    await page.mouse.click(box.x + 40, box.y + 112);
+    let checked = false;
+    try {
+      await page.locator('#log').filter({ hasText: 'check-box -> #t' }).waitFor({ timeout: 15_000 });
+      checked = true;
+    } catch {}
+
+    // Let the callbacks' repaint+blit (button updates the message label, the
+    // check-box draws its check) land before the final screenshot.
     await page.waitForTimeout(1500);
     await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-2-clicked.png` });
 
     const logText = await page.$eval('#log', (e) => e.textContent);
     process.stdout.write('--- #log ---\n' + logText + '\n--- end ---\n');
-    process.stdout.write(`RESULT painted=${painted.nonWhite > 0} clicked=${clicked}\n`);
-    if (!(painted.nonWhite > 0 && clicked)) process.exitCode = 1;
+    process.stdout.write(`RESULT painted=${painted.ink > 0} button=${clicked} checkbox=${checked}\n`);
+    if (!(painted.ink > 0 && clicked && checked)) process.exitCode = 1;
   } finally {
     await browser.close();
     try { proc.kill('SIGTERM'); } catch {}

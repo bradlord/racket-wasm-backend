@@ -1,13 +1,15 @@
 #lang racket/base
 ;; platform.rkt -- the wasm backend's platform-values bundle.
 ;;
-;; Real (thin) window/frame/canvas/panel + dc; controls/menus/dialogs are still
-;; error-on-use stubs (stubs.rkt). Selected via PLT_WASM_GUI in the unix branch
+;; Real (thin) window/frame/canvas/panel + dc, plus drawn button%/check-box%/
+;; message% (control.rkt). The remaining controls/menus/dialogs are still
+;; load-bearing stubs (stubs.rkt). Selected via PLT_WASM_GUI in the unix branch
 ;; of mred/private/wx/platform.rkt.
 
 (require "init.rkt"       ; starts the event pump at load
          "procs.rkt"
          "stubs.rkt"
+         "control.rkt"    ; real button%/check-box%/message%
          "window.rkt"
          "canvas.rkt"
          "frame.rkt"

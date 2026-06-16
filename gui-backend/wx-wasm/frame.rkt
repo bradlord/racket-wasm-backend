@@ -10,10 +10,12 @@
 ;; in directly. handle-gui-event routes to the single child (the canvas).
 
 (require racket/class
+         racket/draw
          "../../lock.rkt"
          "../common/queue.rkt"
          "window.rkt"
-         "queue.rkt")
+         "queue.rkt"
+         "ffi.rkt")
 
 (provide (protect-out frame%))
 
@@ -25,7 +27,7 @@
     (init [is-dialog? #f])
 
     (inherit set-size get-size get-parent get-eventspace get-gtk get-x get-y
-             adjust-client-delta pre-on-char pre-on-event)
+             adjust-client-delta pre-on-char pre-on-event is-shown?)
 
     (define floating? (and (memq 'float style) #t))
     (define frame-id (next-frame-id))
@@ -96,7 +98,9 @@
         (error 'register-child-in-frame "expected only one child"))
       (set! saved-child child))
     (define/override (register-child-in-parent on?) (void))
-    (define/override (refresh-all-children) (when saved-child (send saved-child refresh)))
+    (define/override (refresh-all-children)
+      (when saved-child (send saved-child refresh))
+      (request-repaint))
     (define/override (notify-children-top-realize)
       (when saved-child (send saved-child notify-children-top-realize)))
 
@@ -104,7 +108,8 @@
       (if on?
           (begin (hash-set! all-frames this #t) (register-gui-window! frame-id this))
           (begin (hash-remove! all-frames this) (unregister-gui-window! frame-id)))
-      (super direct-show on?))
+      (super direct-show on?)
+      (when on? (request-repaint)))
 
     (define/public (destroy) (atomically (direct-show #f)))
 
@@ -186,4 +191,39 @@
     ;; Route a page input record to the single child (the canvas).
     (define/override (handle-gui-event type x y k mods)
       (when saved-child
-        (send saved-child handle-gui-event type x y k mods)))))
+        (send saved-child handle-gui-event type x y k mods)))
+
+    ;; --- drawn-control surface ---
+    ;; A frame whose content is drawn controls (rather than a canvas%) owns the
+    ;; backing surface: paint the whole client area into one bitmap and blit it
+    ;; to the page <canvas>, walking the child tree via paint-self. (A canvas%
+    ;; child still blits its own dc; a frame mixing both lets the later blit win
+    ;; -- acceptable for now, controls-only and canvas-only are the cases used.)
+    (define repaint-queued? #f)
+    (define bg-color (make-object color% 236 236 236))
+    (define/public (repaint)
+      (define wb (box 0)) (define hb (box 0))
+      (get-size wb hb)
+      (define w (max 1 (unbox wb)))
+      (define h (max 1 (unbox hb)))
+      (define target (make-object bitmap% w h #f #t))
+      (define dc (new bitmap-dc% [bitmap target]))
+      (send dc set-background bg-color)
+      (send dc clear)
+      (when saved-child
+        (send saved-child paint-self dc (send saved-child get-x) (send saved-child get-y)))
+      (define px (make-bytes (* w h 4)))
+      (send target get-argb-pixels 0 0 w h px)
+      (canvas-blit-argb w h px)
+      (send dc set-bitmap #f))
+
+    ;; Coalesce repaint requests: schedule one onto the eventspace so a burst of
+    ;; control state changes (and the post-layout settle) collapse into a single
+    ;; blit.
+    (define/override (request-repaint)
+      (unless repaint-queued?
+        (set! repaint-queued? #t)
+        (queue-window-event this
+                            (lambda ()
+                              (set! repaint-queued? #f)
+                              (when (is-shown?) (repaint))))))))

@@ -193,6 +193,17 @@
     ;; Entry point for the event pump; canvas% overrides to build events.
     (define/public (handle-gui-event type x y k mods) (void))
 
+    ;; --- drawn-control painting ---
+    ;; The wasm backend has no native widgets: controls (button%, message%, ...)
+    ;; draw themselves into the top frame's backing surface. `paint-self` renders
+    ;; this window onto `dc` at absolute client coordinates (dx, dy); the default
+    ;; is a no-op (plain windows/canvases don't draw via this path -- a canvas
+    ;; blits its own dc). Containers override to recurse. `request-repaint`
+    ;; bubbles up to the frame, which owns the surface and schedules the blit.
+    (define/public (paint-self dc dx dy) (void))
+    (define/public (request-repaint)
+      (when parent (send parent request-repaint)))
+
     (define wheel-steps-mode 'one)
     (define/public (get-wheel-steps-mode) wheel-steps-mode)
     (define/public (set-wheel-steps-mode mode) (set! wheel-steps-mode mode))

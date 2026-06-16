@@ -19,13 +19,10 @@
 (provide (protect-out clipboard-driver%
                       cursor-driver%
                       printer-dc%
-                      button%
-                      check-box%
                       choice%
                       gauge%
                       group-panel%
                       list-box%
-                      message%
                       radio-box%
                       slider%
                       tab-panel%
@@ -51,9 +48,8 @@
     (define/public (get-value) 0)))
 
 ;; Controls extend item% (compose only; not instantiated in the milestone).
-;; They carry the GTK method names the core inherits at load.
-(define button% (class item% (super-new)))
-(define check-box% (class item% (super-new)))
+;; They carry the GTK method names the core inherits at load. (button%,
+;; check-box% and message% are now real -- see control.rkt.)
 (define group-panel% (class item% (super-new)))
 (define slider% (class item% (super-new)))
 
@@ -81,13 +77,6 @@
     (define/public (number) 0)
     (define/public (button-focus n) (void))
     (define/public (enable-button i on?) (void))))
-
-(define message%
-  (class item%
-    (super-new)
-    (define/public (get-color) #f)
-    (define/public (set-color c) (void))
-    (define/public (set-preferred-size) (void))))
 
 (define list-box%
   (class item%

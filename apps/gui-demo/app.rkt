@@ -13,11 +13,20 @@
 ;;
 ;; The demo program blocks in (yield (make-semaphore)) -- a Racket-level park,
 ;; not a stdin read -- so the eventspace dispatch loop keeps running the pump.
+;;
+;; The demo's racket/gui program lives in its own file (demo.rkt) and the page
+;; driver in gui-demo.js (both outside public/); a post-build hook
+;; (build-demo.rkt) splices demo.rkt into gui-demo.js -> dist/gui-demo.js.
 (provide app)
+
+(require "build-demo.rkt")
 
 (define app
   (hash
    ;; gui-lib brings racket/gui; draw-lib + the cairo/pango wasm-libs render it.
    'pkgs       '(draw-lib gui-lib)
    'wasm-libs  '(draw)
-   'public     "public"))
+   'public     "public"
+   ;; After dist/ is assembled, generate dist/gui-demo.js from the template +
+   ;; demo.rkt.
+   'hooks      (hash 'post-build build-demo-js)))
