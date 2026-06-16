@@ -121,6 +121,13 @@ function buildModule(init) {
       var domReplyLen = M["_wasm_dom_reply_len_addr"] ? M["_wasm_dom_reply_len_addr"]() : 0;
       var domReplyBuf = M["_wasm_dom_reply_buf_addr"] ? M["_wasm_dom_reply_buf_addr"]() : 0;
       var domReplyCap = M["_wasm_dom_reply_cap"]      ? M["_wasm_dom_reply_cap"]()      : 0;
+      /* GUI input-event ring (see racket/src/cs/c/wasm_gui_events.c). The
+         page writes mouse/key/resize records here and Atomics.notify's the
+         tail cell; the wasm mred backend's event pump drains them. Only
+         present on the browser surface (the accessors are exported there). */
+      var guiEvtAddr   = M["_gui_events_addr"]   ? M["_gui_events_addr"]()   : 0;
+      var guiEvtCap    = M["_gui_events_cap"]     ? M["_gui_events_cap"]()    : 0;
+      var guiEvtFields = M["_gui_events_fields"]  ? M["_gui_events_fields"]() : 0;
       post({
         type:    "ready",
         heap:    M["HEAPU8"].buffer,            // SharedArrayBuffer
@@ -129,6 +136,11 @@ function buildModule(init) {
         outBase: outAddr >> 2,
         outCap:  outCap,
         stateBase: ioStateAddr >> 2,
+        guiEvents: {
+          base:   guiEvtAddr >> 2,             // int32 index of head cell
+          cap:    guiEvtCap,                   // capacity in records
+          fields: guiEvtFields,                // int32 fields per record
+        },
         dom: {
           cmdSeqBase:   domCmdSeq   >> 2,
           cmdLenBase:   domCmdLen   >> 2,

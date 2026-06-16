@@ -100,4 +100,12 @@
   Sforeign_symbol("wasm_dom_eval", (void *)wasm_dom_eval);
 }
 
+{
+  /* GUI input-event ring drain -- see racket/src/cs/c/wasm_gui_events.c.
+     The page produces records; the wasm mred backend's event pump
+     (wx/wasm/queue.rkt) drains them with this. */
+  extern int wasm_gui_events_poll(int *, int);
+  Sforeign_symbol("wasm_gui_events_poll", (void *)wasm_gui_events_poll);
+}
+
 

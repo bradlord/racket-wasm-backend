@@ -81,7 +81,7 @@ index b4e92ee..61a2d05 100644
 +  ;; res_query, pthread_setname_np, ...). All four are linked into the
 +  ;; `wasm` target. Standard-header-only, so they compile with the base
 +  ;; config + the PORTABLE_BYTECODE/zlib defines.
-+  (define wasm-prim-names (list "wasm_http" "wasm_canvas" "wasm_dom" "wasm_stubs"))
++  (define wasm-prim-names (list "wasm_http" "wasm_canvas" "wasm_dom" "wasm_gui_events" "wasm_stubs"))
 +  (define wasm-prim-srcs (map (lambda (n) (at-source (~a n ".c"))) wasm-prim-names))
 +  (define wasm-prim-objs (map (lambda (n) (at-dir (~a n ".o"))) wasm-prim-names))
 +  ;; Browser-only primitive: wasm_shell_io.c backs the SAB-based stdin/stdout
@@ -168,7 +168,7 @@ index b4e92ee..61a2d05 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +791,323 @@
+@@ -691,6 +791,326 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -458,7 +458,10 @@ index b4e92ee..61a2d05 100644
 +                                "_malloc,_free,_main,_setThrew,_memcpy,_memset,"
 +                                "_shell_in_addr,_shell_in_cap,_shell_out_addr,_shell_out_cap,_shell_io_state_addr,"
 +                                "_wasm_dom_cmd_seq_addr,_wasm_dom_cmd_len_addr,_wasm_dom_cmd_buf_addr,_wasm_dom_cmd_cap,"
-+                                "_wasm_dom_reply_seq_addr,_wasm_dom_reply_len_addr,_wasm_dom_reply_buf_addr,_wasm_dom_reply_cap")
++                                "_wasm_dom_reply_seq_addr,_wasm_dom_reply_len_addr,_wasm_dom_reply_buf_addr,_wasm_dom_reply_cap,"
++                                ;; GUI input-event ring accessors (wasm_gui_events.c), read by
++                                ;; the page to write mouse/key/resize records the worker drains.
++                                "_gui_events_addr,_gui_events_cap,_gui_events_fields")
 +                            (~a "-sEXPORTED_RUNTIME_METHODS="
 +                                "getValue,setValue,UTF8ToString,stringToUTF8,addFunction,removeFunction,"
 +                                "HEAPU8,HEAP32,FS,addRunDependency,removeRunDependency,"

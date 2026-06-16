@@ -2480,6 +2480,34 @@ Racket. This pattern works for every Sforeign_symbol-registered
 primitive without going through `ffi-lib` at all -- it's the right
 recipe to give users of the WASM REPL.
 
+### Browser GUI backend (mred) -- in progress
+
+A `wx/wasm/` backend for `racket/gui` (mred) is being added to render to
+an HTML canvas: canvas-only (one `<canvas>` per top-level frame, every
+widget drawn by Racket via `racket/draw` onto a cairo image surface and
+blitted out with `wasm_canvas_blit_bgra`; editors/snips/picts draw through
+`dc<%>` so they come for free). The runtime-level foundation is wired into
+the delta; the mred backend itself + page event wiring are WIP. See
+`gui-backend/README.md`.
+
+Page->worker GUI input rides a third SAB ring, the mirror of the stdin
+ring: **`racket/src/cs/c/wasm_gui_events.c`** holds a fixed-width record
+ring (6 int32 per record: type, frame-id, x, y, k, mods) and exposes
+`wasm_gui_events_poll(out, max)` (registered in `wasm_extras.inc`,
+reachable via `vm-eval`/`foreign-procedure`; node stub returns 0). The
+ring accessors `_gui_events_addr/_cap/_fields` are added to the browser
+link `EXPORTED_FUNCTIONS`, and `shell-worker.js` posts their offsets to
+the page in the `ready` message (`guiEvents`). `wasm_gui_events` is a
+common prim (`wasm-prim-names`), linked into both surfaces.
+
+The event-pump idle-wake is deliberately deferred: Cocoa's
+`unsafe-set-sleep-in-thread!` needs OS threads this build disables, and
+GTK's `unsafe-poll-ctx-fd-wakeup` depends on rktio `poll()` parking the
+worker under WasmFS (unverified). The first milestone uses a periodic
+~60 Hz poll of the ring (proves blit-out + event-in + the backend);
+0%-idle wake (fd-wakeup or `Atomics.wait`-with-timeout) is a later
+refinement once measured against a real build.
+
 ## What still has to be written
 
 The boot harness (`racket/src/cs/c/main_em.c`) is in place, pbchunk is
