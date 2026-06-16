@@ -1,31 +1,19 @@
 #lang racket/base
 ;; platform.rkt -- the wasm backend's platform-values bundle.
 ;;
-;; PROBE STAGE: the real window/frame/canvas/panel are not written yet, so
-;; they are inline error-on-use stubs here alongside the controls in
-;; stubs.rkt. This lets racket/gui LOAD under wasm (selected via PLT_WASM_GUI)
-;; and verifies the scaffold (procs/stubs/queue/init + the vm-eval foreign
-;; procedures) instantiates under the real runtime. Once window/frame/canvas/
-;; panel.rkt exist they replace these stubs.
+;; Real (thin) window/frame/canvas/panel + dc; controls/menus/dialogs are still
+;; error-on-use stubs (stubs.rkt). Selected via PLT_WASM_GUI in the unix branch
+;; of mred/private/wx/platform.rkt.
 
-(require racket/class
-         "init.rkt"       ; starts the event pump at load
+(require "init.rkt"       ; starts the event pump at load
          "procs.rkt"
-         "stubs.rkt")
+         "stubs.rkt"
+         "window.rkt"
+         "canvas.rkt"
+         "frame.rkt"
+         "panel.rkt")
 
 (provide (protect-out platform-values))
-
-;; Inline error-on-use stubs for the not-yet-written core classes.
-(define-syntax-rule (define-core-stub name)
-  (define name
-    (class object%
-      (super-new)
-      (error 'name "wasm GUI backend: core class not yet implemented"))))
-(define-core-stub frame%)
-(define-core-stub canvas%)
-(define-core-stub canvas-panel%)
-(define-core-stub panel%)
-(define-core-stub window%)
 
 (define (platform-values)
   (values

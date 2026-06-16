@@ -1,3 +1,246 @@
+diff --git a/gui-lib/mred/private/wx/wasm/base.rkt b/gui-lib/mred/private/wx/wasm/base.rkt
+new file mode 100644
+index 00000000..809c63b9
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/base.rkt
+@@ -0,0 +1,33 @@
++#lang racket/base
++;; base.rkt -- the wasm backend's widget% base (replaces gtk/widget.rkt).
++;;
++;; There is no GtkWidget; a "gtk" here is just an opaque logical token a
++;; subclass hands up (often #f). We keep only what the mred core needs from
++;; widget%: the eventspace, and the gtk->wx hook stubbed (our event pump routes
++;; by frame id, not by widget pointer, so the hook is unused).
++
++(require racket/class
++         "../common/queue.rkt")
++
++(provide (protect-out widget%
++                      gtk->wx))
++
++(define widget%
++  (class object%
++    (init [gtk #f]
++          [extra-gtks null]
++          [parent #f])
++    (init-field [eventspace (if parent
++                                (send parent get-eventspace)
++                                (current-eventspace))])
++    (when (eventspace-shutdown? eventspace)
++      (error '|GUI object initialization| "the eventspace has been shutdown"))
++    (super-new)
++    (define/public (get-eventspace) eventspace)
++    (define/public (direct-update?) #t)
++    (define/public (install-widget-parent p)
++      (set! eventspace (send p get-eventspace)))
++    (define/public (register-extra-gtk gtk extra-gtk) (void))))
++
++;; No widget-pointer registry in the wasm backend.
++(define (gtk->wx gtk) #f)
+diff --git a/gui-lib/mred/private/wx/wasm/canvas.rkt b/gui-lib/mred/private/wx/wasm/canvas.rkt
+new file mode 100644
+index 00000000..1993e8a7
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/canvas.rkt
+@@ -0,0 +1,198 @@
++#lang racket/base
++;; canvas.rkt -- the wasm backend canvas% (lean version of gtk/canvas.rkt).
++;;
++;; Composition mirrors GTK: (canvas-mixin (class (canvas-autoscroll-mixin
++;; window%) ...)). The inner platform class owns a dc% (drawing into a Cairo
++;; image bitmap) and blits it to the page on flush. Scroll/combo/GL are stubbed
++;; for the first milestone. handle-gui-event (called by the event pump) builds
++;; mouse-event%/key-event% from the page's records and dispatches them.
++
++(require racket/class
++         racket/draw
++         "../../lock.rkt"
++         "../common/queue.rkt"
++         "../common/canvas-mixin.rkt"
++         (only-in "../common/backing-dc.rkt" queue-backing-flush)
++         "../common/event.rkt"
++         "window.rkt"
++         "queue.rkt"
++         "dc.rkt")
++
++(provide (protect-out canvas% canvas-panel%))
++
++(define white (make-object color% 255 255 255))
++
++(define canvas%
++  (canvas-mixin
++   (class (canvas-autoscroll-mixin window%)
++     (init parent x y w h style [ignored-name #f] [gl-config #f])
++
++     (inherit get-client-size get-eventspace
++              dispatch-on-event dispatch-on-char
++              is-auto-scroll? reset-auto-scroll)
++
++     (define transparent? (and (memq 'transparent style) #t))
++     (define transparentish? transparent?)
++     (define bg-color (if transparent? #f white))
++
++     (define dc #f)
++
++     (super-new [parent parent]
++                [gtk (box 'canvas)]
++                [no-show? (and (memq 'deleted style) #t)])
++
++     (set! dc (new dc% [canvas this] [transparentish? transparentish?]))
++
++     (set-size x y w h)
++
++     ;; --- identity / kind ---
++     (define/public (is-panel?) #f)
++     (define/override (direct-update?) #t)
++     (define/override (get-client-gtk) (box 'canvas-client))
++     (define/override (get-container-gtk) (get-client-gtk))
++     (define/public (reset-gl-context mapped?) (void))
++
++     ;; --- dc / bitmaps ---
++     (define/public (get-dc) dc)
++     (define/public (make-compatible-bitmap w h) (send dc make-backing-bitmap w h))
++     (define/public (get-scaled-client-size)
++       (define wb (box 0)) (define hb (box 0))
++       (get-client-size wb hb)
++       (values (unbox wb) (unbox hb)))
++     (define/public (get-gl-client-size) (get-scaled-client-size))
++
++     (define/override (set-size x y w h)
++       (super set-size x y w h)
++       (when (and (is-auto-scroll?) (not (is-panel?))) (reset-auto-scroll))
++       (on-size))
++
++     ;; --- background ---
++     (define/public (get-canvas-background) bg-color)
++     (define/public (set-canvas-background c) (set! bg-color c))
++     (define/public (get-canvas-background-for-backing) bg-color)
++     (define/public (get-canvas-background-for-clearing) bg-color)
++
++     ;; --- paint / flush (canvas-mixin drives queue-paint/paint-children) ---
++     (define/public (queue-paint) (void))           ; overridden by canvas-mixin
++     (define/public (request-canvas-flush-delay) #f)
++     (define/public (cancel-canvas-flush-delay req) (void))
++     (define/public (queue-canvas-refresh-event thunk)
++       (queue-window-refresh-event this thunk))
++     (define/public (skip-pre-paint?) #f)
++     (define/public (worthwhile-to-paint?) #t)
++     (define/public (on-paint) (void))
++     (define/public (get-flush-window) (mcons #f #f))
++
++     ;; Schedule the backing store to reach the page: just blit now.
++     (define/public (queue-backing-flush) (do-canvas-backing-flush #f))
++     (define/public (schedule-periodic-backing-flush) (void)) ; mixin extends
++     (define/public (do-canvas-backing-flush ctx) (do-backing-flush this dc))
++     (define/public (paint-or-queue-paint cr)
++       (or (do-canvas-backing-flush cr) (begin (queue-paint) #f)))
++     (define/public (flush) (do-canvas-backing-flush #f))
++
++     (define/override (refresh) (queue-paint))
++     (define/override (reset-child-dcs) (queue-paint))
++
++     (define/public (begin-refresh-sequence) (void))
++     (define/public (end-refresh-sequence) (void))
++
++     (define/public (on-size) (void))
++     (define/public (on-client-size w h) (void))
++
++     ;; --- scrolling (stubbed for the milestone) ---
++     (define/override (do-set-scrollbars h-step v-step h-len v-len h-page v-page h-pos v-pos) (void))
++     (define/override (reset-dc-for-autoscroll) (void))
++     (define/override (get-virtual-h-pos) 0)
++     (define/override (get-virtual-v-pos) 0)
++     (define/public (show-scrollbars h? v?) (void))
++     (define/public (deliver-scroll-callbacks?) #f)
++     (define/public (set-scroll-page which v) (void))
++     (define/public (set-scroll-range which v) (void))
++     (define/public (set-scroll-pos which v) (void))
++     (define/public (get-scroll-page which) 1)
++     (define/public (get-scroll-range which) 0)
++     (define/public (get-scroll-pos which) 0)
++     (define/public (do-scroll dir) (void))
++     (define/public (on-scroll e) (void))
++     (define/public (scroll x y) (void))
++     (define/public (set-resize-corner on?) (void))
++
++     ;; --- collecting blits (caret flashing) ---
++     (define/public (register-collecting-blit x y w h on off on-x on-y off-x off-y) (void))
++     (define/public (unregister-collecting-blits) (void))
++
++     ;; --- combo (unsupported) ---
++     (define/public (clear-combo-items) (void))
++     (define/public (append-combo-item s) (void))
++     (define/public (on-popup) (void))
++     (define/public (combo-maybe-clicked) (void))
++     (define/public (on-combo-select i) (void))
++     (define/public (set-combo-text s) (void))
++     (define/public (popup-combo) (void))
++
++     (define/override (handles-events? gtk) #t)
++     (define/override (internal-pre-on-event gtk e) #f)
++
++     ;; --- page input -> eventspace events ---
++     (define/override (handle-gui-event type x y k mods)
++       (define (mod m) (positive? (bitwise-and mods m)))
++       (cond
++        [(or (= type EVT-MOUSE-DOWN) (= type EVT-MOUSE-UP)
++             (= type EVT-MOUSE-MOVE) (= type EVT-ENTER) (= type EVT-LEAVE))
++         (define et
++           (cond
++            [(= type EVT-MOUSE-MOVE) 'motion]
++            [(= type EVT-ENTER) 'enter]
++            [(= type EVT-LEAVE) 'leave]
++            [(= type EVT-MOUSE-DOWN) (case k [(1) 'middle-down] [(2) 'right-down] [else 'left-down])]
++            [else (case k [(1) 'middle-up] [(2) 'right-up] [else 'left-up])]))
++         (define e
++           (new mouse-event%
++                [event-type et]
++                [left-down (case et [(left-down) #t] [(left-up) #f] [else (= k 0)])]
++                [middle-down (case et [(middle-down) #t] [(middle-up) #f] [else #f])]
++                [right-down (case et [(right-down) #t] [(right-up) #f] [else #f])]
++                [x x] [y y]
++                [shift-down (mod MOD-SHIFT)]
++                [control-down (mod MOD-CONTROL)]
++                [meta-down (mod MOD-META)]
++                [alt-down (mod MOD-ALT)]))
++         (dispatch-on-event e #f)]
++        [(= type EVT-KEY-DOWN)
++         (define e
++           (new key-event%
++                [key-code (if (and (> k 0) (< k #x110000)) (integer->char k) #\nul)]
++                [x x] [y y]
++                [shift-down (mod MOD-SHIFT)]
++                [control-down (mod MOD-CONTROL)]
++                [meta-down (mod MOD-META)]
++                [alt-down (mod MOD-ALT)]))
++         (dispatch-on-char e #f)]
++        [else (void)])))))
++
++;; canvas-panel%: a canvas that is also a container (panel). Tracks children
++;; and forwards the recursive child operations, like panel%.
++(define canvas-panel%
++  (class canvas%
++    (define children null)
++    (super-new)
++    (define/override (is-panel?) #t)
++    (define/public (get-label-position) 'horizontal)
++    (define/public (set-label-position pos) (void))
++    (define/public (adopt-child child) (send child set-parent this))
++    (define/public (set-item-cursor x y) (void))
++    (define/override (register-child child on?)
++      (let ([now-on? (and (memq child children) #t)])
++        (unless (eq? on? now-on?)
++          (set! children (if on? (cons child children) (remq child children))))))
++    (define/override (reset-child-freezes)
++      (super reset-child-freezes)
++      (for ([c (in-list children)]) (send c reset-child-freezes)))
++    (define/override (paint-children)
++      (super paint-children)
++      (for ([c (in-list children)]) (send c paint-children)))
++    (define/override (refresh-all-children)
++      (for ([c (in-list children)]) (send c refresh)))
++    (define/override (notify-children-top-realize)
++      (for ([c (in-list children)]) (send c notify-children-top-realize)))))
 diff --git a/gui-lib/mred/private/wx/wasm/dc.rkt b/gui-lib/mred/private/wx/wasm/dc.rkt
 new file mode 100644
 index 00000000..014c5ef8
@@ -72,10 +315,10 @@ index 00000000..014c5ef8
 +          (send target release-bitmap-storage))))
 diff --git a/gui-lib/mred/private/wx/wasm/ffi.rkt b/gui-lib/mred/private/wx/wasm/ffi.rkt
 new file mode 100644
-index 00000000..f2bbc6c3
+index 00000000..b9bb3db2
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/ffi.rkt
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,42 @@
 +#lang racket/base
 +;; ffi.rkt -- the wasm backend's foreign entry points.
 +;;
@@ -91,13 +334,24 @@ index 00000000..f2bbc6c3
 +         gui-events-poll-raw
 +         GUI-EVT-FIELDS)
 +
++;; The foreign procedures are bound lazily (first call), so merely requiring
++;; this module -- e.g. to instantiate the backend classes on a host Racket for
++;; a fast compose-class check -- does not run vm-eval against symbols that
++;; only exist in the wasm image.
++(define-syntax-rule (define-foreign name spec)
++  (begin
++    (define cached #f)
++    (define (name . args)
++      (unless cached (set! cached (vm-eval 'spec)))
++      (apply cached args))))
++
 +;; Copy a straight-ARGB pixel buffer (racket/draw `get-argb-pixels` order)
 +;; out to the page; the page putImageData's it onto a <canvas>. Returns 0 in
 +;; the browser worker, -1 where self.postMessage is unavailable (node).
 +;; (Frame-tagged / dirty-rect blitting is a Step-4 extension of the C side;
 +;;  the first milestone uses the single-surface blit.)
-+(define canvas-blit-argb
-+  (vm-eval '(foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int)))
++(define-foreign canvas-blit-argb
++  (foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int))
 +
 +;; Must match GUI_EVT_FIELDS in racket/src/cs/c/wasm_gui_events.c.
 +(define GUI-EVT-FIELDS 6)
@@ -105,8 +359,203 @@ index 00000000..f2bbc6c3
 +;; Drain up to max-records GUI input-event records from the page->worker ring
 +;; into `out` (a byte buffer of >= max-records*FIELDS*4 bytes holding LE
 +;; int32); returns the record count (0 if empty). Non-blocking.
-+(define gui-events-poll-raw
-+  (vm-eval '(foreign-procedure "wasm_gui_events_poll" (u8* int) int)))
++(define-foreign gui-events-poll-raw
++  (foreign-procedure "wasm_gui_events_poll" (u8* int) int))
+diff --git a/gui-lib/mred/private/wx/wasm/frame.rkt b/gui-lib/mred/private/wx/wasm/frame.rkt
+new file mode 100644
+index 00000000..6c1352ae
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/frame.rkt
+@@ -0,0 +1,189 @@
++#lang racket/base
++;; frame.rkt -- the wasm backend frame% (lean port of gtk/frame.rkt).
++;;
++;; A top-level window. There is no native window: a frame owns a logical
++;; client area and a "frame id" that the event pump uses to route the page's
++;; input records here (register-gui-window!). Native window operations
++;; (resize/iconize/title/icon/decorations) reduce to state tracking; per-frame
++;; <canvas> management on the page is deferred (the canvas's blit already
++;; postMessages pixels to the page). The client-size-mixin behaviour is folded
++;; in directly. handle-gui-event routes to the single child (the canvas).
++
++(require racket/class
++         "../../lock.rkt"
++         "../common/queue.rkt"
++         "window.rkt"
++         "queue.rkt")
++
++(provide (protect-out frame%))
++
++(define all-frames (make-hasheq))
++
++(define frame%
++  (class window%
++    (init parent label x y w h style)
++    (init [is-dialog? #f])
++
++    (inherit set-size get-size get-parent get-eventspace get-gtk get-x get-y
++             adjust-client-delta pre-on-char pre-on-event)
++
++    (define floating? (and (memq 'float style) #t))
++    (define frame-id (next-frame-id))
++
++    (super-new [parent parent]
++               [gtk (box 'frame)]
++               [no-show? #t]
++               [add-to-parent? #f])
++
++    (set-size x y w h)
++
++    (define saved-title (or label ""))
++    (define is-modified? #f)
++    (define saved-child #f)
++
++    ;; --- client-size-mixin behaviour (folded in) ---
++    (define client-x 0)
++    (define client-y 0)
++    (define/public (on-client-size w h) (void))
++    (define/public (internal-on-client-size w h) (void))
++    (define/public (save-client-size x y w h)
++      (set! client-x x) (set! client-y y)
++      (queue-window-event this (lambda () (internal-on-client-size w h) (on-client-size w h))))
++    (define/override (get-client-delta) (values client-x client-y))
++
++    (define/override (get-client-gtk) (box 'frame-client))
++    (define/override (get-window-gtk) (get-gtk))
++    (define/override (in-floating?) floating?)
++
++    ;; Top-level: store size locally rather than asking a parent.
++    (define/override (really-set-size gtk x y processed-x processed-y w h)
++      (void))
++    (define/override (set-child-size child-gtk x y w h) (void))
++
++    (define/public (on-close) #t)
++    (define/public (set-menu-bar mb) (void))
++    (define/public (reset-menu-height h) (adjust-client-delta 0 h))
++
++    (define saved-enforcements (vector 0 0 -1 -1))
++    (define/public (enforce-size min-x min-y max-x max-y inc-x inc-y)
++      (set! saved-enforcements (vector min-x min-y max-x max-y)))
++
++    (define/override (get-top-win) this)
++    (define/public (get-frame-id) frame-id)
++    (define dc-lock #f)
++    (define/public (get-dc-lock) dc-lock)
++    (define/override (get-dialog-level) 0)
++    (define/public (frame-relative-dialog-status win) #f)
++    (define/override (get-unset-pos) #f)
++
++    (define/override (center dir wrt)
++      (let ([w-box (box 0)] [h-box (box 0)] [sw-box (box 1024)] [sh-box (box 768)])
++        (get-size w-box h-box)
++        (set-top-position
++         (if (memq dir '(both horizontal)) (quotient (- (unbox sw-box) (unbox w-box)) 2) #f)
++         (if (memq dir '(both vertical))   (quotient (- (unbox sh-box) (unbox h-box)) 2) #f))))
++    (define/public (set-top-position x y) (void))
++
++    (define/override (show on?)
++      (let ([es (get-eventspace)])
++        (when (and on? (eventspace-shutdown? es))
++          (error 'show "eventspace has been shutdown")))
++      (super show on?))
++
++    (define/override (register-child child on?)
++      (unless on? (error 'register-child-in-frame "did not expect #f"))
++      (unless (or (not saved-child) (eq? child saved-child))
++        (error 'register-child-in-frame "expected only one child"))
++      (set! saved-child child))
++    (define/override (register-child-in-parent on?) (void))
++    (define/override (refresh-all-children) (when saved-child (send saved-child refresh)))
++    (define/override (notify-children-top-realize)
++      (when saved-child (send saved-child notify-children-top-realize)))
++
++    (define/override (direct-show on?)
++      (if on?
++          (begin (hash-set! all-frames this #t) (register-gui-window! frame-id this))
++          (begin (hash-remove! all-frames this) (unregister-gui-window! frame-id)))
++      (super direct-show on?))
++
++    (define/public (destroy) (atomically (direct-show #f)))
++
++    (define/augment (is-enabled-to-root?) #t)
++
++    (define big-icon #f)
++    (define small-icon #f)
++    (define/public (set-icon bm [mask #f] [mode 'both])
++      (case mode
++        [(small) (set! small-icon bm)]
++        [(big) (set! big-icon bm)]
++        [(both) (set! small-icon bm) (set! big-icon bm)]))
++
++    (define child-has-focus? #f)
++    (define reported-activate #f)
++    (define queued-active? #f)
++    (define/public (on-focus-child on?)
++      (set! child-has-focus? on?)
++      (unless queued-active?
++        (set! queued-active? #t)
++        (queue-window-event this
++                            (lambda ()
++                              (let ([on? child-has-focus?])
++                                (set! queued-active? #f)
++                                (unless (eq? on? reported-activate)
++                                  (set! reported-activate on?)
++                                  (on-activate on?)))))))
++    (define treat-focus-out-as-menu-click? #f)
++    (define/public (treat-focus-out-as-menu-click) (set! treat-focus-out-as-menu-click? #t))
++    (define/override (on-focus? on?) (on-focus-child on?) #t)
++    (define/public (get-focus-window [even-if-not-active? #f]) saved-child)
++
++    (define/override (call-pre-on-event w e) (pre-on-event w e))
++    (define/override (call-pre-on-char w e) (pre-on-char w e))
++
++    (define/override (internal-client-to-screen x y)
++      (set-box! x (+ (unbox x) (get-x)))
++      (set-box! y (+ (unbox y) (get-y))))
++
++    (define/public (on-toolbar-click) (void))
++    (define/public (on-menu-click) (void))
++    (define/public (on-menu-command c) (void))
++    (define/public (on-mdi-activate . _) (void))
++    (define/public (on-activate on?) (void))
++    (define/public (designate-root-frame) (void))
++    (define/public (system-menu . _) (void))
++    (define/public (set-modified mod?)
++      (unless (eq? is-modified? (and mod? #t))
++        (set! is-modified? (and mod? #t))
++        (set-title saved-title)))
++
++    (define waiting-cursor? #f)
++    (define in-window #f)
++    (define/public (set-wait-cursor-mode on?)
++      (set! waiting-cursor? on?)
++      (when in-window (send in-window enter-window)))
++    (define/override (set-parent-window-cursor in-win c) (set! in-window in-win))
++    (define/override (enter-window) (void))
++    (define/override (leave-window) (void))
++    (define/override (check-window-cursor win)
++      (when in-window (send in-window enter-window)))
++
++    (define maximized? #f)
++    (define is-iconized? #f)
++    (define fullscreen? #f)
++    (define/public (is-maximized?) maximized?)
++    (define/public (maximize on?) (set! maximized? (and on? #t)))
++    (define/public (on-window-state changed value) (void))
++    (define/public (iconized?) is-iconized?)
++    (define/public (iconize on?) (set! is-iconized? (and on? #t)))
++    (define/public (fullscreened?) fullscreen?)
++    (define/public (fullscreen on?) (set! fullscreen? (and on? #t)))
++    (define/public (get-menu-bar . _) #f)
++
++    (define/public (set-title s)
++      (set! saved-title s))
++    (define/public (display-changed) (void))
++
++    ;; Route a page input record to the single child (the canvas).
++    (define/override (handle-gui-event type x y k mods)
++      (when saved-child
++        (send saved-child handle-gui-event type x y k mods)))))
 diff --git a/gui-lib/mred/private/wx/wasm/init.rkt b/gui-lib/mred/private/wx/wasm/init.rkt
 new file mode 100644
 index 00000000..42d6119e
@@ -119,40 +568,92 @@ index 00000000..42d6119e
 +(require "queue.rkt")
 +
 +(define pump-thread (wasm-start-event-pump))
+diff --git a/gui-lib/mred/private/wx/wasm/panel.rkt b/gui-lib/mred/private/wx/wasm/panel.rkt
+new file mode 100644
+index 00000000..ccb08e82
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/panel.rkt
+@@ -0,0 +1,58 @@
++#lang racket/base
++;; panel.rkt -- the wasm backend panel% (lean port of gtk/panel.rkt).
++;;
++;; A logical container: tracks its children and forwards the recursive
++;; child operations the core relies on (reset/ paint/ refresh / notify). There
++;; are no native child widgets, so set-child-size is a no-op (each child tracks
++;; its own geometry). Borders aren't drawn yet.
++
++(require racket/class
++         "../../lock.rkt"
++         "window.rkt")
++
++(provide (protect-out panel%))
++
++(define panel%
++  (class window%
++    (init parent x y w h style label)
++
++    (define children null)
++    (define lbl-pos 'horizontal)
++
++    (super-new [parent parent]
++               [gtk (box 'panel)]
++               [no-show? (and (memq 'deleted style) #t)])
++
++    (define/public (get-label-position) lbl-pos)
++    (define/public (set-label-position pos) (set! lbl-pos pos))
++
++    (define/public (adopt-child child) (send child set-parent this))
++
++    (define/override (get-client-gtk) (box 'panel-client))
++    (define/override (gets-focus?) #f)
++
++    (define/override (reset-child-freezes)
++      (super reset-child-freezes)
++      (for ([child (in-list children)]) (send child reset-child-freezes)))
++    (define/override (reset-child-dcs)
++      (super reset-child-dcs)
++      (for ([child (in-list children)]) (send child reset-child-dcs)))
++    (define/override (paint-children)
++      (super paint-children)
++      (for ([child (in-list children)]) (send child paint-children)))
++    (define/override (set-size x y w h)
++      (super set-size x y w h)
++      (reset-child-dcs))
++    (define/override (register-child child on?)
++      (let ([now-on? (and (memq child children) #t)])
++        (unless (eq? on? now-on?)
++          (set! children (if on? (cons child children) (remq child children))))))
++    (define/override (refresh-all-children)
++      (for ([child (in-list children)]) (send child refresh)))
++    (define/override (notify-children-top-realize)
++      (for ([child (in-list children)]) (send child notify-children-top-realize)))
++
++    (define/public (set-item-cursor x y) (void))
++
++    ;; Start with a minimum size, like the GTK panel.
++    (set-size 0 0 1 1)))
 diff --git a/gui-lib/mred/private/wx/wasm/platform.rkt b/gui-lib/mred/private/wx/wasm/platform.rkt
 new file mode 100644
-index 00000000..e77fc375
+index 00000000..048dc442
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/platform.rkt
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,38 @@
 +#lang racket/base
 +;; platform.rkt -- the wasm backend's platform-values bundle.
 +;;
-+;; PROBE STAGE: the real window/frame/canvas/panel are not written yet, so
-+;; they are inline error-on-use stubs here alongside the controls in
-+;; stubs.rkt. This lets racket/gui LOAD under wasm (selected via PLT_WASM_GUI)
-+;; and verifies the scaffold (procs/stubs/queue/init + the vm-eval foreign
-+;; procedures) instantiates under the real runtime. Once window/frame/canvas/
-+;; panel.rkt exist they replace these stubs.
++;; Real (thin) window/frame/canvas/panel + dc; controls/menus/dialogs are still
++;; error-on-use stubs (stubs.rkt). Selected via PLT_WASM_GUI in the unix branch
++;; of mred/private/wx/platform.rkt.
 +
-+(require racket/class
-+         "init.rkt"       ; starts the event pump at load
++(require "init.rkt"       ; starts the event pump at load
 +         "procs.rkt"
-+         "stubs.rkt")
++         "stubs.rkt"
++         "window.rkt"
++         "canvas.rkt"
++         "frame.rkt"
++         "panel.rkt")
 +
 +(provide (protect-out platform-values))
-+
-+;; Inline error-on-use stubs for the not-yet-written core classes.
-+(define-syntax-rule (define-core-stub name)
-+  (define name
-+    (class object%
-+      (super-new)
-+      (error 'name "wasm GUI backend: core class not yet implemented"))))
-+(define-core-stub frame%)
-+(define-core-stub canvas%)
-+(define-core-stub canvas-panel%)
-+(define-core-stub panel%)
-+(define-core-stub window%)
 +
 +(define (platform-values)
 +  (values
@@ -418,23 +919,27 @@ index 00000000..57df76e0
 +       (loop)))))
 diff --git a/gui-lib/mred/private/wx/wasm/stubs.rkt b/gui-lib/mred/private/wx/wasm/stubs.rkt
 new file mode 100644
-index 00000000..d4e0aa41
+index 00000000..9df9aab6
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/stubs.rkt
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,214 @@
 +#lang racket/base
 +;; stubs.rkt -- placeholder platform classes for the wasm backend.
 +;;
-+;; The first milestone is frame% + canvas% + dc% (canvas-only rendering).
-+;; Controls, menus, dialogs, and the printer dc are not implemented yet:
-+;; they only need to EXIST as named classes so platform.rkt can export them
-+;; and racket/gui can load. Nothing instantiates them unless a program
-+;; actually creates a button/menu/etc., at which point construction errors
-+;; with a clear "not yet implemented" message. clipboard-driver% and
-+;; cursor-driver% ARE constructed (the former at load, via common's
-+;; the-clipboard), so they get minimal working bodies.
++;; The first milestone is frame% + canvas% + dc%. Controls, menus, dialogs and
++;; the printer dc are not implemented. The mred core SUBCLASSES the platform
++;; control classes at module load (wxitem.rkt builds make-control% over item%,
++;; etc.) and uses `inherit`, so these can't be bare object% stubs: item% and
++;; the controls extend window% (and dialog% extends frame%) to expose the
++;; required method surface so racket/gui composes/loads. They are not
++;; instantiated in the milestone; creating one yields a degenerate, non-
++;; functional widget (controls aren't supported yet). clipboard-driver% and
++;; cursor-driver% ARE constructed (the former at load), so they are real.
 +
-+(require racket/class)
++(require racket/class
++         (only-in "../common/backing-dc.rkt" backing-dc%)
++         "window.rkt"
++         "frame.rkt")
 +
 +(provide (protect-out clipboard-driver%
 +                      cursor-driver%
@@ -455,36 +960,164 @@ index 00000000..d4e0aa41
 +                      menu-item%
 +                      dialog%))
 +
-+;; A class that errors when actually instantiated. It declares no inits, so
-+;; it both compiles and (never being constructed in the milestone) never
-+;; fires; if a program does create one, instantiation errors -- either on the
-+;; unexpected by-name init or on the body error below -- which is the intent.
-+(define-syntax-rule (define-unsupported name)
-+  (define name
-+    (class object%
-+      (super-new)
-+      (error 'name "not yet implemented in the wasm GUI backend"))))
++;; item% carries the full window% surface so the core's make-item%/make-control%
++;; (which subclass it at load) can inherit window methods.
++(define item%
++  (class window%
++    (super-new)
++    (define/public (get-label) "")
++    (define/public (set-label s) (void))
++    (define/public (get-label-gtk) (get-gtk))
++    (inherit get-gtk)
++    (define/public (command e) (void))
++    ;; Methods the core inherits from platform controls at load (wxitem.rkt).
++    (define/public (set-border on?) (void))
++    (define/public (set-value v) (void))
++    (define/public (get-value) 0)))
 +
-+(define-unsupported button%)
-+(define-unsupported check-box%)
-+(define-unsupported choice%)
-+(define-unsupported gauge%)
-+(define-unsupported group-panel%)
-+(define-unsupported list-box%)
-+(define-unsupported message%)
-+(define-unsupported radio-box%)
-+(define-unsupported slider%)
-+(define-unsupported tab-panel%)
-+(define-unsupported item%)
-+(define-unsupported menu%)
-+(define-unsupported menu-bar%)
-+(define-unsupported menu-item%)
-+(define-unsupported dialog%)
-+(define-unsupported printer-dc%)
++;; Controls extend item% (compose only; not instantiated in the milestone).
++;; They carry the GTK method names the core inherits at load.
++(define button% (class item% (super-new)))
++(define check-box% (class item% (super-new)))
++(define group-panel% (class item% (super-new)))
++(define slider% (class item% (super-new)))
 +
-+;; Minimal clipboard: holds nothing useful yet, but constructs and answers
-+;; the queries common/clipboard.rkt's clipboard% forwards (it builds one at
-+;; module load). Browser clipboard access would route through DOM-RPC later.
++(define choice%
++  (class item%
++    (super-new)
++    (define/public (set-selection i) (void))
++    (define/public (get-selection) 0)
++    (define/public (number) 0)
++    (define/public (clear) (void))
++    (define/public (delete i) (void))
++    (define/public (append s) (void))))
++
++(define gauge%
++  (class item%
++    (super-new)
++    (define/public (get-range) 1)
++    (define/public (set-range v) (void))))
++
++(define radio-box%
++  (class item%
++    (super-new)
++    (define/public (set-selection i) (void))
++    (define/public (get-selection) 0)
++    (define/public (number) 0)
++    (define/public (button-focus n) (void))
++    (define/public (enable-button i on?) (void))))
++
++(define message%
++  (class item%
++    (super-new)
++    (define/public (get-color) #f)
++    (define/public (set-color c) (void))
++    (define/public (set-preferred-size) (void))))
++
++(define list-box%
++  (class item%
++    (super-new)
++    (define/public (set-column-order o) (void))
++    (define/public (queue-changed) (void))
++    (define/public (queue-activated) (void))
++    (define/public (column-clicked i) (void))
++    (define/public (get-column-order) '())
++    (define/public (set-string i s [col 0]) (void))
++    (define/public (set-column-label i s) (void))
++    (define/public (set-column-size i w mn mx) (void))
++    (define/public (get-column-size i) (values 0 0 0))
++    (define/public (set-first-visible-item i) (void))
++    (define/public (set choices . _) (void))
++    (define/public (get-selections) '())
++    (define/public (get-selection) -1)
++    (define/public (get-first-item) 0)
++    (define/public (number-of-visible-items) 0)
++    (define/public (number) 0)
++    (define/public (set-data i d) (void))
++    (define/public (get-data i) #f)
++    (define/public (selected? i) #f)
++    (define/public (select i [on? #t]) (void))
++    (define/public (set-selection i) (void))
++    (define/public (delete i) (void))
++    (define/public (clear) (void))
++    (define/public (append-column s) (void))
++    (define/public (delete-column i) (void))))
++(define tab-panel%
++  (class item%
++    (super-new)
++    ;; Overridden by the core's wx-make-tab% at load:
++    (define/public (on-choice-reorder new-positions) (void))
++    (define/public (on-choice-close pos) (void))
++    ;; Tab operations (called when tab-panels are actually used):
++    (define/public (set-callback cb) (void))
++    (define/public (swap-in . _) (void))
++    (define/public (page-changed . _) (void))
++    (define/public (page-reordered . _) (void))
++    (define/public (set choices) (void))
++    (define/public (delete i) (void))
++    (define/public (number) 0)
++    (define/public (button-focus n) (void))
++    (define/public (set-selection i) (void))
++    (define/public (get-selection) 0)))
++
++;; A dialog is a top-level window: carry the frame% surface.
++(define dialog% (class frame% (super-new)))
++
++;; Menus have their own (non-window) protocol. Not functional yet, but they
++;; carry the surface the core's wxmenu.rkt inherits/overrides at load.
++(define menu%
++  (class object%
++    (super-new)
++    (define/public (get-item) #f)
++    (define/public (removing-item i) (void))
++    (define/public (do-on-select i) (void))
++    (define/public (on-select i) (void))
++    (define/public (get-gtk) #f)
++    (define/public (set-parent p) (void))
++    (define/public (get-top-parent) #f)
++    (define/public (set-self-item i) (void))
++    (define/public (popup x y queue) (void))
++    (define/public (do-selected i) (void))
++    (define/public (do-no-selected) (void))
++    (define/public (append-separator) (void))
++    (define/public (append . _) (void))
++    (define/public (select i) (void))
++    (define/public (set-help-string i s) (void))
++    (define/public (number) 0)
++    (define/public (set-label i s) (void))
++    (define/public (enable i on?) (void))
++    (define/public (check i on?) (void))
++    (define/public (checked? i) #f)
++    (define/public (delete-by-position p) (void))
++    (define/public (delete i) (void))))
++
++(define menu-bar%
++  (class object%
++    (super-new)
++    (define/public (get-top-window) #f)
++    (define/public (get-gtk) #f)
++    (define/public (set-top-window w) 0)
++    (define/public (reset-menu-height h) (void))
++    (define/public (get-dialog-level) 0)
++    (define/public (set-label-top i s) (void))
++    (define/public (enable-top i on?) (void))
++    (define/public (delete i pos) (void))
++    (define/public (activate-item i) (void))
++    (define/public (append . _) (void))))
++
++(define menu-item%
++  (class object%
++    (super-new)
++    (define/public (id) 0)))
++
++;; printer-dc% is wrapped by racket/draw's doc+page-check-mixin at load, which
++;; overrides the whole dc<%> drawing API -- so it must be a real dc. Extend
++;; backing-dc% (a full dc<%>); printing isn't actually supported yet.
++(define printer-dc%
++  (class backing-dc%
++    (super-new [transparent? #f])
++    (define/public (multiple-pages-ok?) #f)))
++
 +(define clipboard-driver%
 +  (class object%
 +    (init-field [x-selection? #f])
@@ -497,7 +1130,6 @@ index 00000000..d4e0aa41
 +    (define/public (get-bitmap-data) #f)
 +    (define/public (set-bitmap-data bm timestamp) (void))))
 +
-+;; Minimal cursor: constructs and accepts standard/image cursors as no-ops.
 +(define cursor-driver%
 +  (class object%
 +    (super-new)
@@ -505,3 +1137,257 @@ index 00000000..d4e0aa41
 +    (define/public (set-image image hot-x hot-y) (void))
 +    (define/public (get-handle) #f)
 +    (define/public (ok?) #t)))
+diff --git a/gui-lib/mred/private/wx/wasm/window.rkt b/gui-lib/mred/private/wx/wasm/window.rkt
+new file mode 100644
+index 00000000..f22d0202
+--- /dev/null
++++ b/gui-lib/mred/private/wx/wasm/window.rkt
+@@ -0,0 +1,248 @@
++#lang racket/base
++;; window.rkt -- the wasm backend window% (lean port of gtk/window.rkt).
++;;
++;; Same protocol as the GTK window% (the mred core subclasses it and uses
++;; `inherit`, so the full method surface must be present), but there is no
++;; GtkWidget: geometry lives in save-x/y/w/h, native show/size/focus calls are
++;; no-ops, and a frame overrides the ones that must reach the page. Children
++;; are positioned logically (each child tracks its own geometry), so a parent's
++;; set-child-size is a no-op. `handle-gui-event` (new) is the entry point the
++;; event pump calls; the base just routes to on-event/on-char via dispatch.
++
++(require racket/class
++         "../../lock.rkt"
++         "../common/queue.rkt"
++         "base.rkt")
++
++(provide (protect-out window%
++                      queue-window-event
++                      queue-window-refresh-event))
++
++(define (queue-window-event win thunk)
++  (queue-event (send win get-eventspace) thunk))
++(define (queue-window-refresh-event win thunk)
++  (queue-refresh-event (send win get-eventspace) thunk))
++
++(define window%
++  (class widget%
++    (init-field parent
++                gtk)
++    (init [no-show? #f]
++          [extra-gtks null]
++          [add-to-parent? #t]
++          [connect-size-allocate? #t])
++
++    (super-new [gtk gtk] [extra-gtks extra-gtks] [parent parent])
++
++    (define save-x (get-unset-pos))
++    (define save-y (get-unset-pos))
++    (define save-w 0)
++    (define save-h 0)
++
++    (define/public (get-unset-pos) 0)
++
++    (define/public (get-gtk) gtk)
++    (define/public (get-client-gtk) gtk)
++    (define/public (get-container-gtk) (get-client-gtk))
++    (define/public (get-window-gtk) (and parent (send parent get-window-gtk)))
++
++    (define/public (move x y) (set-size x y -1 -1))
++
++    (define/public (set-size x y w h)
++      (unless (and (or (not x) (equal? save-x x))
++                   (or (not y) (equal? save-y y))
++                   (or (= w -1) (= save-w (max w client-delta-w)))
++                   (or (= h -1) (= save-h (max h client-delta-h))))
++        (unless (not x) (set! save-x x))
++        (unless (not y) (set! save-y y))
++        (unless (= w -1) (set! save-w w))
++        (unless (= h -1) (set! save-h h))
++        (set! save-w (max save-w client-delta-w))
++        (set! save-h (max save-h client-delta-h))
++        (really-set-size gtk x y (or save-x 0) (or save-y 0) save-w save-h)
++        (queue-on-size)))
++
++    (define/public (save-size x y w h)
++      (set! save-w w)
++      (set! save-h h))
++
++    (define/public (really-set-size gtk given-x given-y x y w h)
++      (when parent (send parent set-child-size gtk x y w h)))
++
++    ;; No native child widgets to position; children track their own geometry.
++    (define/public (set-child-size child-gtk x y w h) (void))
++
++    (define/public (remember-size x y w h)
++      (unless (and (= save-w w) (= save-h h)
++                   (equal? save-x x) (equal? save-y y))
++        (set! save-w w) (set! save-h h)
++        (set! save-x x) (set! save-y y)
++        (queue-on-size)))
++
++    (define/public (queue-on-size) (void))
++
++    (define client-delta-w 0)
++    (define client-delta-h 0)
++    (define/public (adjust-client-delta dw dh)
++      (set! client-delta-w dw)
++      (set! client-delta-h dh))
++    (define/public (infer-client-delta [w? #t] [h? #t] [sub-h-gtk #f]
++                                       #:inside [inside-gtk #f])
++      (when w? (set! client-delta-w 0))
++      (when h? (set! client-delta-h 0)))
++    (define/public (set-auto-size [dw 0] [dh 0])
++      ;; No native size request; use a small default so layout has something.
++      (set-size #f #f (+ 1 dw) (+ 1 dh)))
++
++    (define shown? #f)
++    (define/public (direct-show on?)
++      (set! shown? (and on? #t))
++      (register-child-in-parent on?)
++      (when on? (reset-child-dcs)))
++    (define/public (show on?) (atomically (direct-show on?)))
++    (define/public (reset-child-freezes) (void))
++    (define/public (reset-child-dcs) (void))
++    (define/public (is-shown?) shown?)
++    (define/public (is-shown-to-root?)
++      (and shown? (if parent (send parent is-shown-to-root?) #t)))
++
++    (unless no-show? (show #t))
++
++    (define/public (get-x) (or save-x 0))
++    (define/public (get-y) (or save-y 0))
++    (define/public (get-width) save-w)
++    (define/public (get-height) save-h)
++
++    (define/public (get-parent) parent)
++    (define/public (set-parent p)
++      (set! parent p)
++      (set! save-x 0)
++      (set! save-y 0))
++
++    (define/public (get-top-win) (and parent (send parent get-top-win)))
++    (define/public (get-dialog-level) (if parent (send parent get-dialog-level) 0))
++
++    (define/public (get-size xb yb)
++      (set-box! xb save-w)
++      (set-box! yb save-h))
++    (define/public (get-client-size xb yb)
++      (get-size xb yb)
++      (set-box! xb (max 0 (- (unbox xb) client-delta-w)))
++      (set-box! yb (max 0 (- (unbox yb) client-delta-h))))
++
++    (define enabled? #t)
++    (define/pubment (is-enabled-to-root?)
++      (and enabled?
++           (inner (and parent (send parent is-enabled-to-root?))
++                  is-enabled-to-root?)))
++    (define/public (enable on?) (set! enabled? on?))
++    (define/public (is-window-enabled?) enabled?)
++
++    (define/public (drag-accept-files on?) (void))
++    (define/public (in-floating?) (and parent (send parent in-floating?)))
++
++    (define/public (set-focus) (void))
++
++    (define cursor-handle #f)
++    (define/public (set-cursor v)
++      (set! cursor-handle (and v (send (send v get-driver) get-handle)))
++      (check-window-cursor this))
++    (define/public (enter-window) (set-window-cursor this #f))
++    (define/public (leave-window) (when parent (send parent enter-window)))
++    (define/public (set-window-cursor in-win c)
++      (set-parent-window-cursor in-win (or c cursor-handle)))
++    (define/public (set-parent-window-cursor in-win c)
++      (when parent (send parent set-window-cursor in-win c)))
++    (define/public (check-window-cursor win)
++      (when parent (send parent check-window-cursor win)))
++
++    (define/public (on-set-focus) (void))
++    (define/public (on-kill-focus) (void))
++    (define/public (focus-change on?) (void))
++    (define/public (filter-key-event e) 'none)
++    (define/public (on-focus? on?) #t)
++
++    (define/private (pre-event-refresh) (void))
++
++    (define/public (handles-events? gtk) #f)
++    (define/public (dispatch-on-char e just-pre?)
++      (pre-event-refresh)
++      (cond
++       [(other-modal? this) #t]
++       [(call-pre-on-char this e) #t]
++       [just-pre? #f]
++       [else (when enabled? (on-char e)) #t]))
++    (define/public (dispatch-on-event e just-pre?)
++      (pre-event-refresh)
++      (cond
++       [(other-modal? this e) #t]
++       [(call-pre-on-event this e) #t]
++       [just-pre? #f]
++       [else (when enabled? (on-event e)) #t]))
++
++    (define/public (internal-pre-on-event gtk e) #f)
++    (define/public (call-pre-on-event w e)
++      (or (and parent (send parent call-pre-on-event w e)) (pre-on-event w e)))
++    (define/public (call-pre-on-char w e)
++      (or (and parent (send parent call-pre-on-char w e)) (pre-on-char w e)))
++    (define/public (pre-on-event w e) #f)
++    (define/public (pre-on-char w e) #f)
++    (define/public (on-char e) (void))
++    (define/public (on-event e) (void))
++
++    ;; Entry point for the event pump; canvas% overrides to build events.
++    (define/public (handle-gui-event type x y k mods) (void))
++
++    (define wheel-steps-mode 'one)
++    (define/public (get-wheel-steps-mode) wheel-steps-mode)
++    (define/public (set-wheel-steps-mode mode) (set! wheel-steps-mode mode))
++
++    (define skip-enter-leave? #f)
++    (define/public skip-enter-leave-events
++      (case-lambda
++       [(skip?) (set! skip-enter-leave? skip?)]
++       [else skip-enter-leave?]))
++
++    (define/public (register-child child on?) (void))
++    (define/public (register-child-in-parent on?)
++      (when parent (send parent register-child this on?)))
++    (define/public (paint-children) (void))
++    (define/public (on-drop-file path) (void))
++
++    (define/public (get-handle) (get-gtk))
++    (define/public (get-client-handle) (get-container-gtk))
++
++    (define/public (popup-menu m x y) (void))
++
++    (define/public (center a b) (void))
++    (define/public (refresh) (refresh-all-children))
++    (define/public (refresh-all-children) (void))
++    (define/public (notify-children-top-realize) (void))
++
++    (define/public (screen-to-client x y) (internal-screen-to-client x y))
++    (define/public (internal-screen-to-client x y)
++      (let ([xb (box 0)] [yb (box 0)])
++        (internal-client-to-screen xb yb)
++        (set-box! x (- (unbox x) (unbox xb)))
++        (set-box! y (- (unbox y) (unbox yb)))))
++    (define/public (client-to-screen x y) (internal-client-to-screen x y))
++    (define/public (internal-client-to-screen x y)
++      (let-values ([(dx dy) (get-client-delta)])
++        (when parent (send parent internal-client-to-screen x y))
++        (set-box! x (+ (unbox x) (or save-x 0) dx))
++        (set-box! y (+ (unbox y) (or save-y 0) dy))))
++
++    (define event-position-wrt-wx #f)
++    (define/public (set-event-positions-wrt wx) (set! event-position-wrt-wx wx))
++    (define/public (adjust-event-position x y)
++      (if event-position-wrt-wx
++          (let ([xb (box x)] [yb (box y)])
++            (internal-client-to-screen xb yb)
++            (send event-position-wrt-wx internal-screen-to-client xb yb)
++            (values (unbox xb) (unbox yb)))
++          (values x y)))
++
++    (define/public (get-client-delta) (values 0 0))
++    (define/public (get-stored-client-delta) (values client-delta-w client-delta-h))
++    (define/public (warp-pointer x y) (void))
++    (define/public (gets-focus?) #t)))

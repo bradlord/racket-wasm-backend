@@ -13,13 +13,24 @@
          gui-events-poll-raw
          GUI-EVT-FIELDS)
 
+;; The foreign procedures are bound lazily (first call), so merely requiring
+;; this module -- e.g. to instantiate the backend classes on a host Racket for
+;; a fast compose-class check -- does not run vm-eval against symbols that
+;; only exist in the wasm image.
+(define-syntax-rule (define-foreign name spec)
+  (begin
+    (define cached #f)
+    (define (name . args)
+      (unless cached (set! cached (vm-eval 'spec)))
+      (apply cached args))))
+
 ;; Copy a straight-ARGB pixel buffer (racket/draw `get-argb-pixels` order)
 ;; out to the page; the page putImageData's it onto a <canvas>. Returns 0 in
 ;; the browser worker, -1 where self.postMessage is unavailable (node).
 ;; (Frame-tagged / dirty-rect blitting is a Step-4 extension of the C side;
 ;;  the first milestone uses the single-surface blit.)
-(define canvas-blit-argb
-  (vm-eval '(foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int)))
+(define-foreign canvas-blit-argb
+  (foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int))
 
 ;; Must match GUI_EVT_FIELDS in racket/src/cs/c/wasm_gui_events.c.
 (define GUI-EVT-FIELDS 6)
@@ -27,5 +38,5 @@
 ;; Drain up to max-records GUI input-event records from the page->worker ring
 ;; into `out` (a byte buffer of >= max-records*FIELDS*4 bytes holding LE
 ;; int32); returns the record count (0 if empty). Non-blocking.
-(define gui-events-poll-raw
-  (vm-eval '(foreign-procedure "wasm_gui_events_poll" (u8* int) int)))
+(define-foreign gui-events-poll-raw
+  (foreign-procedure "wasm_gui_events_poll" (u8* int) int))
