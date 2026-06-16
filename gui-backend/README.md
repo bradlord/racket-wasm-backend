@@ -1,17 +1,48 @@
-# WIP: browser GUI backend for gui-lib (mred)
+# Browser GUI backend for gui-lib (mred) — VERIFIED end-to-end
 
-Goal: a `wx/wasm/` mred backend that renders Racket's `racket/gui` to an
-HTML canvas in the browser. Strategy (see the approved plan): **canvas-only**
-— one `<canvas>` per top-level frame, every widget drawn by Racket via
-`racket/draw` onto a cairo image surface and blitted out; controls/editors
-draw themselves through `dc<%>`, so editors/snips/picts come "for free".
+A `wx/wasm/` mred backend that renders Racket's `racket/gui` to an HTML canvas
+in the browser. Strategy: **canvas-only** — one `<canvas>` per top-level frame,
+every widget drawn by Racket via `racket/draw` onto a cairo image surface and
+blitted out; controls/editors draw themselves through `dc<%>`, so editors/snips/
+picts come "for free".
 
-This directory holds **authored-not-yet-wired** backend source, kept in
-version control because the runtime clone (`.work/`) is disposable. Once the
-wake-mechanism spike (below) confirms the event-pump shape, these become
+**Status (verified in headless Chrome via `apps/gui-demo`):** `racket/gui`
+`frame%` + `canvas%` compose, instantiate, paint (cairo/pango → `<canvas>`), and
+the full interactive loop works — a mouse click round-trips through the GUI event
+ring → pump → frame → panel → canvas → `on-event`, and the canvas repaints on
+`refresh`. See `apps/gui-demo/` (the demo app) and
+`test/browser/tools/gui-demo.mjs` (the Playwright regression driver).
+
+This directory holds the tracked backend source (the runtime clone under
+`.work/` is disposable). It is wired into builds as
 `package-patches/gui-lib/*.patch` (new-file diffs rooted at
 `gui-lib/mred/private/wx/wasm/...`, applied by `build/consume.rkt`), plus a
 selector patch to `gui-lib/mred/private/wx/platform.rkt`.
+
+## Two bugs fixed during browser bring-up
+
+1. **`cairo_pattern_reference` mis-bound `-> _void`** (a draw-lib FFI cast trap,
+   same class as `cairo_font_options_copy`). The backing-store flush
+   (`backing-draw-bm`) calls it; wasm's typed `call_indirect` trapped on the
+   `(i32)->()` vs real `(i32)->i32` mismatch ("null function or function
+   signature mismatch"). Fixed in
+   `package-patches/draw-lib/cairo-pattern-reference.patch`. See build-wasm.md
+   "Text / Pango".
+2. **`resume-flush` contract** (`(->m void?)`): the backing-dc flush protocol
+   calls our canvas `queue-backing-flush`/`flush`, which returned the eager
+   blit's truthy result. Fixed by returning `(void)` from those methods
+   (canvas.rkt).
+
+## Event routing: frame → panel → canvas (key design point)
+
+GTK maps each native widget pointer to its wx, so events reach the leaf widget
+directly. We have no native widgets: page events arrive at the top frame tagged
+with a **frame id**, so each container forwards down by **geometry**. An mred
+`frame%` always has an intermediate client **panel** (`wxpanel.rkt`), so
+`frame.handle-gui-event` → `panel.handle-gui-event` (hit-tests its children by
+`get-x/y/width/height`, translates coordinates) → `canvas.handle-gui-event`
+(builds the `mouse-event%`/`key-event%`). The panel routing was the missing link
+that made clicks reach `on-event`.
 
 ## What is already wired into the build (Step 1 — done, built + verified)
 
@@ -87,54 +118,70 @@ surface:
   surface must exist at class-definition time** — error-on-use stubs for the
   core classes don't even let racket/gui load.
 
-**Still to write (the irreducible core):**
-- `window.rkt`, `frame.rkt`, `canvas.rkt`, `panel.rkt` — port the FULL public
-  method surface from the GTK backend (lean bodies OK, but every method the core
-  `inherit`s must be present), replacing GtkWidget FFI with our logical-widget +
-  page-`<canvas>` model; event delivery via `handle-gui-event` →
-  `mouse-event%`/`key-event%`. Then swap them into `platform.rkt` for the
-  inline stubs. Iterate with the build→node-load loop (it pinpoints each missing
-  method, e.g. `refresh`).
-- Page producer (`apps/.../ide.js` or a demo page): canvas DOM listeners →
-  ring records (+`Atomics.notify`); per-frame `<canvas>` for blits.
+**The core (`window.rkt`/`frame.rkt`/`canvas.rkt`/`panel.rkt`) is written and
+verified:** the full public method surface the core `inherit`s is present, with
+lean bodies — GtkWidget FFI replaced by our logical-widget + page-`<canvas>`
+model; event delivery via `handle-gui-event` → `mouse-event%`/`key-event%`.
 
-> Build-loop cost note: `package-patches/` content feeds the SDK build key, so
-> editing a patch triggers a full SDK rebuild + cross-install (~10 min). Use the
-> host `raco make` (methods-exist/syntax) to catch as much as possible first.
+**Page producer:** `apps/gui-demo/public/gui-demo.js` — canvas DOM listeners
+encode mouse/key records into the ring (+`Atomics.notify`), and mirror each
+`{type:"canvas"}` blit onto one persistent `<canvas>`. It boots with
+`argv ["-e" "(putenv PLT_WASM_GUI 1)" "-t" main]` so the env var that selects the
+wasm backend is set before `racket/gui` loads, and the program parks in
+`(yield (make-semaphore))` — a Racket-level block, so the eventspace dispatch
+loop keeps running the pump (the worker is not parked in a stdin read).
 
-## The gating spike (Step 2) — resolve before building out the pump
+> Build-loop cost note: `package-patches/` content feeds the build key. Adding a
+> NEW patch (e.g. the draw-lib cairo fix) re-stages the affected package and
+> repacks `share.data`; the SDK/base-runtime caches still hit if their inputs are
+> unchanged. Editing an existing patch's content likewise re-stages just that
+> package. Use the host `raco make` (methods-exist/syntax) to catch shape errors
+> first; for runtime behaviour, the **node** surface (`.work/.../wasm/racket.js`
+> with the freshly-packed `share.data` copied beside it) iterates far faster than
+> the ~70MB browser boot.
 
-How does the event pump block when idle without freezing, yet still run
-timers and wake on a page event? Two findings narrowed this:
+## Idle-wake (Step 2) — resolved for the milestone, refinement deferred
 
-- **Cocoa's `unsafe-set-sleep-in-thread!` is out** — it runs the sleep on a
-  separate OS thread, but this build is `--disable-pthread`.
-- **GTK's `unsafe-poll-ctx-fd-wakeup` (via `set-queue-wakeup!`)** registers a
-  fd into rktio's normal `poll()` sleep with the timer deadline folded in. It
-  needs no extra thread, but depends on rktio's `poll()` actually *parking*
-  the worker under Emscripten/WasmFS and on a page-pokable readable fd — the
-  open empirical question.
+How does the event pump block when idle without freezing, yet still run timers
+and wake on a page event?
 
-**Decision for the first milestone (implemented in `queue.rkt`):** don't solve
-idle-wake yet. The pump wakes each ~16 ms and drains the ring (also drained
-from `yield`). This costs idle CPU but proves blit-out + event-in + the
-backend. Swap in the 0%-idle fd-wakeup (or `Atomics.wait`-with-timeout) once
-measured against a real build.
+**Implemented in `queue.rkt`:** the pump wakes each ~16 ms (a `sync/timeout`)
+and drains the ring (also drained from `yield` via `set-platform-queue-sync!`).
+**Empirically confirmed in the browser:** while the main thread parks in
+`(yield)`, the Racket scheduler still runs the (green) pump thread, so events
+drain and dispatch — no Atomics-park needed for correctness. This costs a little
+idle CPU.
+
+The 0%-idle refinement (fold a page-pokable wake into rktio's `poll()` sleep via
+`unsafe-poll-ctx-fd-wakeup` + `set-queue-wakeup!`, or `Atomics.wait`-with-timeout
+on the ring tail) is future work. Note `unsafe-set-sleep-in-thread!` (Cocoa) is
+out — it needs a separate OS thread and this build is `--disable-pthread`.
 
 ## Build & verify
 
+Build the demo app (bundles `gui-lib` + `draw-lib`):
+
     source ~/emsdk/emsdk_env.sh
     export PATH="/opt/homebrew/bin:$PATH"          # bash 5 for wasm-deps
-    racket build/main.rkt apply                    # re-lay the delta into the clone
-    racket build/main.rkt build \
+    racket build/main.rkt app apps/gui-demo \
       --scheme ~/oss/cz/bin/tarm64osx/scheme \
-      --racket ~/oss/minimal-racket/bin/racket     # incremental relink + dist
-    # serve dist/ and load in a SAB-capable browser
+      --racket ~/oss/minimal-racket/bin/racket     # -> apps/gui-demo/dist
 
-Fast inner loop while writing the backend: copy `wx-wasm/*.rkt` into
-`.work/gui/gui-lib/mred/private/wx/wasm/` and `raco make` them there to catch
-require/shape errors before the slow wasm build.
+Verify in headless Chrome (serves dist/ with COOP/COEP, boots, screenshots the
+painted frame, clicks the canvas, asserts the click round-trips + the canvas
+repaints):
 
-`gui-lib` is already staged transitively (pict-lib/rhombus-pict-lib pull it in),
-so a demo app needn't add it explicitly. Set `PLT_WASM_GUI=1` in the worker so
-`platform.rkt` selects `wx/wasm`.
+    cd test/browser && node tools/gui-demo.mjs --shot-prefix /tmp/gui
+    # --headed to watch; screenshots at /tmp/gui-1-painted.png, -2-clicked.png
+
+Fast inner loops while editing the backend:
+- **Shape/syntax:** copy `wx-wasm/*.rkt` into the gui-lib checkout and `raco make`.
+- **Runtime behaviour:** rebuild (re-stages gui-lib + repacks `share.data`), copy
+  the new `apps/gui-demo/dist/share.data{,.js}` beside the node `racket.js`
+  (`.work/racket/racket/src/build/cs/c/wasm/`), and pipe forms via
+  `node racket.js` — seconds per cycle vs the ~70MB browser boot. Set the backend
+  via `(putenv "PLT_WASM_GUI" "1")` as the FIRST form (Emscripten `getenv` does
+  not see the shell/`process.env`).
+
+Note: the app build regenerates `dist/gui-demo.js` from `public/`, so edit the
+demo in `apps/gui-demo/public/gui-demo.js`, not in `dist/`.

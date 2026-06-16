@@ -54,5 +54,23 @@
 
     (define/public (set-item-cursor x y) (void))
 
+    ;; Route a page input event down to the child under (x, y), translating
+    ;; into the child's coordinate space. Unlike GTK (which maps each native
+    ;; widget pointer to its wx directly), our events arrive at the top frame
+    ;; tagged with a frame id, so each container forwards to the right child by
+    ;; geometry; the recursion bottoms out at the canvas, which builds the
+    ;; mouse-event%/key-event%. Children are in most-recently-added-first order,
+    ;; so the first geometric match wins (good enough for overlapping panels).
+    (define/override (handle-gui-event type x y k mods)
+      (let loop ([cs children])
+        (unless (null? cs)
+          (define c (car cs))
+          (define cx (send c get-x)) (define cy (send c get-y))
+          (define cw (send c get-width)) (define ch (send c get-height))
+          (if (and cx cy cw ch
+                   (<= cx x (+ cx cw)) (<= cy y (+ cy ch)))
+              (send c handle-gui-event type (- x cx) (- y cy) k mods)
+              (loop (cdr cs))))))
+
     ;; Start with a minimum size, like the GTK panel.
     (set-size 0 0 1 1)))

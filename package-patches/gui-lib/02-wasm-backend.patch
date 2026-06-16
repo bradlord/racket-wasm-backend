@@ -39,10 +39,10 @@ index 00000000..809c63b9
 +(define (gtk->wx gtk) #f)
 diff --git a/gui-lib/mred/private/wx/wasm/canvas.rkt b/gui-lib/mred/private/wx/wasm/canvas.rkt
 new file mode 100644
-index 00000000..1993e8a7
+index 00000000..00e05583
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/canvas.rkt
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,201 @@
 +#lang racket/base
 +;; canvas.rkt -- the wasm backend canvas% (lean version of gtk/canvas.rkt).
 +;;
@@ -128,13 +128,16 @@ index 00000000..1993e8a7
 +     (define/public (on-paint) (void))
 +     (define/public (get-flush-window) (mcons #f #f))
 +
-+     ;; Schedule the backing store to reach the page: just blit now.
-+     (define/public (queue-backing-flush) (do-canvas-backing-flush #f))
++     ;; Schedule the backing store to reach the page: just blit now. These two
++     ;; feed dc%'s flush protocol (resume-flush/flush are `(->m void?)`), so they
++     ;; must return void -- do-canvas-backing-flush yields the blit's truthy
++     ;; result, which a bare tail call would leak past the contract.
++     (define/public (queue-backing-flush) (do-canvas-backing-flush #f) (void))
 +     (define/public (schedule-periodic-backing-flush) (void)) ; mixin extends
 +     (define/public (do-canvas-backing-flush ctx) (do-backing-flush this dc))
 +     (define/public (paint-or-queue-paint cr)
 +       (or (do-canvas-backing-flush cr) (begin (queue-paint) #f)))
-+     (define/public (flush) (do-canvas-backing-flush #f))
++     (define/public (flush) (do-canvas-backing-flush #f) (void))
 +
 +     (define/override (refresh) (queue-paint))
 +     (define/override (reset-child-dcs) (queue-paint))
@@ -570,10 +573,10 @@ index 00000000..42d6119e
 +(define pump-thread (wasm-start-event-pump))
 diff --git a/gui-lib/mred/private/wx/wasm/panel.rkt b/gui-lib/mred/private/wx/wasm/panel.rkt
 new file mode 100644
-index 00000000..ccb08e82
+index 00000000..6f40daa4
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/panel.rkt
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,76 @@
 +#lang racket/base
 +;; panel.rkt -- the wasm backend panel% (lean port of gtk/panel.rkt).
 +;;
@@ -629,6 +632,24 @@ index 00000000..ccb08e82
 +      (for ([child (in-list children)]) (send child notify-children-top-realize)))
 +
 +    (define/public (set-item-cursor x y) (void))
++
++    ;; Route a page input event down to the child under (x, y), translating
++    ;; into the child's coordinate space. Unlike GTK (which maps each native
++    ;; widget pointer to its wx directly), our events arrive at the top frame
++    ;; tagged with a frame id, so each container forwards to the right child by
++    ;; geometry; the recursion bottoms out at the canvas, which builds the
++    ;; mouse-event%/key-event%. Children are in most-recently-added-first order,
++    ;; so the first geometric match wins (good enough for overlapping panels).
++    (define/override (handle-gui-event type x y k mods)
++      (let loop ([cs children])
++        (unless (null? cs)
++          (define c (car cs))
++          (define cx (send c get-x)) (define cy (send c get-y))
++          (define cw (send c get-width)) (define ch (send c get-height))
++          (if (and cx cy cw ch
++                   (<= cx x (+ cx cw)) (<= cy y (+ cy ch)))
++              (send c handle-gui-event type (- x cx) (- y cy) k mods)
++              (loop (cdr cs))))))
 +
 +    ;; Start with a minimum size, like the GTK panel.
 +    (set-size 0 0 1 1)))

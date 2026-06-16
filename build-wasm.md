@@ -2237,6 +2237,21 @@ real fix is upstream in `racket/draw`, worth a PR.)
 >   against the patched glib in leaf→root order; a future targeted glib-only
 >   edit must force-rebuild the GObject consumers by hand.
 
+**A fourth cast trap, surfaced by the GUI backend: `cairo_pattern_reference`.**
+The same class of bug bit the mred/wasm backing-store flush path (`backing-draw-bm`
+in `mred/private/wx/common/backing-dc.rkt`, reached when a canvas paints).
+`cairo_pattern_reference` is `cairo_pattern_t* (cairo_pattern_t*)` -- it returns
+the pattern -- but `cairo.rkt` bound it `(_cfun _cairo_pattern_t -> _void)` with a
+`(retainer cairo_pattern_destroy car)` wrap (the retainer extracts the *arg* via
+`car`, so the ignored return was fine on native). Under wasm's typed
+`call_indirect` the `(i32)->()` call site vs the real `(i32)->i32` function traps
+("null function or function signature mismatch"). **Fix:** rebind it
+`-> _cairo_pattern_t` (the retainer wrap is unchanged -- it still retains the
+first arg). Carried as `package-patches/draw-lib/cairo-pattern-reference.patch`,
+same mechanism as fix #3. Lesson: any cairo binding declared `-> _void` whose C
+function actually returns a value is a latent wasm trap; audit `*_reference`/
+`*_copy`/`*_create` siblings when a new draw path lights up.
+
 **Fontconfig provisioning (makes node text reliable).** With the three casts
 fixed, text *executes*, but was flaky without a config + a font
 (`FcInitLoadConfigAndFonts` returns NULL; Pango then sometimes returns

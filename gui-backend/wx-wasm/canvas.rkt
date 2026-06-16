@@ -83,13 +83,16 @@
      (define/public (on-paint) (void))
      (define/public (get-flush-window) (mcons #f #f))
 
-     ;; Schedule the backing store to reach the page: just blit now.
-     (define/public (queue-backing-flush) (do-canvas-backing-flush #f))
+     ;; Schedule the backing store to reach the page: just blit now. These two
+     ;; feed dc%'s flush protocol (resume-flush/flush are `(->m void?)`), so they
+     ;; must return void -- do-canvas-backing-flush yields the blit's truthy
+     ;; result, which a bare tail call would leak past the contract.
+     (define/public (queue-backing-flush) (do-canvas-backing-flush #f) (void))
      (define/public (schedule-periodic-backing-flush) (void)) ; mixin extends
      (define/public (do-canvas-backing-flush ctx) (do-backing-flush this dc))
      (define/public (paint-or-queue-paint cr)
        (or (do-canvas-backing-flush cr) (begin (queue-paint) #f)))
-     (define/public (flush) (do-canvas-backing-flush #f))
+     (define/public (flush) (do-canvas-backing-flush #f) (void))
 
      (define/override (refresh) (queue-paint))
      (define/override (reset-child-dcs) (queue-paint))

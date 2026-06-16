@@ -1,0 +1,20 @@
+diff --git a/draw-lib/racket/draw/unsafe/cairo.rkt b/draw-lib/racket/draw/unsafe/cairo.rkt
+index 02a3331..03b4412 100644
+--- a/draw-lib/racket/draw/unsafe/cairo.rkt
++++ b/draw-lib/racket/draw/unsafe/cairo.rkt
+@@ -279,7 +279,14 @@
+   #:wrap (deallocator))
+ (define-cairo cairo_pattern_create_for_surface (_cfun _cairo_surface_t -> _cairo_pattern_t)
+   #:wrap (allocator cairo_pattern_destroy))
+-(define-cairo cairo_pattern_reference (_cfun _cairo_pattern_t -> _void)
++;; cairo_pattern_reference is `cairo_pattern_t* (cairo_pattern_t*)` -- it RETURNS
++;; the pattern. The old `-> _void` binding is tolerated by native ABIs (the
++;; return register is just ignored) but wasm's typed call_indirect rejects the
++;; (i32)->() vs (i32)->i32 mismatch and traps ("null function or function
++;; signature mismatch") -- the backing-dc flush path (backing-draw-bm) hits it.
++;; Bind the true return type; the retainer still retains the first arg via `car`.
++;; See build-wasm.md "Text / Pango" and the cairo_font_options_copy fix.
++(define-cairo cairo_pattern_reference (_cfun _cairo_pattern_t -> _cairo_pattern_t)
+   #:wrap (retainer cairo_pattern_destroy car))
+ (define-cairo cairo_pattern_set_matrix (_cfun _cairo_pattern_t _cairo_matrix_t-pointer -> _void))
+ (define-cairo cairo_pattern_set_extend (_cfun _cairo_pattern_t _int -> _void))
