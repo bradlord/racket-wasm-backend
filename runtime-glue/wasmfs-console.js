@@ -24,8 +24,8 @@
 // pthread -- co-locating device registration with the writes.
 //
 // stdin (fd 0) is handled separately by wasmfs-stdin.js (--js-library), which
-// overrides _wasmfs_stdin_get_char; the io-state "waiting for input" flag lives
-// there. This file owns output only.
+// registers a blocking input-ring device dup2()'d onto fd 0; the io-state
+// "waiting for input" flag lives there. This file owns output only.
 addToLibrary({
   $shellOut: { outBase: -1, outCap: 0, done: false },
 

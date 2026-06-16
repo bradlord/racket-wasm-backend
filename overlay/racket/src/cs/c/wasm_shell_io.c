@@ -94,6 +94,12 @@ EMSCRIPTEN_KEEPALIVE int *shell_io_state_addr(void) { return (int *)shell_io_sta
  * pthread) so the jsimpl backend it registers is found by writes from here. */
 extern void rkt_console_setup(void);
 
+/* Provided by wasmfs-stdin.js (--js-library); registers a jsimpl backend whose
+ * read() blocks on the input ring, creates+opens a device node on it, and
+ * returns that fd (or < 0 on failure). Same threading constraint as the console:
+ * the backend must be registered on the proxied main pthread that later reads. */
+extern int rkt_stdin_setup(void);
+
 void racket_wasm_browser_fs_init(void) {
   /* (1) stdout/stderr -> /dev/console (the per-byte ring device). */
   rkt_console_setup();
@@ -102,6 +108,16 @@ void racket_wasm_browser_fs_init(void) {
     dup2(fd, 1);
     dup2(fd, 2);
     if (fd > 2) close(fd);
+  }
+
+  /* (1b) stdin <- /dev/rkt_stdin (blocking input-ring device). WasmFS's built-in
+   * StdinFile can't be made poll-readable from JS (its getSize() is hard 0 and
+   * rktio gates reads on poll), so we replace fd 0 with a regular-file device
+   * node whose read() blocks on the ring. See wasmfs-stdin.js. */
+  int sfd = rkt_stdin_setup();
+  if (sfd >= 0) {
+    dup2(sfd, 0);
+    if (sfd > 2) close(sfd);
   }
 
   /* (2) OPFS-backed /home/web_user, fail-soft to in-memory. */

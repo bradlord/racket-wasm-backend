@@ -431,11 +431,11 @@ index b4e92ee..61a2d05 100644
 +                      common-objs
 +                      (list wasm_shell_io.o)
 +                      dep-linkflags
-+                      ;; WasmFS console glue (both --js-library): stdin (fd 0)
-+                      ;; via a _wasmfs_stdin_get_char override; stdout/stderr
-+                      ;; (fd 1/2) via a ring char device that
-+                      ;; racket_wasm_browser_fs_init (wasm_shell_io.c) creates
-+                      ;; -- on the proxied main pthread -- and dup2s onto.
++                      ;; WasmFS console glue (both --js-library): blocking
++                      ;; input-ring device on fd 0, ring char device on fd 1/2,
++                      ;; both created by racket_wasm_browser_fs_init
++                      ;; (wasm_shell_io.c) -- on the proxied main pthread -- and
++                      ;; dup2'd onto the std fds.
 +                      (list "--js-library" (build-path runtime-glue "wasmfs-stdin.js")
 +                            "--js-library" (build-path runtime-glue "wasmfs-console.js"))
 +                      ;; App link JS for the browser surface only.

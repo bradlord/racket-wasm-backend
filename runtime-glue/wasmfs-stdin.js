@@ -1,68 +1,96 @@
 // wasmfs-stdin.js -- linked into racket-web.js via `emcc --js-library`.
 //
-// The WasmFS build replaces shell-tty.js. WasmFS drops the legacy
-// `TTY.stream_ops` that shell-tty.js used to override and instead hard-codes
-// stdin (fd 0) to its `StdinFile`, whose `read()` loops calling the overridable
-// hook `_wasmfs_stdin_get_char()` -- up to the full stdio buffer -- and stops
-// early only when the hook returns < 0 (emsdk system/lib/wasmfs/special_files.cpp,
-// `StdinFile::read`). This `--js-library` override backs that hook with the
-// shared-memory INPUT ring from wasm_shell_io.c.
+// Restores the stdin half of the legacy shell-tty.js path under WasmFS.
 //
-// Discipline that dodges the per-char loop trap (a naive blocking get_char would
-// deliver the first byte(s) then block forever inside the same read() waiting for
-// the trailing chars nobody will type):
+// Why not the obvious _wasmfs_stdin_get_char hook? WasmFS hard-codes fd 0 to its
+// StdinFile, whose read() loops the overridable _wasmfs_stdin_get_char(). Backing
+// that hook with the input ring looks right but never runs: rktio gates every
+// read on poll(POLLIN) (rktio_fd.c do_poll_read_ready), and WasmFS's
+// __syscall_poll reports a non-regular fd readable only when
+// getFile()->getSize() > 0 (syscalls.cpp). StdinFile::getSize() is hard-coded 0
+// and is not overridable, so poll never fired, the read never ran, and the hook
+// was dead. The REPL printed its prompt and hung.
 //
-//   - block (Atomics.wait) only on the FIRST empty ring of a read burst;
-//   - once we've delivered >= 1 byte this burst, return -1 on the next empty so
-//     read() returns the line instead of looping to fill the whole buffer.
+// Fix: don't use StdinFile at all. Register our own jsimpl backend and dup2 its
+// file onto fd 0 (in racket_wasm_browser_fs_init). wasmfs_create_file masks the
+// S_IFCHR type bit off the mode (doOpen: `mode &= S_IALLUGO`), so the node is a
+// *regular* file -- which is exactly what we want: rktio fstats it, sees
+// S_ISREG, sets RKTIO_OPEN_REGFILE, and then SKIPS poll entirely ("Reading
+// regular file never blocks", rktio_fd.c) and issues a plain blocking read().
+// That read lands in the backend read() below, which blocks on the input ring
+// with Atomics.wait until the page supplies a line -- the same discipline
+// shell-tty.js's TTY.stream_ops.read used, just re-homed onto a jsimpl device.
 //
-// Runs on the proxied main pthread (under -sPROXY_TO_PTHREAD), where Atomics.wait
-// is permitted; the page (ide.js) is the peer producer. Mirrors the io-state flag
-// (1 while parked waiting for input, 0 otherwise) that shell-tty.js used to set,
-// so the page's "waiting for input" affordance still works.
+// THREADING: identical to wasmfs-console.js. WasmFS's jsimpl ops
+// (_wasmfs_jsimpl_read/_get_size) run on the *calling* thread and look up the
+// backend in `wasmFS$backends`, which is per-thread JS state and is NOT proxied
+// (system/lib/wasmfs/js_impl_backend.h). Under -sPROXY_TO_PTHREAD, Racket -- and
+// thus every stdin read() -- runs on the proxied main pthread, so the backend
+// must be registered on that same pthread. Hence this is a C-callable
+// (rkt_stdin_setup) invoked from racket_wasm_browser_fs_init, which runs in
+// main() on the proxied pthread, co-locating registration with the reads.
+//
+// rkt_stdin_setup returns the fd of the freshly created device node (wasmfs_-
+// create_file opens it read-only); C dup2()s that onto fd 0. It also mirrors the
+// io-state flag (1 while parked in Atomics.wait, 0 otherwise) that the page polls
+// for its "waiting for input" affordance.
 addToLibrary({
-  $shellStdin: { inBase: -1, inCap: 0, stateBase: -1, delivered: false },
-
-  _wasmfs_stdin_get_char__deps: ['$shellStdin'],
-  _wasmfs_stdin_get_char: function () {
-    var S = shellStdin;
-    if (S.inBase < 0) {
-      S.inBase = _shell_in_addr() >> 2;   // byte addr -> int32 index
-      S.inCap = _shell_in_cap();
-      S.stateBase = _shell_io_state_addr() >> 2;
-    }
+  rkt_stdin_setup__deps: [
+    '$wasmFS$backends',
+    'wasmfs_create_jsimpl_backend',
+    'wasmfs_create_file',
+    '$stringToUTF8OnStack',
+    '$withStackSave',
+  ],
+  rkt_stdin_setup: function () {
     var HEAD = 0, TAIL = 1, DATA = 2;
-    var base = S.inBase, cap = S.inCap;
+    var inBase = _shell_in_addr() >> 2;          // byte addr -> int32 index
+    var inCap  = _shell_in_cap();
+    var stateBase = _shell_io_state_addr() >> 2;
 
-    // Re-read HEAP32 each time we touch it: ALLOW_MEMORY_GROWTH can swap the
-    // typed-array view out from under us.
-    if (S.outBase === undefined) { S.outBase = _shell_out_addr() >> 2; S.outCap = _shell_out_cap(); }
-    function dbg(s) { var Ho = HEAP32, t = Atomics.load(Ho, S.outBase + 1); for (var i = 0; i < s.length; i++) { Ho[S.outBase + 2 + (t % S.outCap)] = s.charCodeAt(i) & 0xff; t++; } Atomics.store(Ho, S.outBase + 1, t); }
+    var backend = _wasmfs_create_jsimpl_backend();
+    wasmFS$backends[backend] = {
+      allocFile: function () {},
+      freeFile:  function () {},
+      // Any positive size: a non-regular interpretation of this fd would poll
+      // readable (getSize > 0) and proceed to read. (rktio actually treats the
+      // node as a regular file and skips poll, but this keeps both paths live.)
+      getSize:   function () { return 1; },
+      setSize:   function () { return 0; },
+      // stdin is read-only; accept and discard any write.
+      write:     function (file, buffer, length, offset) { return length; },
 
-    var H = HEAP32;
-    var head = Atomics.load(H, base + HEAD);
-    var tail = Atomics.load(H, base + TAIL);
-    dbg("\n{gc h=" + head + " t=" + tail + " d=" + (S.delivered ? 1 : 0) + "}");
+      // Blocking ring read. Park (Atomics.wait) while the ring is empty, then
+      // drain up to `length` bytes. Always returns >= 1, so rktio never sees a 0
+      // (EOF) result and the REPL stays alive. Re-read HEAP32 after each wait:
+      // ALLOW_MEMORY_GROWTH can swap the view out from under us.
+      read: function (file, buffer, length, offset) {
+        if (length <= 0) return 0;
+        var H = HEAP32;
+        var head = Atomics.load(H, inBase + HEAD);
+        var tail = Atomics.load(H, inBase + TAIL);
+        while (head === tail) {
+          Atomics.store(H, stateBase, 1);        // blocked: waiting for input
+          Atomics.wait(H, inBase + TAIL, tail);
+          H = HEAP32;
+          tail = Atomics.load(H, inBase + TAIL);
+        }
+        Atomics.store(H, stateBase, 0);          // input available
+        var n = 0;
+        while (head !== tail && n < length) {
+          HEAPU8[buffer + n] = Atomics.load(H, inBase + DATA + (head % inCap)) & 0xff;
+          head++; n++;
+        }
+        Atomics.store(H, inBase + HEAD, head);
+        return n;
+      },
+    };
 
-    if (head === tail) {
-      // Empty. If we already delivered a byte this burst, end the read (so
-      // read() returns the line) rather than blocking for more.
-      if (S.delivered) { S.delivered = false; return -1; }
-      // First empty of the burst: block for the next line.
-      Atomics.store(H, S.stateBase, 1);   // blocked: waiting for the user to type
-      dbg("{WAIT t=" + tail + "}");
-      while (head === tail) {
-        var wr = Atomics.wait(H, base + TAIL, tail);
-        H = HEAP32;
-        tail = Atomics.load(H, base + TAIL);
-        dbg("{woke " + wr + " t=" + tail + "}");
-      }
-      Atomics.store(H, S.stateBase, 0);   // input available -- no longer waiting
-    }
-
-    var b = Atomics.load(H, base + DATA + (head % cap)) & 0xff;
-    Atomics.store(H, base + HEAD, head + 1);
-    S.delivered = true;
-    return b;
+    // Create the device node bound to the backend. wasmfs_create_file creates
+    // AND opens it (read-only, O_RDONLY == 0), returning the fd we hand back to C
+    // for the dup2 onto fd 0.
+    return withStackSave(function () {
+      return _wasmfs_create_file(stringToUTF8OnStack("/dev/rkt_stdin"), 0o444, backend);
+    });
   },
 });

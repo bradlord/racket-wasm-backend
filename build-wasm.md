@@ -1324,22 +1324,40 @@ pthreads of its own):
 - `racket/src/cs/c/wasm_shell_io.c` reserves the rings in the shared
   heap and exports their addresses.
 - The WASMFS console glue replaces the old `TTY`-ops override (WASMFS
-  has no `TTY.stream_ops`): `runtime-glue/wasmfs-stdin.js`
-  (`emcc --js-library`) overrides `_wasmfs_stdin_get_char` to block on
-  the input ring with `Atomics.wait` (legal on the runtime worker),
-  setting `shell_io_state` to `1` while parked (and `0` once input
-  arrives) for the page's "waiting for input" affordance.
-  `runtime-glue/wasmfs-console.js` (`emcc --js-library`) provides a
-  C-callable `rkt_console_setup` that registers a `/dev/console` char
-  device pushing each stdout/stderr byte into the output ring (no
-  newline buffering, so the REPL prompt appears immediately);
-  `racket_wasm_browser_fs_init` (`wasm_shell_io.c`) calls it and
-  `dup2`s fds 1/2 onto it. (WASMFS's built-in stdout would otherwise
-  line-buffer until a newline and hide the prompt. The setup runs from C
-  in `main()` -- on the proxied main pthread -- because WASMFS jsimpl
-  device ops run on the calling thread against per-thread JS state and
-  are not proxied, so the device must be created on the same pthread
-  that does the writes.)
+  has no `TTY.stream_ops`). Both halves register **jsimpl devices** that
+  `racket_wasm_browser_fs_init` (`wasm_shell_io.c`) `dup2`s onto the std
+  fds; both are set up from C in `main()` -- on the proxied main pthread --
+  because WASMFS jsimpl device ops run on the *calling* thread against
+  per-thread `wasmFS$backends` JS state and are *not* proxied, so a device
+  must be created on the same pthread that later reads/writes it.
+  - **stdout/stderr** -- `runtime-glue/wasmfs-console.js` (`emcc
+    --js-library`) provides C-callable `rkt_console_setup`, which
+    registers a `/dev/console` char device pushing each byte into the
+    output ring with no newline buffering (so the REPL prompt `> ` appears
+    immediately; WASMFS's built-in `WritingStdFile` would otherwise
+    line-buffer until `\n` and hide it). `dup2`s fds 1/2 onto it.
+  - **stdin** -- `runtime-glue/wasmfs-stdin.js` (`emcc --js-library`)
+    provides C-callable `rkt_stdin_setup`. **It does NOT use the obvious
+    `_wasmfs_stdin_get_char` hook**: that hook lives in WASMFS's built-in
+    `StdinFile`, and rktio never calls its `read()`. rktio gates every
+    read on `poll(POLLIN)` (`rktio_fd.c` `do_poll_read_ready`), and WASMFS
+    `__syscall_poll` reports a non-regular fd readable only when
+    `getFile()->getSize() > 0` (`syscalls.cpp`) -- but `StdinFile::getSize()`
+    is hard-coded `0` and is not overridable, so poll never fired, the read
+    never ran, and the hook was dead (the REPL printed its prompt and hung).
+    Instead we register our *own* jsimpl backend whose `read()` blocks on
+    the input ring with `Atomics.wait` (legal on the worker; sets
+    `shell_io_state` to `1` while parked, `0` once input arrives, for the
+    page's "waiting for input" affordance), then `dup2` its node onto fd 0.
+    `wasmfs_create_file` masks the `S_IFCHR` type bit off the mode
+    (`doOpen: mode &= S_IALLUGO`), so the node is a **regular** file -- which
+    is exactly what we want: rktio fstats it, sees `S_ISREG`, sets
+    `RKTIO_OPEN_REGFILE`, and then *skips poll entirely* ("Reading regular
+    file never blocks") and issues a plain blocking `read()` that lands in
+    our ring handler. This re-homes the exact `shell-tty.js` `streamRead`
+    discipline onto a WASMFS device. (`getSize()` returns a constant `1` as
+    a belt-and-suspenders so a non-regular interpretation would still poll
+    readable; the read syscall does not clamp to it.)
 - `runtime-glue/shell-worker.js` is the worker bootstrap: it sets up
   `self.Module`, `importScripts("./racket-web.js")` synchronously,
   and on `onRuntimeInitialized` posts the shared `HEAPU8.buffer`
@@ -1404,12 +1422,12 @@ earlier design used it so Emscripten spawned the runtime thread, but that ran
 the *filesystem* on the page's main thread (MEMFS is per-thread JS state),
 forcing `get_char` to be non-blocking and the runtime to busy-poll between
 keystrokes. By owning the worker ourselves, the FS and `main()` share a thread,
-`get_char` truly blocks on `Atomics.wait`, and the runtime idles at 0% CPU.
+the blocking stdin read truly parks on `Atomics.wait`, and the runtime idles at 0% CPU.
 **However, that thread-sharing is exactly what deadlocks GLib's font path**, so
 the browser link now *does* enable `-sPROXY_TO_PTHREAD` again -- but with the
 shell worker owned by us as the *proxy-pump* thread (not running Racket), and
 `mainScriptUrlOrBlob` pointing the pthread pool at `racket-web.js`. The FS now
-lives on the proxied pthread with `main()`, so `get_char` still blocks cleanly;
+lives on the proxied pthread with `main()`, so the stdin read still blocks cleanly;
 the page main thread only pumps the proxy queue. See "Browser text: the GLib
 thread deadlock and its fix" for the full account.
 
