@@ -91,10 +91,16 @@
 
     ;; --- click handling ---
     ;; Coordinates are already translated to this control's space by the
-    ;; frame->panel geometry routing; a left-button release is the activation.
+    ;; frame->panel geometry routing. Simple controls activate on a left
+    ;; release (on-click); controls that need the hit position (radio-box,
+    ;; list-box, slider) override on-mouse-down/up which receive local x,y.
     (define/override (handle-gui-event type x y k mods)
-      (when (and (= type EVT-MOUSE-UP) (= k 0) (is-window-enabled?))
-        (on-click)))
+      (cond
+        [(not (is-window-enabled?)) (void)]
+        [(and (= type EVT-MOUSE-DOWN) (= k 0)) (on-mouse-down x y)]
+        [(and (= type EVT-MOUSE-UP) (= k 0)) (on-mouse-up x y)]))
+    (define/public (on-mouse-down x y) (void))
+    (define/public (on-mouse-up x y) (on-click))
     (define/public (on-click) (void))
     (define/public (fire-event event-type)
       (queue-window-event

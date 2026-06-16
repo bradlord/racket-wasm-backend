@@ -79,35 +79,33 @@ async function main() {
     process.stderr.write(`canvas ${painted.w}x${painted.h}, control ink px: ${painted.ink}\n`);
     await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-1-painted.png` });
 
-    // Click the button (laid out ~ (2,55) 92x31) then the check-box (~ (2,102)
-    // 141x25). Each click round-trips page -> GUI ring -> pump -> frame -> panel
-    // -> control -> callback, which printf's a line we wait for. Coordinates are
-    // canvas pixels (offsetX/offsetY), 1:1 with frame coords.
+    // The demo stacks (border 12, spacing 8) status / button / choice /
+    // radio-box at the top, with deterministic positions (above the stretchy
+    // gauge/slider/list-box). Click each and wait for the callback's printf.
+    // Each click round-trips page -> GUI ring -> pump -> frame -> panel ->
+    // control -> callback. Coordinates are canvas px (offsetX/offsetY), 1:1.
     const box = await page.locator('#frame').boundingBox();
-    await page.mouse.click(box.x + 40, box.y + 70);
+    const clickAndWait = async (dx, dy, text) => {
+      await page.mouse.click(box.x + dx, box.y + dy);
+      try {
+        await page.locator('#log').filter({ hasText: text }).waitFor({ timeout: 15_000 });
+        return true;
+      } catch { return false; }
+    };
 
-    let clicked = false;
-    try {
-      await page.locator('#log').filter({ hasText: 'button clicked #1' }).waitFor({ timeout: 15_000 });
-      clicked = true;
-    } catch {}
+    // button center ~ y56; choice (cycles 0->1) ~ y94; radio item "Two" ~ y170.
+    const button = await clickAndWait(30, 56, 'button clicked #1');
+    const choice = await clickAndWait(30, 94, 'choice -> 1');
+    const radio  = await clickAndWait(30, 170, 'radio -> 1');
 
-    await page.mouse.click(box.x + 40, box.y + 112);
-    let checked = false;
-    try {
-      await page.locator('#log').filter({ hasText: 'check-box -> #t' }).waitFor({ timeout: 15_000 });
-      checked = true;
-    } catch {}
-
-    // Let the callbacks' repaint+blit (button updates the message label, the
-    // check-box draws its check) land before the final screenshot.
+    // Let the callbacks' repaint+blit land before the final screenshot.
     await page.waitForTimeout(1500);
     await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-2-clicked.png` });
 
     const logText = await page.$eval('#log', (e) => e.textContent);
     process.stdout.write('--- #log ---\n' + logText + '\n--- end ---\n');
-    process.stdout.write(`RESULT painted=${painted.ink > 0} button=${clicked} checkbox=${checked}\n`);
-    if (!(painted.ink > 0 && clicked && checked)) process.exitCode = 1;
+    process.stdout.write(`RESULT painted=${painted.ink > 0} button=${button} choice=${choice} radio=${radio}\n`);
+    if (!(painted.ink > 0 && button && choice && radio)) process.exitCode = 1;
   } finally {
     await browser.close();
     try { proc.kill('SIGTERM'); } catch {}

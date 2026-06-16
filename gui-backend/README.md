@@ -10,12 +10,13 @@ picts come "for free".
 `frame%` + `canvas%` compose, instantiate, paint (cairo/pango → `<canvas>`), and
 the full interactive loop works — a mouse click round-trips through the GUI event
 ring → pump → frame → panel → canvas → `on-event`, and the canvas repaints on
-`refresh`. **Drawn controls also work:** `button%`, `check-box%` and `message%`
-in a `vertical-panel%` lay out, render themselves via `racket/draw` onto the
-frame's backing surface, and a click fires their callbacks (the demo's button
-updates a message label; the check-box toggles its check). See `apps/gui-demo/`
-(the demo app) and `test/browser/tools/gui-demo.mjs` (the Playwright regression
-driver).
+`refresh`. **Drawn controls also work:** `button%`, `check-box%`, `message%`,
+`choice%`, `gauge%`, `slider%`, `radio-box%`, `list-box%`, `group-panel%` and
+`tab-panel%` lay out in a `vertical-panel%`, render themselves via `racket/draw`
+onto the frame's backing surface, and (where interactive) a click fires their
+callbacks. See `apps/gui-demo/` (a gallery demo) and
+`test/browser/tools/gui-demo.mjs` (the Playwright regression driver, which
+clicks the button/choice/radio-box and asserts the callbacks).
 
 This directory holds the tracked backend source (the runtime clone under
 `.work/` is disposable). It is wired into builds as
@@ -72,10 +73,18 @@ itself. The pieces (in `control.rkt`, with hooks in `window.rkt`/`panel.rkt`/
   hit-test, reaches the control's `handle-gui-event`; the control fires its
   `control-event%` callback (and, for `check-box%`, toggles + repaints first).
 
-The remaining controls/menus/dialogs in `stubs.rkt` are still load-bearing
-stubs (they carry the method surface the core `inherit`s at load, but aren't
-functional yet): `choice%`, `gauge%`, `radio-box%`, `list-box%`, `slider%`,
-`tab-panel%`, `group-panel%`, menus, dialogs, `printer-dc%`.
+`choice%`, `gauge%`, `slider%`, `radio-box%`, `list-box%`, `group-panel%` and
+`tab-panel%` are also implemented (`controls-extra.rkt`) and verified: each
+self-sizes, draws via `racket/draw`, and (where interactive) turns a
+geometry-routed click into its callback. With no native popups/scrollbars we
+degrade in place — a `choice%` click *cycles* to the next item (no drop-down
+menu), and a `list-box%` selects the clicked row (no scrolling). The two
+container controls translate their children by a client inset (group: border +
+title; tab: header height) for both painting and event routing, since there is
+no native client widget to carry the offset.
+
+Still load-bearing stubs in `stubs.rkt` (method surface only): menus
+(`menu%`/`menu-bar%`/`menu-item%`), dialogs (`dialog%`) and `printer-dc%`.
 
 ## What is already wired into the build (Step 1 — done, built + verified)
 
@@ -114,10 +123,12 @@ authored in the tracked dir and copied into the gui-lib checkout
   bitmap into a Cairo image surface and `canvas-blit-argb`s it to the page.
 - **`procs.rkt`** — the ~50 system procs (display geometry fixed at 1024×768 for
   now; fonts/colors/mouse defaults; most are no-ops).
-- **`control.rkt`** — the drawn `button%`/`check-box%`/`message%` (see above).
-- **`stubs.rkt`** — the *remaining* controls/menus/dialogs/printer as
-  load-bearing stubs; `clipboard-driver%` (constructed at load) +
-  `cursor-driver%` minimal-working.
+- **`control.rkt`** — the drawn `button%`/`check-box%`/`message%` + the shared
+  `control-base%` (see above).
+- **`controls-extra.rkt`** — the drawn `choice%`/`gauge%`/`slider%`/
+  `radio-box%`/`list-box%`/`group-panel%`/`tab-panel%`.
+- **`stubs.rkt`** — menus/dialogs/printer as load-bearing stubs;
+  `clipboard-driver%` (constructed at load) + `cursor-driver%` minimal-working.
 - **`queue.rkt`** — the event pump: a frame-id→wx registry, a ~60 Hz drain of
   the ring into `queue-event` (late-bound `(send wx handle-gui-event …)`), wired
   into `yield` via `set-platform-queue-sync!`. Event-type + modifier codes that
