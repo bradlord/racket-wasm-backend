@@ -92,6 +92,83 @@ wasm_dep_patch() {
         mv meson.build.new meson.build
     fi
   fi
+
+  # g_list_free_full, g_slist_free_full, g_queue_free_full/clear_full,
+  # g_async_queue_unref all cast GDestroyNotify (1-arg) to GFunc (2-arg)
+  # for their internal foreach calls.  The GFunc trampoline is never
+  # actually needed -- just iterate directly and call the 1-arg
+  # GDestroyNotify without the cast.  These fire as soon as any non-empty
+  # list/queue is freed (e.g. pango_layout_check_lines frees baseline_shifts
+  # via g_list_free_full on every layout check).  See build-wasm.md "Text / Pango".
+
+  if ! grep -q "wasm: g_list_free_full direct" glib/glist.c; then
+    python3 - <<'PYEOF' glib/glist.c
+import sys
+path = sys.argv[1]
+src = open(path).read()
+src = src.replace(
+    "  g_list_foreach (list, (GFunc) free_func, NULL);\n  g_list_free (list);",
+    "  GList *l; /* wasm: g_list_free_full direct -- avoids GFunc arity trap */\n"
+    "  for (l = list; l; l = l->next)\n"
+    "    free_func (l->data);\n"
+    "  g_list_free (list);")
+open(path, "w").write(src)
+PYEOF
+  fi
+
+  if ! grep -q "wasm: g_slist_free_full direct" glib/gslist.c; then
+    python3 - <<'PYEOF' glib/gslist.c
+import sys
+path = sys.argv[1]
+src = open(path).read()
+src = src.replace(
+    "  g_slist_foreach (list, (GFunc) free_func, NULL);\n  g_slist_free (list);",
+    "  GSList *l; /* wasm: g_slist_free_full direct -- avoids GFunc arity trap */\n"
+    "  for (l = list; l; l = l->next)\n"
+    "    free_func (l->data);\n"
+    "  g_slist_free (list);")
+open(path, "w").write(src)
+PYEOF
+  fi
+
+  if ! grep -q "wasm: g_queue_free_full direct" glib/gqueue.c; then
+    python3 - <<'PYEOF' glib/gqueue.c
+import sys
+path = sys.argv[1]
+src = open(path).read()
+src = src.replace(
+    "  g_queue_foreach (queue, (GFunc) free_func, NULL);\n  g_queue_free (queue);",
+    "  GList *l; /* wasm: g_queue_free_full direct -- avoids GFunc arity trap */\n"
+    "  for (l = queue->head; l; l = l->next)\n"
+    "    free_func (l->data);\n"
+    "  g_queue_free (queue);")
+src = src.replace(
+    "  if (free_func != NULL)\n    g_queue_foreach (queue, (GFunc) free_func, NULL);\n\n  g_queue_clear (queue);",
+    "  if (free_func != NULL) { /* wasm: g_queue_clear_full direct -- avoids GFunc arity trap */\n"
+    "    GList *l;\n"
+    "    for (l = queue->head; l; l = l->next)\n"
+    "      free_func (l->data);\n"
+    "  }\n\n  g_queue_clear (queue);")
+open(path, "w").write(src)
+PYEOF
+  fi
+
+  if ! grep -q "wasm: async_queue item_free direct" glib/gasyncqueue.c; then
+    python3 - <<'PYEOF' glib/gasyncqueue.c
+import sys
+path = sys.argv[1]
+src = open(path).read()
+src = src.replace(
+    "      if (queue->item_free_func)\n"
+    "        g_queue_foreach (&queue->queue, (GFunc) queue->item_free_func, NULL);",
+    "      if (queue->item_free_func) { /* wasm: async_queue item_free direct -- avoids GFunc arity trap */\n"
+    "        GList *l;\n"
+    "        for (l = queue->queue.head; l; l = l->next)\n"
+    "          queue->item_free_func (l->data);\n"
+    "      }")
+open(path, "w").write(src)
+PYEOF
+  fi
 }
 DEP_SYMBOLS_MODE=scrape
 # GLib's public symbols use g_, G_, _g_ prefixes; we want the public

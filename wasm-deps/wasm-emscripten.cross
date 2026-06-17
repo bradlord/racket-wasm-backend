@@ -35,10 +35,12 @@ c_args        = ['-pthread', '-s', 'USE_ZLIB=1',
                  '-Wno-error=incompatible-pointer-types',
                  '-Wno-error=incompatible-function-pointer-types',
                  '-Wno-error=implicit-function-declaration',
-                 '-Wno-error=int-conversion']
+                 '-Wno-error=int-conversion',
+                 '-Wcast-function-type']
 cpp_args      = ['-pthread', '-s', 'USE_ZLIB=1',
                  '-Wno-error=incompatible-pointer-types',
-                 '-Wno-error=incompatible-function-pointer-types']
+                 '-Wno-error=incompatible-function-pointer-types',
+                 '-Wcast-function-type']
 # Some libraries we build (GLib) include CLI tool executables that
 # reference symbols the wasm32-emscripten sysroot doesn't provide
 # (res_query, posix_spawnp, ...). We only care about the static

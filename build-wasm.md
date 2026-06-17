@@ -2252,6 +2252,46 @@ same mechanism as fix #3. Lesson: any cairo binding declared `-> _void` whose C
 function actually returns a value is a latent wasm trap; audit `*_reference`/
 `*_copy`/`*_create` siblings when a new draw path lights up.
 
+**A fifth class of cast traps, surfaced by DrRacket's text editor: Pango
+GFunc/GCopyFunc casts.** The editor calls `pango_layout_get_iter` which calls
+`pango_layout_check_lines` → `pango_layout_get_effective_attributes` →
+`pango_attr_list_copy` → `g_ptr_array_copy(attrs, (GCopyFunc)pango_attribute_copy,
+NULL)`. `pango_attribute_copy` is `PangoAttribute* (const PangoAttribute*)` --
+one arg, wasm type `(i32)->i32` -- but `GCopyFunc` is
+`gpointer (gconstpointer, gpointer)` -- two args, `(i32,i32)->i32`. The same
+pattern appears at five more Pango call sites on the text path: four `(GFunc)`
+casts of 1-arg free functions (`free_metrics_info`, `pango_item_free`,
+`pango_attribute_destroy`) passed to `g_slist_foreach` / `g_list_foreach`. These
+are all in Pango's own source (not a Racket binding issue). **Fix:** add thin
+static 2-arg wrapper functions at each call site in `wasm_dep_patch` inside
+`wasm-deps/deps/pango.sh` (idempotent, guarded on wrapper presence). Affected
+files: `pango/pango-attributes.c`, `pango/pangocairo-font.c`,
+`pango/pangofc-font.c`, `pango/pango-context.c`, `pango/pango-item.c`,
+`pango/pango-markup.c`.
+
+**A sixth class: GLib's own `g_list_free_full` / `g_slist_free_full` /
+`g_queue_free_full` / `g_queue_clear_full` / `g_async_queue_unref`.** GLib
+implements these by casting the `GDestroyNotify` free argument (1-arg: `void
+f(ptr)`) to `GFunc` (2-arg: `void f(ptr, ptr)`) and passing it to the
+corresponding `_foreach`. The trap is latent -- it only fires when the list/queue
+is non-empty. On the text path, `pango_layout_check_lines` calls
+`g_list_free_full(state.baseline_shifts, g_free)` on every layout check; this is
+safe only as long as `baseline_shifts` is NULL (no baseline-shift attributes in
+the text). **Fix:** in `wasm-deps/deps/glib.sh`'s `wasm_dep_patch`, replace the
+foreach-with-cast bodies with direct loops that call the `GDestroyNotify` at its
+correct 1-arg type. Four files patched: `glib/glist.c`, `glib/gslist.c`,
+`glib/gqueue.c`, `glib/gasyncqueue.c`.
+
+**Systematic detection: `-Wcast-function-type`.** This clang flag warns at
+compile time on any explicit cast of a function pointer to an incompatible type.
+It is now threaded through `wasm-deps/wasm-emscripten.cross` (`c_args`/`cpp_args`)
+and `deps.sh`'s autotools `emflags`. Future dep version bumps or new deps will
+surface remaining mismatches in the build log rather than as runtime traps.
+*Note:* `g_list_sort` / `g_slist_sort` (which cast `GCompareFunc` through `GFunc`
+to `GCompareDataFunc` in their internal sort helpers) are also technically
+affected, but those code paths are not on our Pango text path and the fix would
+require rewriting the sort infrastructure; defer until actually triggered.
+
 **Fontconfig provisioning (makes node text reliable).** With the three casts
 fixed, text *executes*, but was flaky without a config + a font
 (`FcInitLoadConfigAndFonts` returns NULL; Pango then sometimes returns

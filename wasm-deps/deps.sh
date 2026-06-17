@@ -172,7 +172,7 @@ _wasm_dep_build_autotools() {
   # png.o aren't compiled with atomics/bulk-memory, and any later
   # link with -pthread fails with
   # "--shared-memory is disallowed by png.o".
-  local emflags="-pthread -sUSE_ZLIB=1"
+  local emflags="-pthread -sUSE_ZLIB=1 -Wcast-function-type"
   ( cd "$DEP_BUILD" \
     && CFLAGS="$emflags${CFLAGS:+ $CFLAGS}" \
        CPPFLAGS="$emflags${CPPFLAGS:+ $CPPFLAGS}" \
