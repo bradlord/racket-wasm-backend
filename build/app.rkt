@@ -71,7 +71,8 @@
                           #:scheme [scheme #f]
                           #:racket [racket #f]
                           #:runtime-pkg [runtime-pkg #f]
-                          #:force? [force? #f])
+                          #:force? [force? #f]
+                          #:emcc-flags [emcc-flags ""])
   (define (->paths xs) (map (lambda (p) (path->complete-path (->path p))) xs))
   (build-runtime #:pkgs          (->names pkgs)
                  #:wasm-deps      (->names wasm-libs)
@@ -85,7 +86,8 @@
                  #:surface-dir    (and public (->path public))
                  #:target         (normalize-target target)
                  #:runtime-pkg    (and runtime-pkg (->path runtime-pkg))
-                 #:force?         force?))
+                 #:force?         force?
+                 #:emcc-flags     emcc-flags))
 
 ;; Load an app manifest module (`<app-dir>/app.rkt` providing `app`, a hash of
 ;; the make-wasm-racket fields) and return its fields normalized & resolved
@@ -151,7 +153,8 @@
                           #:scheme [scheme #f]
                           #:racket [racket #f]
                           #:runtime-pkg [runtime-pkg #f]
-                          #:force? [force? #f])
+                          #:force? [force? #f]
+                          #:emcc-flags [emcc-flags ""])
   (define m (read-app-manifest app-dir))
   (define out (or dest (build-path (hash-ref m 'dir) "dist")))
   (make-wasm-racket
@@ -167,7 +170,8 @@
    #:scheme        scheme
    #:racket        racket
    #:runtime-pkg   runtime-pkg
-   #:force?        force?)
+   #:force?        force?
+   #:emcc-flags    emcc-flags)
   ;; Post-build hook: dist/ is fully assembled now (make-wasm-racket is
   ;; synchronous). Hand the hook a context hash so it can generate/transform
   ;; files into dist/ -- e.g. the IDE merges its examples into ide.js here.

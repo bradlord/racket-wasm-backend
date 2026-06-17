@@ -73,6 +73,7 @@
          ;; Boolean flag: bypass the runtime cache and force a real build; with
          ;; --runtime, proceed despite a build-key mismatch.
          [("--force") (loop (cdr as) (hash-set h 'force? #t))]
+         [("--emcc-flags") (val 'emcc-flags)]
          [else (error 'build "unknown option: ~a" a)])])))
 
 ;; --- subcommands --------------------------------------------------------
@@ -92,7 +93,8 @@
                     #:scheme (hash-ref opts 'scheme #f)
                     #:racket (hash-ref opts 'racket #f)
                     #:runtime-pkg (hash-ref opts 'runtime #f)
-                    #:force? (hash-ref opts 'force? #f)))
+                    #:force? (hash-ref opts 'force? #f)
+                    #:emcc-flags (hash-ref opts 'emcc-flags "")))
 
 ;; Build a custom app: `app <dir> [--dest <dir>] [--scheme <p>] [--racket <p>]`.
 ;; <dir>/app.rkt provides `app` (a hash); output lands in <dir>/dist (or --dest).
@@ -106,7 +108,8 @@
                     #:scheme (hash-ref opts 'scheme #f)
                     #:racket (hash-ref opts 'racket #f)
                     #:runtime-pkg (hash-ref opts 'runtime #f)
-                    #:force? (hash-ref opts 'force? #f)))
+                    #:force? (hash-ref opts 'force? #f)
+                    #:emcc-flags (hash-ref opts 'emcc-flags "")))
 
 ;; Emit a distributable binary package: `package [<app-dir>] [--dest <dir>]
 ;; [opts]`. Default app = the IDE; default dest = <app-dir>/package. Produces the

@@ -47,7 +47,8 @@
                    #:scheme scheme #:racket racket
                    #:pkgs pkgs #:wasm-deps wasm-deps #:local-pkgs [local-pkgs ""]
                    #:pre-js [pre-js '()] #:post-js [post-js '()]
-                   #:extern-pre-js [extern-pre-js '()] #:app-target [app-target 'browser])
+                   #:extern-pre-js [extern-pre-js '()] #:app-target [app-target 'browser]
+                   #:emcc-flags [emcc-flags ""])
   ;; SETUP_MACHINE_FLAGS mirrors buildit.sh's `-MCR \`pwd\`/build/zo:` with pwd =
   ;; the make working dir (the clone root).
   (define setup-flags
@@ -79,6 +80,7 @@
                     ;; here. Hashed into the build key (cache.rkt link-glue-names).
                     (string-append "RUNTIME_GLUE_DIR="
                                    (path->string (path->complete-path runtime-glue-dir)))
+                    (string-append "EMCC_EXTRA_FLAGS=" emcc-flags)
                     (string-append "SETUP_MACHINE_FLAGS=" setup-flags))))
 
 ;; The runtime set (link products + the separate package payload share.data*)
@@ -221,7 +223,8 @@
 (define (ensure-base-runtime! base-key base-components
                               #:wasm-deps wasm-deps #:target target
                               #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
-                              #:scheme scheme-opt #:racket racket-opt #:force? force?)
+                              #:scheme scheme-opt #:racket racket-opt #:force? force?
+                              #:emcc-flags [emcc-flags ""])
   (cond
     [(and (not force?) (cache-complete? base-key #:require-licenses? #t))
      (info-msg "base runtime cache hit (~a): no emcc link" base-key)
@@ -235,7 +238,8 @@
      (make-wasm #:scheme scheme #:racket racket #:pkgs "" #:wasm-deps wasm-deps
                 #:local-pkgs ""
                 #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
-                #:app-target target)
+                #:app-target target
+                #:emcc-flags emcc-flags)
      ;; Pack the package-agnostic base share.data from the clone's core tree
      ;; (emsdk-free; the consume extends THIS later). Then cache binaries + base
      ;; payload together under base-key.
@@ -322,7 +326,8 @@
                        #:surface-dir [surface-dir (build-path ide-app-dir "public")]
                        #:target [target 'browser]
                        #:runtime-pkg [runtime-pkg #f]
-                       #:force? [force? #f])
+                       #:force? [force? #f]
+                       #:emcc-flags [emcc-flags ""])
   (define link-js (append extern-pre-js pre-js post-js))
   ;; Package-agnostic binary+base-payload key (PKGS=/LOCAL_PKGS=); the SDK key
   ;; (delta, wasm-deps -- the SDK is link/surface-agnostic too); the app-payload
@@ -351,7 +356,8 @@
      (define rv (ensure-base-runtime! base-key base-components
                                       #:wasm-deps wasm-deps #:target target
                                       #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
-                                      #:scheme scheme-opt #:racket racket-opt #:force? force?))
+                                      #:scheme scheme-opt #:racket racket-opt #:force? force?
+                                      #:emcc-flags emcc-flags))
      ;; Binaries + surface + the package-agnostic BASE share.data from the base
      ;; cache.
      (collect-outputs #:dest dest #:surface-dir surface-dir #:target target

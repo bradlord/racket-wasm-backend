@@ -2,7 +2,7 @@ diff --git a/Makefile b/Makefile
 index c10c9e2..8997629 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -67,6 +67,48 @@ CONFIGURE_ARGS =
+@@ -67,6 +67,56 @@ CONFIGURE_ARGS =
  # replaced with the build subdirectory where `configure` is run
  CONFIGURE_ARGS_qq =
  
@@ -48,10 +48,18 @@ index c10c9e2..8997629 100644
 +# path, no spaces -- BUILD_VARS re-expands through the shell).
 +RUNTIME_GLUE_DIR =
 +
++# WebAssembly: extra flags appended verbatim to BOTH the node and browser
++# emcc link commands. Useful for debug builds, e.g.:
++#   make wasm EMCC_EXTRA_FLAGS="-g" SCHEME=... RACKET=...
++# With -g emcc embeds DWARF info in the .wasm; Chrome DevTools and the
++# source-map tooling can decode function names from the crash trace.
++# For full source maps also pass "-gsource-map --source-map-base <url>".
++EMCC_EXTRA_FLAGS =
++
  # ------------------------------------------------------------
  # Cross-build support
  
-@@ -185,6 +227,15 @@ BUILD_VARS = MAKE=$(MAKE) \
+@@ -185,6 +235,16 @@ BUILD_VARS = MAKE=$(MAKE) \
               CPUS="$(CPUS)" \
               CONFIGURE_ARGS_qq='$(CONFIGURE_ARGS_qq)' \
               CONFIGURE_ARGS="$(CONFIGURE_ARGS)" \
@@ -64,10 +72,11 @@ index c10c9e2..8997629 100644
 +             LINK_EXTERN_PRE_JS="$(LINK_EXTERN_PRE_JS)" \
 +             APP_TARGET="$(APP_TARGET)" \
 +             RUNTIME_GLUE_DIR="$(RUNTIME_GLUE_DIR)" \
++             EMCC_EXTRA_FLAGS="$(EMCC_EXTRA_FLAGS)" \
               CS_CROSS_SUFFIX="$(CS_CROSS_SUFFIX)" \
               RACKET="$(RACKET)" \
               PLAIN_RACKET="$(PLAIN_RACKET)" \
-@@ -223,6 +274,30 @@ cs: $(ZUO)
+@@ -223,6 +283,30 @@ cs: $(ZUO)
  bc: $(ZUO)
  	$(RUN_ZUO) in-place $(BUILD_VARS) VM=bc
  

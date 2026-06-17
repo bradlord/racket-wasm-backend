@@ -168,7 +168,7 @@ index b4e92ee..61a2d05 100644
                                       [config (config-include config
                                                               (at-dir CS m "boot" m)
                                                               (at-source "../../rktio")
-@@ -691,6 +791,326 @@
+@@ -691,6 +791,331 @@
                                (at-source "../../start/MemoryModule.c")
                                config))]
  
@@ -378,6 +378,9 @@ index b4e92ee..61a2d05 100644
 +                             (link-js-args "--pre-js" 'LINK_PRE_JS)
 +                             (link-js-args "--post-js" 'LINK_POST_JS)))
 +                   (define app-target (lookup 'APP_TARGET "browser"))
++                   ;; Extra emcc flags (e.g. "-g" for debug/source-map builds).
++                   ;; Shell-split so multi-flag strings like "-g -O1" work.
++                   (define extra-emcc-flags (shell->strings (lookup 'EMCC_EXTRA_FLAGS "")))
 +                   ;; The node (`racket.*`) link: REPL over Node's stdio.
 +                   (define node-args
 +                     (append
@@ -413,6 +416,7 @@ index b4e92ee..61a2d05 100644
 +                                ;; Reached by name from the externally-loaded
 +                                ;; share.data.js package loader (see browser link).
 +                                "addRunDependency,removeRunDependency,FS_createPath,FS_createDataFile"))
++                      extra-emcc-flags
 +                      ;; Force-link the symbols the deps manifest registers
 +                      ;; via Sforeign_symbol (wasm-ld would otherwise strip
 +                      ;; them before init_foreign takes their address).
@@ -481,6 +485,7 @@ index b4e92ee..61a2d05 100644
 +                            ;; the GLib font-helper-thread deadlock fix. Pool gives
 +                            ;; the proxied main + a few helpers ready workers.
 +                            "-sPROXY_TO_PTHREAD" "-sPTHREAD_POOL_SIZE=4")
++                      extra-emcc-flags
 +                      dep-uflags))
 +                   ;; The link emits ONLY the runtime (scheme*.{js,wasm,data})
 +                   ;; plus the glue baked in above (node-*.js, wasmfs-stdin.js,
@@ -495,7 +500,7 @@ index b4e92ee..61a2d05 100644
         [:target ,racket.boot (,(find-target "racket.so" cs-targets))
                  ,(lambda (path token)
                     (scheme "--script" (at-source "convert-to-boot.ss")
-@@ -765,7 +1182,11 @@
+@@ -765,7 +1187,11 @@
                                   token))])]
             [(or (not (equal? (lookup 'BOOTFILE_RACKET) ""))
                  (not (equal? (lookup 'RACKET) "")))
@@ -508,7 +513,7 @@ index b4e92ee..61a2d05 100644
              (when xpatch?
                (error "cross build needs --enable-scheme=SCHEME or --enable-racket=auto"))
              `([:target bootfiles ()
-@@ -878,7 +1299,19 @@
+@@ -878,7 +1304,19 @@
                  ,(lambda (token)
                     (install #f)
                     (setup))]
@@ -529,7 +534,7 @@ index b4e92ee..61a2d05 100644
         [:target plain-install ()
                  ,(lambda (token)
                     (install #f))]
-@@ -1092,32 +1525,39 @@
+@@ -1092,32 +1530,39 @@
                   (list petite-v.boot scheme-v.boot racket-v.boot)
                   (list "petite.boot" "scheme.boot" "racket.boot")))])
  
@@ -592,7 +597,7 @@ index b4e92ee..61a2d05 100644
      (call-with-dest-racket
       (lambda (bindir dest-racket)
         (define copytree-racket (and cross? (hash-ref (config-bootstrap-racket) 'racket)))
-@@ -1125,13 +1565,37 @@
+@@ -1125,13 +1570,37 @@
                                     (hash-set config 'copytree-prepared-setup-files #t)
                                     config))
         (maybe-copytree copytree-config dest-racket copytree-racket at-dir)

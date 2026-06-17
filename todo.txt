@@ -4,6 +4,7 @@
     - Start up time vs size
     - We'll probably want to include (most of?) the core collections.
     - Maybe specify which packages to pre-compile?
+    - Tried shipping app packages as source only (no .zo) on branch `experiment/pkg-source-uncompiled` (`build --pkg-source`). Compile-on-load was too slow to be workable; not merged.
 
 - Investigate caching .zo files in IndexedDB.
     - We'll need to work out the issues with the browser event loop being blocked when wating for stdin. Maybe proxy-to-pthread already fixed this?
@@ -26,3 +27,13 @@
 
 - Confirm whether the libffi 3.5.x dep is really necessary or if we can somehow ignore deprecation warning with the bundle libffi
   - "3.5.x is required; 3.4.x uses deprecated Emscripten JS-library names (generateFuncType, uleb128Encode) that newer emsdk renames."
+
+- Allow pointing to a built pkg catalog instead of rebuilding/caching it
+
+- Host on github pages. Use service worker to add COOP/COEP headers?
+
+- I think we end up cross-compiling draw-lib/gui-lib (plus anything depending on them) multiple times, since we install from the catalog before applying patches and reinstalling. Can we adjust consume.rkt to fix that?
+
+- Come up with a more systematic way of fixing function signature mismatches before they happen.
+    - and/or improve error messages to make finding/fixing these easier when they occur. 
+        - emcc flags: (-gsource-map --source-map-base <base url>) or maybe just -g
