@@ -31,6 +31,7 @@
          racket/list
          racket/port
          racket/runtime-path
+         file/sha1
          setup/getinfo
          "config.rkt"
          "util.rkt"
@@ -276,6 +277,49 @@
     [else
      (error 'cross-install "raco pkg install failed (exit ~a) for ~a -- see output above" code what)]))
 
+;; Remove packages from the persistent staging scope (user scope under
+;; PLTADDONDIR=addon) so the next `--skip-installed` install re-fetches them
+;; PRISTINE. Used to re-stage just the package(s) whose source patch changed,
+;; since the catalog now persists across patch edits (its key no longer folds in
+;; package-patches -- see cache.rkt) and a CHANGED patch cannot be re-applied
+;; over already-patched source. `--force` waives dependents; `--no-setup` skips
+;; recompile. A "not installed" removal is benign (first run), so a nonzero exit
+;; is tolerated -- a genuinely failed reset surfaces loudly later when
+;; `apply-pkg-patches!` can't apply the new patch to stale source.
+(define (run-remove! #:racket racket #:config-etc config-etc #:addon addon #:work work
+                     #:names names)
+  (when (pair? names)
+    (info-msg "re-staging changed-patch package(s) (remove + pristine reinstall): ~a"
+              (string-join names ", "))
+    (define args
+      (append (list "-G" (path->string config-etc)
+                    "-l-" "raco" "pkg" "remove" "--force" "--no-setup" "--scope" "user")
+              names))
+    (define logf (build-path work "remove.log"))
+    (parameterize ([current-environment-variables
+                    (let ([e (environment-variables-copy (current-environment-variables))])
+                      (environment-variables-set! e #"PLTADDONDIR"
+                                                  (string->bytes/utf-8 (path->string addon)))
+                      e)])
+      (call-with-output-file logf #:exists 'replace
+        (lambda (port)
+          (define-values (sp _o in _e)
+            (apply subprocess port #f 'stdout (->path racket) args))
+          (close-output-port in)
+          (subprocess-wait sp)))
+      (display (file->string logf)))))
+
+;; sha1 of a set of patch files (by basename + content), order-independent --
+;; the per-package stamp that detects when a package's source patch changed.
+(define (patches-content-hash patch-paths)
+  (sha1 (open-input-string
+         (string-join
+          (sort (for/list ([p (in-list patch-paths)])
+                  (string-append (path->string (file-name-from-path p)) ":"
+                                 (call-with-input-file p sha1)))
+                string<?)
+          "\n"))))
+
 ;; Strip each staged (in-place tpb32l-compiled) package under `staged` into
 ;; `cat-pkgs` and (re)build the dirs-catalog index at `cat-index`, by running the
 ;; strip helper as a host-racket subprocess WITH the cross flags (so `binary-lib`'s
@@ -327,6 +371,42 @@
      (for ([d (list install-root hostzo xtgt cat-pkgs cat-index)]) (make-directory* d))
      (write-xconfig! xcfg #:pkgs-dir cross-pkgs #:links cross-links #:lib cross-lib
                      #:catalogs (list #f))
+     ;; --- per-package patch re-stage (catalog persists across patch edits) ----
+     ;; The catalog key no longer folds in package-patches (cache.rkt), so this
+     ;; staging tree + catalog survive a package-patch edit. A CHANGED patch can't
+     ;; be re-applied over already-patched source, so detect the packages whose
+     ;; patch content changed since the last refresh (per-package stamp) and reset
+     ;; just those: remove them from the staging scope (re-fetched pristine by the
+     ;; install below) and drop their stripped catalog dir (re-stripped below).
+     ;; Unchanged packages stay staged + stripped -> only the edited package does
+     ;; work. First run: the staging tree is empty, so nothing resets.
+     ;; NB this does NOT recompile a reset package's dependents; a patch that
+     ;; changes a package's interface needs a clean rebuild (rare -- our patches
+     ;; add files / fix FFI casts).
+     (define stamp-file (build-path build-catalog ".pkg-patch-stamps"))
+     (define prior-stamps
+       (if (file-exists? stamp-file)
+           (with-handlers ([exn:fail? (lambda (_) (hash))])
+             (call-with-input-file stamp-file read))
+           (hash)))
+     (define (staged-names root)
+       (let ([ap (addon-pkgs-dir root)])
+         (if ap
+             (for/list ([p (in-list (directory-list ap))]
+                        #:when (directory-exists? (build-path ap p)))
+               (path->string p))
+             '())))
+     (define changed-patched
+       (for/list ([e (in-list (discover-pkg-patches (staged-names install-root)))]
+                  #:unless (equal? (hash-ref prior-stamps (string->symbol (car e)) #f)
+                                   (patches-content-hash (cdr e))))
+         (car e)))
+     (when (pair? changed-patched)
+       (run-remove! #:racket racket #:config-etc xcfg #:addon install-root
+                    #:work catalog-dir #:names changed-patched)
+       (for ([n (in-list changed-patched)])
+         (define d (build-path cat-pkgs n))
+         (when (directory-exists? d) (delete-directory/files d))))
      ;; Stage-install the requested packages + their closure for tpb32l.
      (run-install #:racket racket #:cc-dir cc-dir #:config-etc xcfg
                   #:hostzo hostzo #:xtgt xtgt #:addon install-root #:work catalog-dir
@@ -353,6 +433,13 @@
      (strip-into-catalog! #:racket racket #:cc-dir cc-dir #:config-etc xcfg
                           #:hostzo hostzo #:xtgt xtgt
                           #:staged ap #:cat-pkgs cat-pkgs #:cat-index cat-index)
+     ;; Record current per-package patch stamps for the next refresh's change
+     ;; detection (keyed by package name symbol -> patch-content hash).
+     (call-with-output-file stamp-file #:exists 'replace
+       (lambda (o)
+         (write (for/hash ([e (in-list (discover-pkg-patches (staged-names install-root)))])
+                  (values (string->symbol (car e)) (patches-content-hash (cdr e))))
+                o)))
      (string-append "file://" (path->string (real cat-index)))]))
 
 ;; Fetch + cross-compile the app's packages for tpb32l and fold their tpb32l `.zo`

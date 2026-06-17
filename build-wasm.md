@@ -2211,10 +2211,32 @@ so the fix lives as `package-patches/draw-lib/cairo-font-options-copy.patch`.
 `draw-lib` source after the catalog fetch and then re-runs
 `raco setup --pkgs draw-lib` (same host-safe `-MCR`/`-G` cross discipline) to
 recompile, so the built catalog archives **patched** `tpb32l` `.zo`
-(`discover-pkg-patches` scans `package-patches/<pkg>/*.patch`). The patch dir is
-folded into the **delta-hash** (`build/cache.rkt` / `config.rkt`
-`package-patches-dir`), so editing it yields a fresh SDK/catalog/payload. (The
-real fix is upstream in `racket/draw`, worth a PR.)
+(`discover-pkg-patches` scans `package-patches/<pkg>/*.patch`). (The real fix is
+upstream in `racket/draw`, worth a PR.)
+
+**Package-patch cache decoupling (why a `gui-lib` patch edit is cheap).** The
+package-patch dir hashes into a **separate `pkg-patch-hash`**, *not* the
+delta-hash (`build/cache.rkt`). The decoupling is correct because these patches
+touch *catalog* packages (`draw-lib`/`gui-lib`) that are cross-installed
+**against** the SDK — they are not in the SDK's cross-root or the base runtime,
+so they cannot change either. So the SDK / pkg-catalog / base-runtime keys
+**zero** the `pkg-patch-hash` (`build/stages.rkt` `sans-pkg-patch`, applied at
+every `base-key`/`sdk-key` derivation), and only the **app-payload key** carries
+it. The result: editing a `gui-lib` patch keeps the base-runtime + SDK caches
+**warm** and re-stages **only the package whose patch changed**, not all 26
+catalog packages. To make that work the pkg-catalog now persists across patch
+edits (its key is the patch-agnostic SDK key), and `refresh-pkg-catalog!` detects
+the changed package via a per-package patch stamp (`build-catalog/.pkg-patch-
+stamps`): it `raco pkg remove`s just that package from the staging scope (so the
+next `--skip-installed` install re-fetches it pristine — a *changed* patch can't
+re-apply over already-patched source) and drops its stripped catalog dir (so it
+re-strips), leaving the other packages staged + stripped. Measured: a one-time
+~11.5 min full rebuild (the delta-hash value shifts once when package-patches
+leave it), then ~4.5 min per `gui-lib` patch edit (down from ~11.5), dominated by
+the genuine `gui-lib` cross-compile + the 37 MB payload repack. Caveat: a reset
+package's **dependents are not recompiled** — fine for our patches (they add
+files / fix FFI casts, no interface change); a patch that alters a package's
+interface needs `--force`.
 
 > **Two traps that cost time here, both now handled:**
 > - **Apply with `patch`, not `git apply`.** The staged tree lives under
