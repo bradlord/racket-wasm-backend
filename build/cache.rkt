@@ -89,16 +89,11 @@
                           (dir-content-hash overlay-dir) "|"
                           (dir-content-hash overlay-local-dir) "|"
                           (named-files-hash runtime-glue-dir link-glue-names) "|"
-                          (dir-content-hash wasm-deps-src-dir)))))
-  ;; Catalog-package source patches (build/consume.rkt) are kept SEPARATE from the
-  ;; delta: they patch APP/catalog packages (draw-lib/gui-lib) that are
-  ;; cross-installed AGAINST the SDK, not part of its cross-root or the base
-  ;; runtime -- so they must NOT invalidate the SDK / pkg-catalog / base-runtime
-  ;; caches (only the app-payload). This hash therefore feeds ONLY the payload
-  ;; key: `key-from-components` appends it, and the SDK/base keys zero it
-  ;; (build/stages.rkt). consume.rkt re-stages just the package whose patch
-  ;; changed. See build-wasm.md "Package-patch cache decoupling".
-  (define pkg-patch-hash (dir-content-hash package-patches-dir))
+                          (dir-content-hash wasm-deps-src-dir) "|"
+                          ;; Catalog-package source patches (build/consume.rkt):
+                          ;; editing one changes the cross-compiled .zo, so it must
+                          ;; invalidate the SDK/catalog/payload caches.
+                          (dir-content-hash package-patches-dir)))))
   ;; Identify each local package by its basename + a hash of its contents.
   (define locals
     (for/list ([p (in-list local-pkgs)])
@@ -123,7 +118,6 @@
   (hash 'upstream-sha upstream-sha
         'upstream-url upstream-url
         'delta-hash   delta
-        'pkg-patch-hash pkg-patch-hash
         'wasm-deps    wasm-deps
         'pkgs         pkgs
         'local-pkgs   locals
@@ -145,11 +139,6 @@
                   string<?)
             "|"))))
   (define link-component (hash-ref c 'link-js))
-  ;; The package-patch hash is appended only when non-empty, so it affects ONLY
-  ;; the app-payload key; the SDK/base keys pass "" (build/stages.rkt). (Dropping
-  ;; package-patches from `delta` shifts the SDK/base key VALUES once -- a one-time
-  ;; rebuild -- after which a package-patch edit no longer touches them.)
-  (define pkg-patch (hash-ref c 'pkg-patch-hash ""))
   (substring
    (sha1 (open-input-string
           (string-join (append (list (hash-ref c 'upstream-sha)
@@ -157,8 +146,7 @@
                                      (hash-ref c 'wasm-deps)
                                      (hash-ref c 'pkgs)
                                      locals)
-                               (if link-component (list link-component) '())
-                               (if (equal? pkg-patch "") '() (list (string-append "pp:" pkg-patch))))
+                               (if link-component (list link-component) '()))
                        "|")))
    0 16))
 

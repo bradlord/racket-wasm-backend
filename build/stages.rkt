@@ -218,15 +218,6 @@
 ;; layered on later by the clone-free consume (build/consume.rkt). Returns the
 ;; build's Racket version for the dist metadata. Needs the emsdk on a miss (the
 ;; emcc link); a hit copies from cache with no build and no clone mutation.
-;; The base runtime and the cross-SDK are independent of catalog-package source
-;; patches (those patch draw-lib/gui-lib, cross-installed AGAINST the SDK, not
-;; the base/cross-root) -- so their cache keys must zero the pkg-patch-hash. Only
-;; the app-payload key carries it (cache.rkt), so editing a package-patch
-;; re-stages just that package + repacks the payload, leaving the SDK/catalog/
-;; base-runtime caches warm. Used at EVERY base-key / sdk-key derivation so the
-;; keys agree across build-runtime / build-package / build-cross-sdk.
-(define (sans-pkg-patch c) (hash-set c 'pkg-patch-hash ""))
-
 (define (ensure-base-runtime! base-key base-components
                               #:wasm-deps wasm-deps #:target target
                               #:pre-js pre-js #:post-js post-js #:extern-pre-js extern-pre-js
@@ -337,14 +328,12 @@
   ;; (delta, wasm-deps -- the SDK is link/surface-agnostic too); the app-payload
   ;; key (pkgs+locals, no link-js/surface -- the payload is surface-independent);
   ;; and the full config key the dist records for provenance / `--runtime` match.
-  (define base-components (sans-pkg-patch
-                           (build-key-components #:pkgs "" #:wasm-deps wasm-deps
-                                                 #:local-pkgs '()
-                                                 #:link-js link-js #:target target)))
+  (define base-components (build-key-components #:pkgs "" #:wasm-deps wasm-deps
+                                               #:local-pkgs '()
+                                               #:link-js link-js #:target target))
   (define base-key (key-from-components base-components))
   (define sdk-key (key-from-components
-                   (sans-pkg-patch
-                    (build-key-components #:pkgs "" #:wasm-deps wasm-deps #:local-pkgs '()))))
+                   (build-key-components #:pkgs "" #:wasm-deps wasm-deps #:local-pkgs '())))
   (define pkg-key (key-from-components
                    (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
                                          #:local-pkgs local-pkgs)))
@@ -404,9 +393,8 @@
   ;; (base-key) and the package payload (pkg-key). Build both via build-runtime
   ;; (into a throwaway dir, no surface), then gather the union from each cache.
   (define base-key (key-from-components
-                    (sans-pkg-patch
-                     (build-key-components #:pkgs "" #:wasm-deps wasm-deps
-                                           #:local-pkgs '() #:link-js link-js #:target target))))
+                    (build-key-components #:pkgs "" #:wasm-deps wasm-deps
+                                          #:local-pkgs '() #:link-js link-js #:target target)))
   (define pkg-key (key-from-components
                    (build-key-components #:pkgs pkgs #:wasm-deps wasm-deps
                                          #:local-pkgs local-pkgs)))
@@ -504,8 +492,7 @@
 (define (build-cross-sdk #:wasm-deps wasm-deps
                          #:scheme [scheme-opt #f] #:racket [racket-opt #f]
                          #:dest dest)
-  (define components (sans-pkg-patch
-                      (build-key-components #:pkgs "" #:wasm-deps wasm-deps #:local-pkgs '())))
+  (define components (build-key-components #:pkgs "" #:wasm-deps wasm-deps #:local-pkgs '()))
   (define key (key-from-components components))
   ;; No `require-emsdk!`: the SDK is pure `tpb32l`, no emcc anywhere.
   (unless (directory-exists? (build-path clone-dir ".git")) (sync))
