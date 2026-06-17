@@ -1,25 +1,23 @@
 #lang racket/base
 ;; stubs.rkt -- placeholder platform classes for the wasm backend.
 ;;
-;; The controls and menus are now drawn and functional (control.rkt +
-;; controls-extra.rkt + menu.rkt); what remains here are dialogs and the printer
+;; The controls, menus and dialogs are now drawn and functional (control.rkt +
+;; controls-extra.rkt + menu.rkt + dialog.rkt); what remains here is the printer
 ;; dc. The mred core SUBCLASSES the platform classes at module load (wxitem.rkt
 ;; builds make-control% over item%, etc.) and uses `inherit`, so these can't be
-;; bare object% stubs: item% extends window% (and dialog% extends frame%) to
-;; expose the required method surface so racket/gui composes/loads. item% is
-;; still the base for the platform-values `item%` slot. clipboard-driver% and
-;; cursor-driver% ARE constructed (the former at load), so they are real.
+;; bare object% stubs: item% extends window% to expose the required method
+;; surface so racket/gui composes/loads. item% is still the base for the
+;; platform-values `item%` slot. clipboard-driver% and cursor-driver% ARE
+;; constructed (the former at load), so they are real.
 
 (require racket/class
          (only-in "../common/backing-dc.rkt" backing-dc%)
-         "window.rkt"
-         "frame.rkt")
+         "window.rkt")
 
 (provide (protect-out clipboard-driver%
                       cursor-driver%
                       printer-dc%
-                      item%
-                      dialog%))
+                      item%))
 
 ;; item% carries the full window% surface so the core's make-item%/make-control%
 ;; (which subclass it at load) can inherit window methods.
@@ -37,13 +35,8 @@
     (define/public (get-value) 0)))
 
 ;; item% is still the base for the platform-values `item%` slot. The drawn
-;; controls (button/check-box/message in control.rkt; choice/gauge/slider/
-;; radio-box/list-box/group-panel/tab-panel in controls-extra.rkt) are now real.
-
-;; A dialog is a top-level window: carry the frame% surface.
-(define dialog% (class frame% (super-new)))
-
-;; Menus (menu%/menu-bar%/menu-item%) are now real -- see menu.rkt.
+;; controls (control.rkt + controls-extra.rkt), menus (menu.rkt) and dialogs
+;; (dialog.rkt) are now real.
 
 ;; printer-dc% is wrapped by racket/draw's doc+page-check-mixin at load, which
 ;; overrides the whole dc<%> drawing API -- so it must be a real dc. Extend

@@ -22,6 +22,9 @@
                       register-gui-window!
                       unregister-gui-window!
                       next-frame-id
+                      window-shown!
+                      window-hidden!
+                      window-can-blit?
                       ;; event type codes (mirror in the page producer JS):
                       EVT-MOUSE-DOWN EVT-MOUSE-UP EVT-MOUSE-MOVE
                       EVT-KEY-DOWN EVT-KEY-UP EVT-RESIZE
@@ -58,6 +61,28 @@
 (define (register-gui-window! id wx) (hash-set! windows id wx))
 (define (unregister-gui-window! id) (hash-remove! windows id))
 
+;; z-order of shown top-level windows (most-recently-shown first). The page has
+;; a SINGLE <canvas>, so only the topmost shown window is displayed; and if that
+;; window is modal (a dialog%, dialog-level > 0) it also GRABS all input,
+;; regardless of the frame id the page tagged events with. That is what lets a
+;; modal dialog -- which is a second frame% with its own id -- take over the
+;; canvas and round-trip clicks without per-frame canvases or a frame-tagged
+;; blit. (Carrying a frame id through the blit -- the "real" multi-window path --
+;; is a C-side change; deferred. Stacked modals work; truly concurrent non-modal
+;; frames don't -- only the top one is visible.)
+(define shown-windows '())
+(define (window-shown! wx)
+  (set! shown-windows (cons wx (remq wx shown-windows))))
+(define (window-hidden! wx)
+  (set! shown-windows (remq wx shown-windows))
+  ;; whoever is now on top reclaims the canvas
+  (let ([t (and (pair? shown-windows) (car shown-windows))])
+    (when t (send t request-repaint))))
+(define (display-top-window) (and (pair? shown-windows) (car shown-windows)))
+;; Only the topmost shown window may paint to the (single) canvas.
+(define (window-can-blit? wx)
+  (let ([t (display-top-window)]) (or (not t) (eq? t wx))))
+
 ;; Scratch buffer for a batch of records (reused across drains).
 (define MAX-BATCH 64)
 (define batch-buf (make-bytes (* MAX-BATCH GUI-EVT-FIELDS 4)))
@@ -79,7 +104,12 @@
         (define y     (rec-field r 3))
         (define k     (rec-field r 4))
         (define mods  (rec-field r 5))
-        (define wx (hash-ref windows id #f))
+        ;; A modal window on top grabs input; otherwise route by the tagged id.
+        (define top (display-top-window))
+        (define wx
+          (if (and top (positive? (send top get-dialog-level)))
+              top
+              (hash-ref windows id #f)))
         (when wx
           (define es (send wx get-eventspace))
           (queue-event es

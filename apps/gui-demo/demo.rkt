@@ -18,6 +18,23 @@
 (define frame (new frame% [label "racket/gui controls on wasm"]
                    [width 360] [height 580]))
 
+;; A modal dialog%: shows over the frame (taking over the single page <canvas>),
+;; blocks in (send d show #t) -- a nested yield -- until its Close button hides
+;; it. The Close button is stretchy so it fills the dialog, making a center click
+;; land on it regardless of layout. This exercises the modal path: the worker
+;; parks in the nested yield while the pump keeps draining page events into the
+;; dialog's eventspace.
+(define (open-about-dialog)
+  (define d (new dialog% [label "About"] [parent frame] [width 220] [height 110]))
+  (new button% [parent d] [label "Close"]
+       [stretchable-width #t] [stretchable-height #t]
+       [callback (lambda (b e)
+                   (printf "dialog: Close\n") (flush-output)
+                   (send d show #f))])
+  (printf "dialog: opening\n") (flush-output)
+  (send d show #t)                       ; blocks here until Close
+  (printf "dialog: closed\n") (flush-output))
+
 ;; --- menu bar (drawn across the top of the frame) ---
 (define mbar (new menu-bar% [parent frame]))
 (define m-file (new menu% [label "File"] [parent mbar]))
@@ -54,6 +71,11 @@
      [callback (lambda (r e)
                  (send status set-label (format "radio: ~a" (send r get-selection)))
                  (printf "radio -> ~a\n" (send r get-selection)) (flush-output))])
+
+;; Opens the modal dialog above. Placed right after the radio-box so the tested
+;; controls above (button/choice/radio) keep their positions.
+(new button% [parent panel] [label "Open dialog…"]
+     [callback (lambda (b e) (open-about-dialog))])
 
 ;; --- the rest of the gallery ---
 (new check-box% [parent panel] [label "Enable feature"]

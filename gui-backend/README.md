@@ -15,10 +15,13 @@ ring → pump → frame → panel → canvas → `on-event`, and the canvas repa
 `tab-panel%` lay out in a `vertical-panel%`, render themselves via `racket/draw`
 onto the frame's backing surface, and (where interactive) a click fires their
 callbacks. **Menus** (`menu-bar%`/`menu%`/`menu-item%`) work too — drawn and
-routed by the frame (see below). See `apps/gui-demo/` (a gallery demo) and
-`test/browser/tools/gui-demo.mjs` (the Playwright regression driver, which opens
-the File menu + selects an item and clicks the button/choice/radio-box, asserting
-each callback).
+routed by the frame (see below). **Modal dialogs** (`dialog%`) work as well: a
+dialog takes over the shared canvas, blocks in a nested `yield`, and round-trips
+clicks to its controls (so `message-box`/`get-text-from-user` ride along). See
+`apps/gui-demo/` (a gallery demo) and `test/browser/tools/gui-demo.mjs` (the
+Playwright regression driver, which opens the File menu + selects an item, clicks
+the button/choice/radio-box, and opens + dismisses a modal dialog, asserting each
+callback).
 
 This directory holds the tracked backend source (the runtime clone under
 `.work/` is disposable). It is wired into builds as
@@ -96,8 +99,26 @@ item, or opening a submenu as a second overlay column. Separators, checkable
 items (✓), shortcut text and submenu arrows (▸) are drawn; there is no native
 popup. Right-click `popup-menu` routes through `frame.open-popup-menu`.
 
-Still load-bearing stubs in `stubs.rkt` (method surface only): dialogs
-(`dialog%`) and `printer-dc%`.
+**Modal dialogs work** (`dialog.rkt`: `dialog%` = the shared `dialog-mixin` over
+our `frame%`). The mixin gives a dialog its modal nested event loop — `(send d
+show #t)` blocks in a `yield` on a close semaphore that `direct-show #f` posts —
+and painting/event-routing come from `frame%` unchanged. The single page
+`<canvas>` is shared, so the **topmost shown window owns it**: when a modal
+dialog is up it both displays (the canvas resizes to the dialog's surface) and
+**grabs all input** regardless of the frame id the page tagged events with
+(`queue.rkt` `shown-windows`/`window-can-blit?` + the modal check in
+`drain-gui-events!`); on close the parent frame repaints and reclaims the canvas.
+Because the dialog's surface is blitted at the canvas origin, page click
+coordinates already land in the dialog's space — no translation needed.
+Verified in headless Chrome: a button opens a modal `dialog%`, the canvas
+resizes, a click on its (stretchy) Close button fires the callback, `show`
+returns, and the parent reappears. The mred core builds `message-box`,
+`get-text-from-user` and the font/colour choosers on this `dialog%`, so they ride
+along. (Carrying a frame id through the blit — the "real" multi-window / per-frame
+canvas path — is a C-side change, deferred; today only the topmost window is
+visible, so truly concurrent *non-modal* frames aren't supported.)
+
+Still a load-bearing stub in `stubs.rkt` (method surface only): `printer-dc%`.
 
 ## What is already wired into the build (Step 1 — done, built + verified)
 
@@ -141,7 +162,8 @@ authored in the tracked dir and copied into the gui-lib checkout
 - **`controls-extra.rkt`** — the drawn `choice%`/`gauge%`/`slider%`/
   `radio-box%`/`list-box%`/`group-panel%`/`tab-panel%`.
 - **`menu.rkt`** — the drawn `menu-bar%`/`menu%`/`menu-item%`.
-- **`stubs.rkt`** — dialogs/printer as load-bearing stubs;
+- **`dialog.rkt`** — the modal `dialog%` (`dialog-mixin` over `frame%`).
+- **`stubs.rkt`** — `printer-dc%` as a load-bearing stub;
   `clipboard-driver%` (constructed at load) + `cursor-driver%` minimal-working.
 - **`queue.rkt`** — the event pump: a frame-id→wx registry, a ~60 Hz drain of
   the ring into `queue-event` (late-bound `(send wx handle-gui-event …)`), wired

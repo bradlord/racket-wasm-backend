@@ -106,14 +106,45 @@ async function main() {
     const choice = await clickAndWait(30, 118, 'choice -> 1');
     const radio  = await clickAndWait(30, 194, 'radio -> 1');
 
+    // Modal dialog: click "Open dialog…" (~y258) to open a 220x110 modal
+    // dialog%. It blits its own (smaller) surface, so the single canvas resizes
+    // -- proving the topmost window grabbed the canvas. The dialog's lone Close
+    // button is stretchy (fills the dialog), so a click at the dialog's centre
+    // hits it; selecting it hides the dialog and the parent frame reclaims the
+    // canvas (back to 360x580). This exercises the modal nested-yield path.
+    await page.mouse.click(box.x + 40, box.y + 258);
+    let dialogOpened = false;
+    try {
+      await page.locator('#log').filter({ hasText: 'dialog: opening' }).waitFor({ timeout: 15_000 });
+      await page.waitForTimeout(500);
+      const ds = await page.$eval('#frame', (cv) => ({ w: cv.width, h: cv.height }));
+      process.stderr.write(`dialog canvas: ${ds.w}x${ds.h}\n`);
+      dialogOpened = ds.w === 220 && ds.h === 110;
+    } catch {}
+    await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-4-dialog.png` });
+
+    // Click the dialog's centre to hit the stretchy Close button, then confirm
+    // the modal show returned (parent prints "dialog: closed") and the canvas
+    // grew back to the frame size.
+    const dbox = await page.locator('#frame').boundingBox();
+    await page.mouse.click(dbox.x + dbox.width / 2, dbox.y + dbox.height / 2);
+    let dialogClosed = false;
+    try {
+      await page.locator('#log').filter({ hasText: 'dialog: closed' }).waitFor({ timeout: 15_000 });
+      await page.waitForTimeout(400);
+      const fs = await page.$eval('#frame', (cv) => ({ w: cv.width, h: cv.height }));
+      dialogClosed = fs.w === 360 && fs.h === 580;
+    } catch {}
+    const dialog = dialogOpened && dialogClosed;
+
     // Let the callbacks' repaint+blit land before the final screenshot.
     await page.waitForTimeout(1500);
     await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-2-clicked.png` });
 
     const logText = await page.$eval('#log', (e) => e.textContent);
     process.stdout.write('--- #log ---\n' + logText + '\n--- end ---\n');
-    process.stdout.write(`RESULT painted=${painted.ink > 0} menu=${menu} button=${button} choice=${choice} radio=${radio}\n`);
-    if (!(painted.ink > 0 && menu && button && choice && radio)) process.exitCode = 1;
+    process.stdout.write(`RESULT painted=${painted.ink > 0} menu=${menu} button=${button} choice=${choice} radio=${radio} dialog=${dialog}\n`);
+    if (!(painted.ink > 0 && menu && button && choice && radio && dialog)) process.exitCode = 1;
   } finally {
     await browser.close();
     try { proc.kill('SIGTERM'); } catch {}

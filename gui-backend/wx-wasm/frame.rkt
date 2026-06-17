@@ -130,8 +130,10 @@
 
     (define/override (direct-show on?)
       (if on?
-          (begin (hash-set! all-frames this #t) (register-gui-window! frame-id this))
-          (begin (hash-remove! all-frames this) (unregister-gui-window! frame-id)))
+          (begin (hash-set! all-frames this #t) (register-gui-window! frame-id this)
+                 (window-shown! this))
+          (begin (hash-remove! all-frames this) (unregister-gui-window! frame-id)
+                 (window-hidden! this)))
       (super direct-show on?)
       (when on? (request-repaint)))
 
@@ -284,7 +286,13 @@
     (define mink (make-object color% 0 0 0))
     (define mgray (make-object color% 160 160 160))
 
+    ;; Only the topmost shown window owns the single page <canvas>; a backgrounded
+    ;; frame (e.g. while a modal dialog is up) skips its blit so the dialog's
+    ;; surface isn't clobbered. window-hidden! repaints the new top on close.
     (define/public (repaint)
+      (when (window-can-blit? this) (do-repaint)))
+
+    (define (do-repaint)
       (define wb (box 0)) (define hb (box 0))
       (get-size wb hb)
       (define w (max 1 (unbox wb)))
