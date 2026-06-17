@@ -141,11 +141,22 @@
     (define/public (drag-accept-files on?) (void))
     (define/public (in-floating?) (and parent (send parent in-floating?)))
 
-    (define/public (set-focus) (void))
+    ;; Register this window as the keyboard-focus target on its top frame, so
+    ;; the frame routes key events here (the wasm backend has no native focus).
+    ;; Also drive the core's focus machinery (on-set-focus -> caret, edit target)
+    ;; since there is no native focus-in event to trigger it.
+    (define/public (set-focus)
+      (let ([t (get-top-win)]) (when t (send t set-key-focus this)))
+      (on-set-focus))
 
+    ;; The browser backend has no native cursors: we just track that one was set
+    ;; (the handle is never rendered). NB unlike the GTK port we do NOT pull
+    ;; (send (send v get-driver) get-handle): the cursor% reaching here can be the
+    ;; contract-wrapped public class whose internal get-driver is hidden (the
+    ;; editor sets an i-beam cursor on mouse events, which is how this surfaced).
     (define cursor-handle #f)
     (define/public (set-cursor v)
-      (set! cursor-handle (and v (send (send v get-driver) get-handle)))
+      (set! cursor-handle v)
       (check-window-cursor this))
     (define/public (enter-window) (set-window-cursor this #f))
     (define/public (leave-window) (when parent (send parent enter-window)))

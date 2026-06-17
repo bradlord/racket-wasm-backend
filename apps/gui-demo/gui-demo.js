@@ -115,6 +115,28 @@
   });
   frameCanvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
+  /* Keyboard: forward keystrokes into the ring (EVT_KEY_DOWN) so text editors
+   * (text%/editor-canvas%) can receive them. The backend builds a key-event%
+   * from the code point; printable keys map to their char, a few specials to
+   * their control codes (#\return / #\backspace / #\tab / #\escape). Listen on
+   * the window since the <canvas> isn't a focusable element. */
+  function keyCode(e) {
+    if (e.key && e.key.length === 1) return e.key.codePointAt(0);
+    switch (e.key) {
+      case "Enter": return 13;
+      case "Backspace": return 8;
+      case "Tab": return 9;
+      case "Escape": return 27;
+      default: return 0;
+    }
+  }
+  window.addEventListener("keydown", function (e) {
+    var k = keyCode(e);
+    if (k === 0) return;
+    pushGuiEvent(EVT_KEY_DOWN, 0, 0, k, modBits(e));
+    e.preventDefault();
+  });
+
   /* ---- blit-out: mirror the frame surface onto #frame ------------- */
   function blit(w, h, pixels) {
     if (frameCanvas.width !== w || frameCanvas.height !== h) {

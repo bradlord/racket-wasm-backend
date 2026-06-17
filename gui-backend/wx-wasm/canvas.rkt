@@ -28,7 +28,7 @@
      (init parent x y w h style [ignored-name #f] [gl-config #f])
 
      (inherit get-client-size get-eventspace
-              dispatch-on-event dispatch-on-char
+              dispatch-on-event dispatch-on-char set-focus request-repaint
               is-auto-scroll? reset-auto-scroll)
 
      (define transparent? (and (memq 'transparent style) #t))
@@ -83,16 +83,25 @@
      (define/public (on-paint) (void))
      (define/public (get-flush-window) (mcons #f #f))
 
-     ;; Schedule the backing store to reach the page: just blit now. These two
-     ;; feed dc%'s flush protocol (resume-flush/flush are `(->m void?)`), so they
-     ;; must return void -- do-canvas-backing-flush yields the blit's truthy
-     ;; result, which a bare tail call would leak past the contract.
-     (define/public (queue-backing-flush) (do-canvas-backing-flush #f) (void))
+     ;; Unified compositing: a canvas does NOT blit to the page on its own (that
+     ;; clobbers the frame's whole-surface blit when controls + a canvas share a
+     ;; frame). Instead it requests a frame repaint; the frame's repaint walks
+     ;; paint-self (below), which draws this canvas's recorded content into the
+     ;; frame surface, and the frame does the single blit. These feed dc%'s flush
+     ;; protocol (resume-flush/flush are `(->m void?)`), so they return void.
+     (define/public (queue-backing-flush) (request-repaint) (void))
      (define/public (schedule-periodic-backing-flush) (void)) ; mixin extends
-     (define/public (do-canvas-backing-flush ctx) (do-backing-flush this dc))
+     (define/public (do-canvas-backing-flush ctx) (request-repaint) #f)
      (define/public (paint-or-queue-paint cr)
        (or (do-canvas-backing-flush cr) (begin (queue-paint) #f)))
-     (define/public (flush) (do-canvas-backing-flush #f) (void))
+     (define/public (flush) (request-repaint) (void))
+
+     ;; Draw this canvas's backing store onto the frame's surface at (dx, dy).
+     ;; (Editors composite through here; their content repaints on each refresh.)
+     (define/override (paint-self fdc dx dy)
+       (define wb (box 0)) (define hb (box 0))
+       (get-client-size wb hb)
+       (paint-backing-onto dc fdc dx dy (max 1 (unbox wb)) (max 1 (unbox hb))))
 
      (define/override (refresh) (queue-paint))
      (define/override (reset-child-dcs) (queue-paint))
@@ -143,6 +152,9 @@
        (cond
         [(or (= type EVT-MOUSE-DOWN) (= type EVT-MOUSE-UP)
              (= type EVT-MOUSE-MOVE) (= type EVT-ENTER) (= type EVT-LEAVE))
+         ;; Clicking a canvas gives it the keyboard focus (so key events route
+         ;; here -- see frame.handle-gui-event). Editors need this to type.
+         (when (= type EVT-MOUSE-DOWN) (set-focus))
          (define et
            (cond
             [(= type EVT-MOUSE-MOVE) 'motion]

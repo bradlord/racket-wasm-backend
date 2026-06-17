@@ -133,9 +133,25 @@ async function main() {
       await page.locator('#log').filter({ hasText: 'dialog: closed' }).waitFor({ timeout: 15_000 });
       await page.waitForTimeout(400);
       const fs = await page.$eval('#frame', (cv) => ({ w: cv.width, h: cv.height }));
-      dialogClosed = fs.w === 360 && fs.h === 580;
+      dialogClosed = fs.w === 360 && fs.h === 720;
     } catch {}
     const dialog = dialogOpened && dialogClosed;
+
+    // Code editor (text% in editor-canvas%, at the bottom of the 720-tall frame).
+    // Click it to focus, then type "hello" -- each keystroke is forwarded into
+    // the GUI ring as EVT_KEY_DOWN, routed to the focused canvas, and inserted by
+    // text%.on-char. The demo's logging-text% prints the buffer on each edit.
+    const rebox = await page.locator('#frame').boundingBox();
+    await page.mouse.click(rebox.x + 180, rebox.y + 650);
+    await page.waitForTimeout(200);
+    await page.keyboard.type('hello', { delay: 60 });
+    let editor = false;
+    try {
+      await page.locator('#log').filter({ hasText: 'editor: "hello"' }).waitFor({ timeout: 15_000 });
+      editor = true;
+    } catch {}
+    await page.waitForTimeout(600);
+    await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-5-editor.png` });
 
     // Let the callbacks' repaint+blit land before the final screenshot.
     await page.waitForTimeout(1500);
@@ -143,8 +159,8 @@ async function main() {
 
     const logText = await page.$eval('#log', (e) => e.textContent);
     process.stdout.write('--- #log ---\n' + logText + '\n--- end ---\n');
-    process.stdout.write(`RESULT painted=${painted.ink > 0} menu=${menu} button=${button} choice=${choice} radio=${radio} dialog=${dialog}\n`);
-    if (!(painted.ink > 0 && menu && button && choice && radio && dialog)) process.exitCode = 1;
+    process.stdout.write(`RESULT painted=${painted.ink > 0} menu=${menu} button=${button} choice=${choice} radio=${radio} dialog=${dialog} editor=${editor}\n`);
+    if (!(painted.ink > 0 && menu && button && choice && radio && dialog && editor)) process.exitCode = 1;
   } finally {
     await browser.close();
     try { proc.kill('SIGTERM'); } catch {}

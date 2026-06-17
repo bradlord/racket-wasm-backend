@@ -166,7 +166,15 @@
     (define treat-focus-out-as-menu-click? #f)
     (define/public (treat-focus-out-as-menu-click) (set! treat-focus-out-as-menu-click? #t))
     (define/override (on-focus? on?) (on-focus-child on?) #t)
-    (define/public (get-focus-window [even-if-not-active? #f]) saved-child)
+    ;; Keyboard focus target (a descendant window, recorded via window.set-focus).
+    ;; Key events route here rather than by geometry; defaults to the client
+    ;; child. NB the mred core (wxtop) already owns a `set-focus-window` method
+    ;; for default-button bookkeeping, so this platform tracker uses its own name
+    ;; and feeds the core's `get-focus-window` (which the core reads for the edit
+    ;; target / focus object).
+    (define key-focus #f)
+    (define/public (set-key-focus w) (set! key-focus w))
+    (define/public (get-focus-window [even-if-not-active? #f]) (or key-focus saved-child))
 
     (define/override (call-pre-on-event w e) (pre-on-event w e))
     (define/override (call-pre-on-char w e) (pre-on-char w e))
@@ -220,6 +228,12 @@
     ;; menu-bar strip.
     (define/override (handle-gui-event type x y k mods)
       (cond
+        ;; Key events go to the focused window, not by geometry (x/y are unused
+        ;; and k carries the key code, so they must be handled before the
+        ;; mouse-button routing below).
+        [(or (= type EVT-KEY-DOWN) (= type EVT-KEY-UP))
+         (let ([w (or key-focus saved-child)])
+           (when w (send w handle-gui-event type x y k mods)))]
         [(not (= k 0)) (route-to-child type x y k mods)]
         [(pair? menu-stack)
          (when (= type EVT-MOUSE-DOWN) (handle-open-menu-click x y))]

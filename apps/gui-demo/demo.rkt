@@ -16,7 +16,7 @@
 ;; stdin read -- so the eventspace dispatch loop keeps the event pump running.
 
 (define frame (new frame% [label "racket/gui controls on wasm"]
-                   [width 360] [height 580]))
+                   [width 360] [height 720]))
 
 ;; A modal dialog%: shows over the frame (taking over the single page <canvas>),
 ;; blocks in (send d show #t) -- a nested yield -- until its Close button hides
@@ -97,6 +97,24 @@
 
 (new tab-panel% [parent panel] [choices '("Tab A" "Tab B" "Tab C")]
      [callback (lambda (t e) (printf "tab -> ~a\n" (send t get-selection)) (flush-output))])
+
+;; --- a code editor: text% in an editor-canvas% (the DrRacket substrate) ---
+;; This is the real mred editor stack -- text% renders through racket/draw onto
+;; the canvas dc, which now composites into the frame's backing surface. Clicking
+;; the canvas focuses it (so key events route here); the page forwards keystrokes
+;; into the GUI ring, the canvas builds key-event%s, and text%.on-char inserts.
+;; The subclass logs the buffer on every edit so the test can observe typing.
+(define logging-text%
+  (class text%
+    (super-new)
+    (define/augment (after-insert start len)
+      (printf "editor: ~s\n" (send this get-text)) (flush-output))
+    (define/augment (after-delete start len)
+      (printf "editor: ~s\n" (send this get-text)) (flush-output))))
+
+(define ed (new logging-text%))
+(define ed-canvas (new editor-canvas% [parent panel] [editor ed]
+                       [min-height 110] [style '(no-hscroll)]))
 
 (send frame show #t)
 (printf "GUI-DEMO-READY\n")

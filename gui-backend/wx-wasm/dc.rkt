@@ -16,7 +16,8 @@
          "ffi.rkt")
 
 (provide (protect-out dc%
-                      do-backing-flush))
+                      do-backing-flush
+                      paint-backing-onto))
 
 (define dc%
   (class backing-dc%
@@ -64,3 +65,18 @@
           (send target get-argb-pixels 0 0 w h px)
           (canvas-blit-argb w h px)
           (send target release-bitmap-storage))))
+
+;; Composite a canvas's backing store onto ANOTHER dc's surface (the frame's
+;; backing bitmap) at client offset (dx, dy). This is the unified-compositing
+;; path: rather than each canvas independently blitting to the page (which
+;; fights the frame's whole-surface blit when controls + a canvas share a frame),
+;; the frame's repaint walks paint-self and a canvas draws its recorded content
+;; into the frame surface here. `target-dc` is the frame's bitmap-dc%.
+(define (paint-backing-onto dc target-dc dx dy w h)
+  (send dc on-backing-flush
+        (lambda (bm)
+          (define surface (send (send target-dc get-bitmap) get-cairo-surface))
+          (define cr (cairo_create surface))
+          (backing-draw-bm bm cr w h dx dy 1.0)
+          (cairo_surface_flush surface)
+          (cairo_destroy cr))))

@@ -118,6 +118,32 @@ along. (Carrying a frame id through the blit — the "real" multi-window / per-f
 canvas path — is a C-side change, deferred; today only the topmost window is
 visible, so truly concurrent *non-modal* frames aren't supported.)
 
+**Editors work — the DrRacket substrate** (`text%` in an `editor-canvas%`). This
+exercised three additions:
+
+- **Unified compositing.** A `canvas%` no longer blits to the page on its own
+  (that fought the frame's whole-surface blit when controls + a canvas share a
+  frame). Its flush now requests a frame repaint, and `canvas.paint-self` draws
+  its backing store into the frame surface at its offset (`dc.rkt`
+  `paint-backing-onto`). So everything — controls, editors, a raw canvas —
+  composites through the frame's single blit.
+- **Keyboard focus routing.** The page forwards `keydown` into the GUI ring
+  (`gui-demo.js`); the frame routes key events to the **focused** window, not by
+  geometry (`frame.handle-gui-event`). A canvas claims focus on mouse-down
+  (`window.set-focus` records it on the top frame via `set-key-focus` and drives
+  the core's `on-set-focus` for the caret/edit-target — note `set-focus-window`
+  is the core's own method, so the platform tracker uses a different name).
+- **A cursor-handle fix.** `window.set-cursor` no longer pulls
+  `(send (send v get-driver) get-handle)`: the `cursor%` reaching it can be the
+  contract-wrapped public class whose internal `get-driver` is hidden, and we
+  have no native cursors anyway (the editor sets an i-beam on mouse-move, which is
+  how this surfaced).
+
+Verified: a `text%`/`editor-canvas%` renders through `racket/draw`, takes focus
+on click, and inserts typed characters (`text%.on-char`). Known rough edge: each
+keystroke triggers a full-frame repaint, so the editor region visibly blinks —
+cosmetic, fixable later with dirty-rect repaint.
+
 Still a load-bearing stub in `stubs.rkt` (method surface only): `printer-dc%`.
 
 ## What is already wired into the build (Step 1 — done, built + verified)
