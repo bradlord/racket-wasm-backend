@@ -14,9 +14,11 @@ ring → pump → frame → panel → canvas → `on-event`, and the canvas repa
 `choice%`, `gauge%`, `slider%`, `radio-box%`, `list-box%`, `group-panel%` and
 `tab-panel%` lay out in a `vertical-panel%`, render themselves via `racket/draw`
 onto the frame's backing surface, and (where interactive) a click fires their
-callbacks. See `apps/gui-demo/` (a gallery demo) and
-`test/browser/tools/gui-demo.mjs` (the Playwright regression driver, which
-clicks the button/choice/radio-box and asserts the callbacks).
+callbacks. **Menus** (`menu-bar%`/`menu%`/`menu-item%`) work too — drawn and
+routed by the frame (see below). See `apps/gui-demo/` (a gallery demo) and
+`test/browser/tools/gui-demo.mjs` (the Playwright regression driver, which opens
+the File menu + selects an item and clicks the button/choice/radio-box, asserting
+each callback).
 
 This directory holds the tracked backend source (the runtime clone under
 `.work/` is disposable). It is wired into builds as
@@ -83,8 +85,19 @@ container controls translate their children by a client inset (group: border +
 title; tab: header height) for both painting and event routing, since there is
 no native client widget to carry the offset.
 
-Still load-bearing stubs in `stubs.rkt` (method surface only): menus
-(`menu%`/`menu-bar%`/`menu-item%`), dialogs (`dialog%`) and `printer-dc%`.
+**Menus also work** (`menu.rkt`: `menu-bar%`, `menu%`, `menu-item%`). Menus
+aren't in the window tree, so the top **frame** draws and routes them: it paints
+the menu-bar strip across its top (reserving that height via
+`adjust-client-delta`, and offsetting the client child below it), and on a title
+click paints the open `menu%` as a popup overlay. A click on a row activates it —
+firing the item callback through `frame.on-menu-command` (the same path GTK uses:
+`id-to-menu-item` -> `wx->mred` -> the item's callback), toggling a checkable
+item, or opening a submenu as a second overlay column. Separators, checkable
+items (✓), shortcut text and submenu arrows (▸) are drawn; there is no native
+popup. Right-click `popup-menu` routes through `frame.open-popup-menu`.
+
+Still load-bearing stubs in `stubs.rkt` (method surface only): dialogs
+(`dialog%`) and `printer-dc%`.
 
 ## What is already wired into the build (Step 1 — done, built + verified)
 
@@ -127,7 +140,8 @@ authored in the tracked dir and copied into the gui-lib checkout
   `control-base%` (see above).
 - **`controls-extra.rkt`** — the drawn `choice%`/`gauge%`/`slider%`/
   `radio-box%`/`list-box%`/`group-panel%`/`tab-panel%`.
-- **`stubs.rkt`** — menus/dialogs/printer as load-bearing stubs;
+- **`menu.rkt`** — the drawn `menu-bar%`/`menu%`/`menu-item%`.
+- **`stubs.rkt`** — dialogs/printer as load-bearing stubs;
   `clipboard-driver%` (constructed at load) + `cursor-driver%` minimal-working.
 - **`queue.rkt`** — the event pump: a frame-id→wx registry, a ~60 Hz drain of
   the ring into `queue-event` (late-bound `(send wx handle-gui-event …)`), wired

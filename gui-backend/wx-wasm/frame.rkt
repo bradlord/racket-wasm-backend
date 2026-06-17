@@ -15,6 +15,7 @@
          "../common/queue.rkt"
          "window.rkt"
          "queue.rkt"
+         "menu.rkt"
          "ffi.rkt")
 
 (provide (protect-out frame%))
@@ -63,8 +64,31 @@
     (define/override (set-child-size child-gtk x y w h) (void))
 
     (define/public (on-close) #t)
-    (define/public (set-menu-bar mb) (void))
-    (define/public (reset-menu-height h) (adjust-client-delta 0 h))
+
+    ;; --- menu bar (drawn by this frame; see repaint / handle-gui-event) ---
+    (define menu-bar #f)
+    (define menu-bar-h 0)
+    ;; open menu chain: list of (vector menu x y width), innermost-first.
+    (define menu-stack '())
+    ;; title hit rects of the menu-bar strip: list of (vector x0 x1 menu).
+    (define title-rects '())
+
+    (define/public (set-menu-bar mb)
+      (set! menu-bar mb)
+      (when mb
+        (define h (send mb set-top-window this))
+        (set! menu-bar-h h)
+        (adjust-client-delta 0 h))
+      (request-repaint))
+    (define/public (get-menu-bar-wx) menu-bar)
+    (define/public (reset-menu-height h)
+      (set! menu-bar-h h) (adjust-client-delta 0 h) (request-repaint))
+
+    (define/public (open-popup-menu menu x y)
+      (set! menu-stack (list (vector menu x y (send menu popup-width))))
+      (request-repaint))
+    (define/public (close-menus)
+      (unless (null? menu-stack) (set! menu-stack '()) (request-repaint)))
 
     (define saved-enforcements (vector 0 0 -1 -1))
     (define/public (enforce-size min-x min-y max-x max-y inc-x inc-y)
@@ -188,10 +212,62 @@
       (set! saved-title s))
     (define/public (display-changed) (void))
 
-    ;; Route a page input record to the single child (the canvas).
+    ;; Route a page input record. Menus (the bar strip + any open popup) are
+    ;; drawn by this frame and not part of the window tree, so they intercept
+    ;; events first; otherwise route into the client child, translated below the
+    ;; menu-bar strip.
     (define/override (handle-gui-event type x y k mods)
+      (cond
+        [(not (= k 0)) (route-to-child type x y k mods)]
+        [(pair? menu-stack)
+         (when (= type EVT-MOUSE-DOWN) (handle-open-menu-click x y))]
+        [(and menu-bar (< y menu-bar-h) (= type EVT-MOUSE-DOWN))
+         (open-menu-at-title x)]
+        [else (route-to-child type x y k mods)]))
+
+    (define (route-to-child type x y k mods)
       (when saved-child
-        (send saved-child handle-gui-event type x y k mods)))
+        (send saved-child handle-gui-event type x (- y menu-bar-h) k mods)))
+
+    (define (open-menu-at-title x)
+      (let loop ([rs title-rects])
+        (cond
+          [(null? rs) (void)]
+          [(<= (vector-ref (car rs) 0) x (vector-ref (car rs) 1))
+           (define menu (vector-ref (car rs) 2))
+           (open-popup-menu menu (vector-ref (car rs) 0) menu-bar-h)]
+          [else (loop (cdr rs))])))
+
+    ;; Click while a menu is open: a row in some open popup activates it; a
+    ;; menu-bar title switches; anything else dismisses.
+    (define (handle-open-menu-click x y)
+      (define hit
+        (for/or ([e (in-list menu-stack)])
+          (define px (vector-ref e 1)) (define py (vector-ref e 2))
+          (define pw (vector-ref e 3))
+          (define m (vector-ref e 0))
+          (define ph (+ 2 (* (send m row-count) menu-row-height)))
+          (and (<= px x (+ px pw)) (<= py y (+ py ph)) (cons e m))))
+      (cond
+        [hit
+         (define e (car hit)) (define m (cdr hit))
+         (define idx (quotient (max 0 (- y (vector-ref e 2) 1)) menu-row-height))
+         (define r (send m activate-row idx))
+         (cond
+           [(eq? r 'closed) (set! menu-stack '()) (request-repaint)]
+           [(eq? r 'stay) (request-repaint)]
+           [(is-a? r menu%)
+            ;; open submenu beside the row; trim any deeper open menus first
+            (set! menu-stack (member e menu-stack))
+            (set! menu-stack
+                  (cons (vector r (+ (vector-ref e 1) (vector-ref e 3))
+                                (+ (vector-ref e 2) (* idx menu-row-height))
+                                (send r popup-width))
+                        menu-stack))
+            (request-repaint)]
+           [else (void)])]
+        [(and menu-bar (< y menu-bar-h)) (set! menu-stack '()) (open-menu-at-title x)]
+        [else (set! menu-stack '()) (request-repaint)]))
 
     ;; --- drawn-control surface ---
     ;; A frame whose content is drawn controls (rather than a canvas%) owns the
@@ -201,6 +277,13 @@
     ;; -- acceptable for now, controls-only and canvas-only are the cases used.)
     (define repaint-queued? #f)
     (define bg-color (make-object color% 236 236 236))
+    (define mbar-bg (make-object color% 225 225 225))
+    (define mborder (make-object color% 150 150 150))
+    (define mhi (make-object color% 70 130 200))
+    (define mwhite (make-object color% 255 255 255))
+    (define mink (make-object color% 0 0 0))
+    (define mgray (make-object color% 160 160 160))
+
     (define/public (repaint)
       (define wb (box 0)) (define hb (box 0))
       (get-size wb hb)
@@ -211,11 +294,63 @@
       (send dc set-background bg-color)
       (send dc clear)
       (when saved-child
-        (send saved-child paint-self dc (send saved-child get-x) (send saved-child get-y)))
+        (send saved-child paint-self dc (send saved-child get-x)
+              (+ menu-bar-h (send saved-child get-y))))
+      (when menu-bar (draw-menu-bar dc w))
+      (for ([e (in-list (reverse menu-stack))]) (draw-popup dc e))
       (define px (make-bytes (* w h 4)))
       (send target get-argb-pixels 0 0 w h px)
       (canvas-blit-argb w h px)
       (send dc set-bitmap #f))
+
+    (define (draw-menu-bar dc w)
+      (send dc set-pen mborder 1 'transparent)
+      (send dc set-brush mbar-bg 'solid)
+      (send dc draw-rectangle 0 0 w menu-bar-h)
+      (send dc set-font menu-font)
+      (send dc set-text-foreground mink)
+      (define ty (quotient (- menu-bar-h 14) 2))
+      (set! title-rects '())
+      (let loop ([es (send menu-bar get-entries)] [tx 4])
+        (unless (null? es)
+          (define ent (car es))
+          (define title (vector-ref ent 0))
+          (define menu (vector-ref ent 1))
+          (define-values (tw th) (measure-menu-text title))
+          (define x1 (+ tx tw 16))
+          (set! title-rects (append title-rects (list (vector tx x1 menu))))
+          (send dc set-text-foreground (if (vector-ref ent 2) mink mgray))
+          (send dc draw-text title (+ tx 8) ty)
+          (loop (cdr es) x1))))
+
+    (define (draw-popup dc e)
+      (define m (vector-ref e 0))
+      (define px (vector-ref e 1)) (define py (vector-ref e 2))
+      (define pw (vector-ref e 3))
+      (define rows (send m get-rows))
+      (define ph (+ 2 (* (length rows) menu-row-height)))
+      (send dc set-pen mborder 1 'solid)
+      (send dc set-brush mwhite 'solid)
+      (send dc draw-rectangle px py pw ph)
+      (send dc set-font menu-font)
+      (for ([r (in-list rows)] [i (in-naturals)])
+        (define ry (+ py 1 (* i menu-row-height)))
+        (cond
+          [(eq? (vector-ref r 0) 'separator)
+           (send dc set-pen mborder 1 'solid)
+           (send dc draw-line (+ px 4) (+ ry (quotient menu-row-height 2))
+                 (+ px pw -4) (+ ry (quotient menu-row-height 2)))]
+          [else
+           (send dc set-text-foreground (if (vector-ref r 6) mink mgray))
+           (when (and (vector-ref r 4) (vector-ref r 5))   ; checkable & checked
+             (send dc draw-text "✓" (+ px 5) (+ ry 3)))
+           (send dc draw-text (vector-ref r 2) (+ px 22) (+ ry 3))
+           (define sc (vector-ref r 3))
+           (when (> (string-length sc) 0)
+             (define-values (sw sh) (measure-menu-text sc))
+             (send dc draw-text sc (- (+ px pw) sw 8) (+ ry 3)))
+           (when (eq? (vector-ref r 0) 'submenu)
+             (send dc draw-text "▸" (- (+ px pw) 14) (+ ry 3)))])))
 
     ;; Coalesce repaint requests: schedule one onto the eventspace so a burst of
     ;; control state changes (and the post-layout settle) collapse into a single

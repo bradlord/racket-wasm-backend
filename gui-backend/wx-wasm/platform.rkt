@@ -3,15 +3,17 @@
 ;;
 ;; Real (thin) window/frame/canvas/panel + dc, plus drawn controls
 ;; (control.rkt: button%/check-box%/message%; controls-extra.rkt: choice%/
-;; gauge%/slider%/radio-box%/list-box%/group-panel%/tab-panel%). Menus, dialogs
-;; and the printer dc remain load-bearing stubs (stubs.rkt). Selected via
-;; PLT_WASM_GUI in the unix branch of mred/private/wx/platform.rkt.
+;; gauge%/slider%/radio-box%/list-box%/group-panel%/tab-panel%) and drawn menus
+;; (menu.rkt: menu-bar%/menu%/menu-item%). Dialogs and the printer dc remain
+;; load-bearing stubs (stubs.rkt). Selected via PLT_WASM_GUI in the unix branch
+;; of mred/private/wx/platform.rkt.
 
 (require "init.rkt"       ; starts the event pump at load
          "procs.rkt"
          "stubs.rkt"
          "control.rkt"    ; real button%/check-box%/message%
          "controls-extra.rkt" ; choice/gauge/slider/radio-box/list-box/group-panel/tab-panel
+         "menu.rkt"       ; real menu%/menu-bar%/menu-item%
          "window.rkt"
          "canvas.rkt"
          "frame.rkt"

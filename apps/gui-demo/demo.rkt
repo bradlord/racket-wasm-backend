@@ -16,7 +16,21 @@
 ;; stdin read -- so the eventspace dispatch loop keeps the event pump running.
 
 (define frame (new frame% [label "racket/gui controls on wasm"]
-                   [width 360] [height 560]))
+                   [width 360] [height 580]))
+
+;; --- menu bar (drawn across the top of the frame) ---
+(define mbar (new menu-bar% [parent frame]))
+(define m-file (new menu% [label "File"] [parent mbar]))
+(new menu-item% [parent m-file] [label "New"]
+     [callback (lambda (i e) (printf "menu: New\n") (flush-output))])
+(new menu-item% [parent m-file] [label "Open"]
+     [callback (lambda (i e) (printf "menu: Open\n") (flush-output))])
+(new separator-menu-item% [parent m-file])
+(new checkable-menu-item% [parent m-file] [label "Toggle"]
+     [callback (lambda (i e) (printf "menu: Toggle ~a\n" (send i is-checked?)) (flush-output))])
+(define m-edit (new menu% [label "Edit"] [parent mbar]))
+(new menu-item% [parent m-edit] [label "Copy"]
+     [callback (lambda (i e) (printf "menu: Copy\n") (flush-output))])
 
 (define panel (new vertical-panel% [parent frame]
                    [border 12] [spacing 8] [alignment '(left top)]))

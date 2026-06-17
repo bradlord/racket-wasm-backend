@@ -93,10 +93,18 @@ async function main() {
       } catch { return false; }
     };
 
-    // button center ~ y56; choice (cycles 0->1) ~ y94; radio item "Two" ~ y170.
-    const button = await clickAndWait(30, 56, 'button clicked #1');
-    const choice = await clickAndWait(30, 94, 'choice -> 1');
-    const radio  = await clickAndWait(30, 170, 'radio -> 1');
+    // Menus: click the "File" title (in the 24px menu strip), then its first
+    // item "New" in the popup (row 0 at ~y36). Selecting closes the popup.
+    await page.mouse.click(box.x + 20, box.y + 12);
+    await page.waitForTimeout(400);
+    await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-3-menu-open.png` });
+    const menu = await clickAndWait(40, 36, 'menu: New');
+
+    // The menu bar shifts the control panel down by the 24px strip, so the
+    // earlier offsets gain +24: button ~y80, choice ~y118, radio "Two" ~y194.
+    const button = await clickAndWait(30, 80, 'button clicked #1');
+    const choice = await clickAndWait(30, 118, 'choice -> 1');
+    const radio  = await clickAndWait(30, 194, 'radio -> 1');
 
     // Let the callbacks' repaint+blit land before the final screenshot.
     await page.waitForTimeout(1500);
@@ -104,8 +112,8 @@ async function main() {
 
     const logText = await page.$eval('#log', (e) => e.textContent);
     process.stdout.write('--- #log ---\n' + logText + '\n--- end ---\n');
-    process.stdout.write(`RESULT painted=${painted.ink > 0} button=${button} choice=${choice} radio=${radio}\n`);
-    if (!(painted.ink > 0 && button && choice && radio)) process.exitCode = 1;
+    process.stdout.write(`RESULT painted=${painted.ink > 0} menu=${menu} button=${button} choice=${choice} radio=${radio}\n`);
+    if (!(painted.ink > 0 && menu && button && choice && radio)) process.exitCode = 1;
   } finally {
     await browser.close();
     try { proc.kill('SIGTERM'); } catch {}
