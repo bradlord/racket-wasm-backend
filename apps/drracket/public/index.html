@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DrRacket on WebAssembly</title>
+  <style>
+    :root { --sans: "IBM Plex Sans", "Segoe UI", sans-serif; --mono: "SFMono-Regular", Consolas, monospace; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; font-family: var(--sans); color: #1b2530; background: #f4f6fb; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    p.sub { margin: 0 0 16px; color: #5c6b7a; font-size: 14px; }
+    .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+    button { font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 999px;
+             border: 1px solid #d97706; background: #fde9cf; color: #1b2530; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #status { font-size: 13px; color: #5c6b7a; }
+    .stage { display: inline-block; border: 1px solid #d6dde6; border-radius: 8px;
+             background: #fff; box-shadow: 0 12px 30px rgba(15,23,42,.10); overflow: hidden; }
+    #frame { display: block; image-rendering: pixelated; }
+    #log { margin-top: 16px; padding: 12px 14px; min-height: 80px; max-height: 240px; overflow: auto;
+           background: #11151c; color: #c8d3e0; border-radius: 8px; font-family: var(--mono);
+           font-size: 13px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>DrRacket on WebAssembly</h1>
+  <p class="sub">The full DrRacket IDE compiled to WebAssembly — <code>racket/gui</code> rendered to a browser <code>&lt;canvas&gt;</code> via cairo/pango.</p>
+  <div class="bar">
+    <button id="run" type="button">▶ Run DrRacket</button>
+    <span id="status">Idle</span>
+  </div>
+  <div class="stage"><canvas id="frame" width="800" height="600"></canvas></div>
+  <pre id="log"></pre>
+  <script defer src="./drracket.js"></script>
+</body>
+</html>
