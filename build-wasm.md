@@ -30,6 +30,26 @@ link line.
 
 ## Status
 
+> ⚠️ **Places are disabled on WASM (single-threaded).** Even though the build is
+> `tpb32l` (a *threaded* Chez machine type, so `threaded?` is true), **real
+> places do not work** and are deliberately turned off. A place forks a Chez
+> thread, which on WASM is a new pthread (an emscripten Worker); the **first
+> foreign call inside that pthread traps** — as a `function signature mismatch`
+> in the pb interpreter, or a `__wasmfs_jsimpl_write` `TypeError` — because
+> per-Worker JS-side state (WASMFS backends, the libffi closure function-table)
+> is **not** shared across emscripten Workers; only the wasm linear memory is.
+> This is what crashed DrRacket on startup (it spawns a place for online
+> expansion / background check-syntax); the original `chunk_15941`
+> `function signature mismatch` was **mis-attributed to `call-with-c-return`** —
+> the real culprit is the place pthread. The fix: `patches/racket/src/cs/rumble/
+> place.ss.patch` makes `place-enabled?` return `#f` on `tpb32l`, so
+> `racket/place` transparently falls back to its in-process thread emulation
+> (`racket/place/private/th-place`), exactly as a `--disable-places` build. If
+> you ever want real parallelism on WASM you must solve per-Worker JS state
+> sharing first — do **not** just flip `place-enabled?` back on. Minimal repro
+> (no rebuild): `node test/browser/tools/place-crash-cdp.mjs` spawns a trivial
+> `dynamic-place` and captures the trap from the nested pthread Worker.
+
 Working:
 
 - Chez Scheme builds for WebAssembly via the upstream `--emscripten`

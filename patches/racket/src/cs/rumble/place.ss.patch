@@ -1,0 +1,26 @@
+diff --git a/racket/src/cs/rumble/place.ss b/racket/src/cs/rumble/place.ss
+index fd5bbfb..8b98357 100644
+--- a/racket/src/cs/rumble/place.ss
++++ b/racket/src/cs/rumble/place.ss
+@@ -77,7 +77,20 @@
+ 
+ (meta-cond
+  [(threaded?)
+-  (define (place-enabled?) #t)
++  ;; WASM/Emscripten delta (racket-wasm): this build is `tpb32l` (a *threaded*
++  ;; Chez machine type), but it runs in a single-threaded Emscripten environment
++  ;; where real places are BROKEN. `fork-place` forks a Chez thread, which on
++  ;; WASM is a new pthread (an emscripten Worker); foreign calls inside that
++  ;; pthread fail -- per-worker JS-side state (WASMFS backends, the libffi
++  ;; closure function-table) is NOT shared across emscripten Workers (only the
++  ;; wasm linear memory is), so the first foreign call traps ("function
++  ;; signature mismatch" / a `__wasmfs_jsimpl_write` TypeError). Report places as
++  ;; disabled on tpb32l so `racket/place` transparently falls back to its
++  ;; thread-based emulation (`racket/place/private/th-place`), exactly as on a
++  ;; `--disable-places` build. Gated on `tpb32l` so upstream behavior is
++  ;; preserved on every other threaded host. See build-wasm.md
++  ;; "Places are disabled on WASM (single-threaded)".
++  (define (place-enabled?) (not (eq? (machine-type) 'tpb32l)))
+   (define (fork-place thunk finish-proc)
+     (do-prepare-for-place)
+     (fork-thread (lambda ()
