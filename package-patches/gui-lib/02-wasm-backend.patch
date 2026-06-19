@@ -2059,7 +2059,7 @@ new file mode 100644
 index 00000000..1685c770
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/queue.rkt
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,136 @@
 +#lang racket/base
 +;; queue.rkt -- the wasm backend event pump.
 +;;
@@ -2166,12 +2166,16 @@ index 00000000..1685c770
 +        (define y     (rec-field r 3))
 +        (define k     (rec-field r 4))
 +        (define mods  (rec-field r 5))
-+        ;; A modal window on top grabs input; otherwise route by the tagged id.
++        ;; A modal window on top grabs input; otherwise route by the tagged id,
++        ;; falling back to the topmost shown window when the id is not in the
++        ;; registry (e.g. DrRacket, which creates many frames before the main
++        ;; editor window, so the editor's frame-id is not 1 even though the page
++        ;; always tags events with FRAME_ID=1).
 +        (define top (display-top-window))
 +        (define wx
 +          (if (and top (positive? (send top get-dialog-level)))
 +              top
-+              (hash-ref windows id #f)))
++              (or (hash-ref windows id #f) top)))
 +        (when wx
 +          (define es (send wx get-eventspace))
 +          (queue-event es
