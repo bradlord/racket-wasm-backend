@@ -147,8 +147,10 @@
 (define (recompile-pkgs! #:racket racket #:cc-dir cc-dir #:config-etc config-etc
                          #:hostzo hostzo #:xtgt xtgt #:addon addon #:names names)
   (info-msg "recompiling patched package(s) for ~a: ~a" target-machine (string-join names ", "))
+  (define-values (lib-var lib-val) (racket-native-lib-path racket))
   (run (if (path? racket) (path->string racket) racket)
-       #:env (list (cons "PLTADDONDIR" (path->string addon)))
+       #:env (list (cons "PLTADDONDIR" (path->string addon))
+                   (cons lib-var lib-val))
        #:args (append
                (list "-G" (path->string config-etc)
                      "-MCR" (format "~a:~a" (path->string hostzo) (path->string xtgt))
@@ -226,6 +228,19 @@
                    'catalogs   catalogs)
              o))))
 
+;; Prepend the host racket's `lib/` directory to DYLD_LIBRARY_PATH (macOS) /
+;; LD_LIBRARY_PATH (Linux) so that `dlopen("libpng16.16.dylib")` (and friends)
+;; succeeds when draw-lib/cairo-lib.rkt is compiled in a cross-setup subprocess.
+;; These libs live next to the racket binary (../lib relative to bin/racket) and
+;; are NOT in the dyld default search path, so without this `ffi-lib` fails on a
+;; cold catalog build where --skip-installed doesn't bypass compilation.
+(define (racket-native-lib-path racket)
+  (define lib-dir (simplify-path (build-path (path-only (->path racket)) 'up "lib")))
+  (define var (if (eq? (system-type 'os) 'macosx) "DYLD_LIBRARY_PATH" "LD_LIBRARY_PATH"))
+  (define existing (or (getenv var) ""))
+  (define sep (if (string=? existing "") "" ":"))
+  (values var (string-append (path->string lib-dir) sep existing)))
+
 ;; Run `raco pkg install` host-safely (`-MCR hostzo:xtgt` -> target form to
 ;; `xtgt`, host form to `hostzo`, nothing in place; new pkgs confined to the
 ;; `addon` user scope via PLTADDONDIR), capturing merged output to a logfile under
@@ -254,11 +269,14 @@
                   "--scope" "user" "--batch" "--no-docs" "--force" "--deps" "search-auto")
             src-args))
   (define logf (build-path work "install.log"))
+  (define-values (lib-var lib-val) (racket-native-lib-path racket))
   (define code
     (parameterize ([current-environment-variables
                     (let ([e (environment-variables-copy (current-environment-variables))])
                       (environment-variables-set! e #"PLTADDONDIR"
                                                   (string->bytes/utf-8 (path->string addon)))
+                      (environment-variables-set! e (string->bytes/utf-8 lib-var)
+                                                  (string->bytes/utf-8 lib-val))
                       e)])
       (call-with-output-file logf #:exists 'replace
         (lambda (port)
