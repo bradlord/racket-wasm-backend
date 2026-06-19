@@ -119,7 +119,7 @@
      (define changed?
        (for/fold ([changed? #f]) ([patch (in-list (cdr entry))])
          (define pstr (path->string patch))
-         (define base (list "-p1" "--forward" "-i" pstr))
+         (define base (list "--batch" "-p1" "--forward" "-i" pstr))
          (define-values (dry-code dry-out) (run-patch ap (cons "--dry-run" base)))
          (cond
            [(zero? dry-code)
