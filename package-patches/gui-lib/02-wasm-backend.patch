@@ -42,7 +42,7 @@ new file mode 100644
 index 00000000..ca56882d
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/canvas.rkt
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,256 @@
 +#lang racket/base
 +;; canvas.rkt -- the wasm backend canvas% (lean version of gtk/canvas.rkt).
 +;;
@@ -81,6 +81,18 @@ index 00000000..ca56882d
 +     (define bg-color (if transparent? #f white))
 +
 +     (define dc #f)
++
++     ;; Persistent compositing bitmap (opaque canvases only). The frame rebuilds
++     ;; its whole surface every repaint and editors do *partial* redraws, so the
++     ;; transient backing only holds the last-redrawn region. We fold each flush's
++     ;; backing into this client-sized bitmap (kept across flushes) and blit the
++     ;; whole thing in paint-self, so partial line redraws accumulate instead of
++     ;; blanking the rest of a multiline buffer. Initialised opaque to bg-color so
++     ;; undrawn areas show the canvas background, not the frame grey.
++     (define composite-bm #f)
++     (define composite-dc #f)
++     (define comp-w 0)
++     (define comp-h 0)
 +
 +     (super-new [parent parent]
 +                [gtk (box 'canvas)]
@@ -141,12 +153,43 @@ index 00000000..ca56882d
 +       (or (do-canvas-backing-flush cr) (begin (queue-paint) #f)))
 +     (define/public (flush) (request-repaint) (void))
 +
-+     ;; Draw this canvas's backing store onto the frame's surface at (dx, dy).
-+     ;; (Editors composite through here; their content repaints on each refresh.)
++     ;; (Re)allocate the composite bitmap when the client size changes, filling
++     ;; it opaque with the canvas background.
++     (define/private (ensure-composite w h)
++       (unless (and composite-bm (= comp-w w) (= comp-h h))
++         (when composite-dc (send composite-dc set-bitmap #f))
++         (define bm (make-object bitmap% w h #f #t))
++         (define cdc (new bitmap-dc% [bitmap bm]))
++         (when bg-color
++           (send cdc set-brush bg-color 'solid)
++           (send cdc set-pen bg-color 1 'transparent)
++           (send cdc draw-rectangle 0 0 w h))
++         (set! composite-bm bm)
++         (set! composite-dc cdc)
++         (set! comp-w w)
++         (set! comp-h h)))
++
++     ;; Draw this canvas's content onto the frame's surface at (dx, dy). GTK
++     ;; clears each canvas to its background in its own draw handler; we have no
++     ;; per-canvas expose -- the frame clears the whole surface to grey (236) and
++     ;; composites children here -- so we keep our own persistent composite (see
++     ;; above) and blit that. Fold the latest backing (often a partial line
++     ;; redraw) into the composite first; transparent areas of the fresh backing
++     ;; leave prior content intact, so siblings of the redrawn line persist.
 +     (define/override (paint-self fdc dx dy)
 +       (define wb (box 0)) (define hb (box 0))
 +       (get-client-size wb hb)
-+       (paint-backing-onto dc fdc dx dy (max 1 (unbox wb)) (max 1 (unbox hb))))
++       (define w (max 1 (unbox wb)))
++       (define h (max 1 (unbox hb)))
++       (cond
++         [transparent?
++          ;; transparent canvas: composite the backing directly so what's beneath
++          ;; shows through (no opaque background to accumulate onto).
++          (paint-backing-onto dc fdc dx dy w h)]
++         [else
++          (ensure-composite w h)
++          (paint-backing-onto dc composite-dc 0 0 w h)
++          (send fdc draw-bitmap composite-bm dx dy)]))
 +
 +     (define/override (refresh) (queue-paint))
 +     (define/override (reset-child-dcs) (queue-paint))
