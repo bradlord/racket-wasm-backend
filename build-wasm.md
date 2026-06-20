@@ -486,8 +486,15 @@ host trees. `lib-dir`'s `system.rktd` makes the cross target `tpb32l`.
 
 1. **Stage + catalog** (`refresh-pkg-catalog!`) -- stage-install the catalog
    `pkgs` (+ their non-base closure) from the network into a **persistent,
-   SDK-keyed** tree (`work-dir/pkg-catalog/<sdk-key>/`), harvest the `tpb32l`
-   `.zo` in place, then re-emit each package through `pkg/strip`
+   SDK-keyed** tree (`work-dir/pkg-catalog/<sdk-key>/`) in three steps so any
+   repo-side source patch lands *before* compilation: **(a) fetch** with
+   `--no-setup` (resolves + registers the closure, no compile); **(b) patch** the
+   staged source (`apply-pkg-patches!`, see "Text / Pango"); **(c) compile** the
+   *whole* staged closure in one dependency-ordered cross `raco setup`
+   (`setup-pkgs!`). Compiling everything in one pass (rather than the old
+   install-all-then-recompile-just-the-patched-packages) ensures **dependents are
+   built against the patched source**, not the unpatched version. Then harvest
+   the `tpb32l` `.zo` in place, then re-emit each package through `pkg/strip`
    (`generate-stripped-directory`) into `build-catalog/pkgs/` and (re)build a
    `pkg/dirs-catalog` index over it -- the strip + index run as a **cross
    subprocess** (`build/strip-catalog.rkt`, see below). The catalog **accumulates**
@@ -2228,9 +2235,10 @@ peeled one at a time:
 from the network catalog via the clone-free consume rather than vendoring it,
 so the fix lives as `package-patches/draw-lib/cairo-font-options-copy.patch`.
 `build/consume.rkt`'s `refresh-pkg-catalog!` applies it to the *staged*
-`draw-lib` source after the catalog fetch and then re-runs
-`raco setup --pkgs draw-lib` (same host-safe `-MCR`/`-G` cross discipline) to
-recompile, so the built catalog archives **patched** `tpb32l` `.zo`
+`draw-lib` source after the `--no-setup` fetch (no compile yet) and then runs a
+single `raco setup --pkgs <whole staged closure>` (`setup-pkgs!`, same host-safe
+`-MCR`/`-G` cross discipline), so the built catalog archives **patched**
+`tpb32l` `.zo` and every dependent compiles against the patched source
 (`discover-pkg-patches` scans `package-patches/<pkg>/*.patch`). The patch dir is
 folded into the **delta-hash** (`build/cache.rkt` / `config.rkt`
 `package-patches-dir`), so editing it yields a fresh SDK/catalog/payload. (The

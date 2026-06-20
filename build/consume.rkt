@@ -137,16 +137,19 @@
                    pstr name dry-out)])))
      (and changed? name))))
 
-;; Recompile the named packages' collections to tpb32l after a source patch,
-;; reusing the host-safe cross discipline (`-MCR hostzo:xtgt`, `-G` cross config,
-;; PLTADDONDIR addon). `--pkgs <names>` limits setup to just those packages; the
-;; compilation manager recompiles the patched files (source newer than `.zo`).
-;; Post-install packaging phases that need host launcher templates absent from the
-;; cross lib-dir (--no-launcher) or doc/foreign-lib steps are skipped so setup
-;; exits cleanly while still emitting the `.zo`.
-(define (recompile-pkgs! #:racket racket #:cc-dir cc-dir #:config-etc config-etc
-                         #:hostzo hostzo #:xtgt xtgt #:addon addon #:names names)
-  (info-msg "recompiling patched package(s) for ~a: ~a" target-machine (string-join names ", "))
+;; Compile the named packages' collections to tpb32l, reusing the host-safe cross
+;; discipline (`-MCR hostzo:xtgt`, `-G` cross config, PLTADDONDIR addon). Called
+;; with ALL staged package names so a single setup compiles the whole closure in
+;; dependency order against the (already patched) source -- dependents thus see
+;; the patched code, which a per-package `--pkgs <patched-only>` setup would miss.
+;; `--pkgs <names>` keeps setup scoped to the addon packages (never the base/host
+;; collects). The compilation manager only (re)builds files whose source is newer
+;; than their `.zo`, so warm runs are no-ops. Post-install packaging phases that
+;; need host launcher templates absent from the cross lib-dir (--no-launcher) or
+;; doc/foreign-lib steps are skipped so setup exits cleanly while emitting `.zo`.
+(define (setup-pkgs! #:racket racket #:cc-dir cc-dir #:config-etc config-etc
+                     #:hostzo hostzo #:xtgt xtgt #:addon addon #:names names)
+  (info-msg "compiling package(s) for ~a: ~a" target-machine (string-join names ", "))
   (define-values (lib-var lib-val) (racket-native-lib-path racket))
   (run (if (path? racket) (path->string racket) racket)
        #:env (list (cons "PLTADDONDIR" (path->string addon))
@@ -251,7 +254,7 @@
 ;; failure raises. Shared by the staging install and the final consume.
 (define (run-install #:racket racket #:cc-dir cc-dir #:config-etc config-etc
                      #:hostzo hostzo #:xtgt xtgt #:addon addon #:work work
-                     #:src-args src-args #:what what)
+                     #:src-args src-args #:what what #:no-setup? [no-setup? #f])
   (info-msg "cross-installing ~a for ~a (host racket ~a, no emsdk)" what target-machine racket)
   (define args
     (append (list "-G" (path->string config-etc)
@@ -267,6 +270,12 @@
                   ;; `--force` ignores conflicts ONLY; `--deps search-auto` still
                   ;; resolves the closure (that's the separate `--deps` knob).
                   "--scope" "user" "--batch" "--no-docs" "--force" "--deps" "search-auto")
+            ;; `--no-setup` fetches + registers (resolving the dep closure) but
+            ;; skips compilation, so a caller can patch the staged source BEFORE
+            ;; anything is compiled (see refresh-pkg-catalog!). The benign-error
+            ;; tolerance below keys on the `raco setup` launcher message, which
+            ;; doesn't run under --no-setup, so the install just exits 0.
+            (if no-setup? '("--no-setup") '())
             src-args))
   (define logf (build-path work "install.log"))
   (define-values (lib-var lib-val) (racket-native-lib-path racket))
@@ -345,27 +354,27 @@
      (for ([d (list install-root hostzo xtgt cat-pkgs cat-index)]) (make-directory* d))
      (write-xconfig! xcfg #:pkgs-dir cross-pkgs #:links cross-links #:lib cross-lib
                      #:catalogs (list #f))
-     ;; Stage-install the requested packages + their closure for tpb32l.
+     ;; Fetch the requested packages + their closure for tpb32l WITHOUT compiling
+     ;; (`--no-setup`), so repo-side source patches land BEFORE anything is built.
+     ;; `--skip-installed` keeps it incremental (only new packages fetched).
      (run-install #:racket racket #:cc-dir cc-dir #:config-etc xcfg
                   #:hostzo hostzo #:xtgt xtgt #:addon install-root #:work catalog-dir
-                  #:src-args (cons "--skip-installed" pkg-names)
-                  #:what (format "~a catalog package(s) [staging]" (length pkg-names)))
-     ;; Harvest tpb32l .zo into the staged tree (in place) so the strip archives
-     ;; compiled code, then strip each into the catalog + rebuild the index.
+                  #:src-args (cons "--skip-installed" pkg-names) #:no-setup? #t
+                  #:what (format "~a catalog package(s) [fetch]" (length pkg-names)))
      (define ap (addon-pkgs-dir install-root))
      (unless ap (error 'refresh-pkg-catalog! "no packages staged under ~a" install-root))
-     ;; Apply any repo-side source patches to the staged packages, then recompile
-     ;; just those, so the catalog archives PATCHED tpb32l `.zo`. Must happen
+     ;; Apply any repo-side source patches to the staged source, then compile the
+     ;; WHOLE staged closure in one dependency-ordered setup -- so the catalog
+     ;; archives PATCHED tpb32l `.zo` and every dependent is built against the
+     ;; patched source (not just the patched packages themselves). Must happen
      ;; before the harvest/strip (which captures the compiled tree). See
      ;; `discover-pkg-patches` / build-wasm.md "Text / Pango".
-     (let* ([staged (for/list ([p (in-list (directory-list ap))]
+     (define staged (for/list ([p (in-list (directory-list ap))]
                                #:when (directory-exists? (build-path ap p)))
-                      (path->string p))]
-            [recompiled (apply-pkg-patches! ap (discover-pkg-patches staged))])
-       (unless (null? recompiled)
-         (recompile-pkgs! #:racket racket #:cc-dir cc-dir #:config-etc xcfg
-                          #:hostzo hostzo #:xtgt xtgt #:addon install-root
-                          #:names recompiled)))
+                      (path->string p)))
+     (apply-pkg-patches! ap (discover-pkg-patches staged))
+     (setup-pkgs! #:racket racket #:cc-dir cc-dir #:config-etc xcfg
+                  #:hostzo hostzo #:xtgt xtgt #:addon install-root #:names staged)
      (define harvested (harvest! xtgt ap))
      (info-msg "staged ~a tpb32l artifact(s); stripping into the catalog (~a)" harvested STRIP-MODE)
      (strip-into-catalog! #:racket racket #:cc-dir cc-dir #:config-etc xcfg
