@@ -43,6 +43,42 @@ selector patch to `gui-lib/mred/private/wx/platform.rkt`.
    blit's truthy result. Fixed by returning `(void)` from those methods
    (canvas.rkt).
 
+## Canvas compositing: persistent composite bitmap (editor backgrounds + multiline)
+
+The frame owns the page `<canvas>`: its `do-repaint` (`frame.rkt`) rebuilds the
+**whole** surface every repaint — clears to the frame grey (236), then walks
+`paint-self` on each child to composite it on top — and does one blit. There is
+no per-canvas expose. That collides with two facts about editors:
+
+- **`editor-canvas%` is `no-autoclear`**, so `get-canvas-background-for-backing`
+  is `#f` and `canvas-mixin`'s `do-on-paint` never clears its background. On GTK
+  the full white comes from the per-canvas draw handler
+  (`get-canvas-background-for-clearing`, `wx/gtk/canvas.rkt`); we have no such
+  hook, so an empty/short field showed only the editor's content band in white
+  on the frame grey.
+- **editors do partial redraws** — a caret blink repaints only the active line.
+  The backing-dc releases its bitmap after each flush (`on-backing-flush` →
+  `reset-backing-retained` at counter 0), so a partial redraw lands in a fresh,
+  empty backing and only that line composites. Non-active lines blanked after a
+  moment.
+
+Fix (`canvas.rkt`): each **opaque** canvas keeps a **persistent composite
+bitmap**, client-sized and initialised opaque to `bg-color`. Each `paint-self`
+folds the latest (often partial) backing into the composite via source-over
+(`paint-backing-onto dc composite-dc 0 0 w h` — transparent areas of the fresh
+backing leave prior content intact), then blits the whole composite onto the
+frame surface. One mechanism covers both: undrawn areas show the canvas
+background, and partial line redraws accumulate across flushes. `ensure-composite`
+reallocates on a client-size change. Transparent canvases keep the direct blit
+(nothing opaque to accumulate onto).
+
+**Dead end worth remembering:** retaining the backing-dc's bitmap instead
+(`start-backing-retained`) also reuses its cairo context, which keeps the
+*clip* from the last partial line-redraw — so all later drawing gets clipped to
+that small rectangle (text cut off after a few chars). The transient backing
+must stay per-flush so clips are always fresh; persistence belongs in a separate
+canvas-owned bitmap.
+
 ## Event routing: frame → panel → canvas (key design point)
 
 GTK maps each native widget pointer to its wx, so events reach the leaf widget
