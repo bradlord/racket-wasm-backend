@@ -79,6 +79,27 @@ async function main() {
     process.stderr.write(`canvas ${painted.w}x${painted.h}, control ink px: ${painted.ink}\n`);
     await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-1-painted.png` });
 
+    // Regression: a switchable-button% (transparent canvas) must render on the
+    // initial paint -- WITHOUT any click. It sits just below the status message
+    // (~x12-48, y~62-96 in canvas px); count ink there. The bug was that a
+    // transparent canvas records its drawing rather than filling a bitmap, so the
+    // backing flush handed an empty bitmap and the button stayed blank until a
+    // click forced a redraw.
+    const swInk = await page.$eval('#frame', (cv) => {
+      const ctx = cv.getContext('2d');
+      const { data, width } = ctx.getImageData(0, 0, cv.width, cv.height);
+      let ink = 0;
+      for (let y = 62; y < 96; y++)
+        for (let x = 12; x < 48; x++) {
+          const i = (y * width + x) * 4;
+          if (Math.abs(data[i] - 236) > 40 || Math.abs(data[i + 1] - 236) > 40 ||
+              Math.abs(data[i + 2] - 236) > 40) ink++;
+        }
+      return ink;
+    });
+    process.stderr.write(`switchable-button ink (no click): ${swInk}\n`);
+    const switchable = swInk > 0;
+
     // The demo stacks (border 12, spacing 8) status / button / choice /
     // radio-box at the top, with deterministic positions (above the stretchy
     // gauge/slider/list-box). Click each and wait for the callback's printf.
@@ -100,11 +121,12 @@ async function main() {
     await page.locator('.stage').screenshot({ path: `${o.shotPrefix}-3-menu-open.png` });
     const menu = await clickAndWait(40, 36, 'menu: New');
 
-    // The menu bar shifts the control panel down by the 24px strip, so the
-    // earlier offsets gain +24: button ~y80, choice ~y118, radio "Two" ~y194.
-    const button = await clickAndWait(30, 80, 'button clicked #1');
-    const choice = await clickAndWait(30, 118, 'choice -> 1');
-    const radio  = await clickAndWait(30, 194, 'radio -> 1');
+    // A switchable-button% (transparent canvas, like a DrRacket toolbar button)
+    // sits in its own row below the status message, shifting the tested controls
+    // down ~37px from their menu-bar-adjusted offsets.
+    const button = await clickAndWait(30, 117, 'button clicked #1');
+    const choice = await clickAndWait(30, 155, 'choice -> 1');
+    const radio  = await clickAndWait(30, 231, 'radio -> 1');
 
     // Modal dialog: click "Open dialog…" (~y258) to open a 220x110 modal
     // dialog%. It blits its own (smaller) surface, so the single canvas resizes
@@ -112,7 +134,7 @@ async function main() {
     // button is stretchy (fills the dialog), so a click at the dialog's centre
     // hits it; selecting it hides the dialog and the parent frame reclaims the
     // canvas (back to 360x580). This exercises the modal nested-yield path.
-    await page.mouse.click(box.x + 40, box.y + 258);
+    await page.mouse.click(box.x + 40, box.y + 295);
     let dialogOpened = false;
     try {
       await page.locator('#log').filter({ hasText: 'dialog: opening' }).waitFor({ timeout: 15_000 });
@@ -159,8 +181,8 @@ async function main() {
 
     const logText = await page.$eval('#log', (e) => e.textContent);
     process.stdout.write('--- #log ---\n' + logText + '\n--- end ---\n');
-    process.stdout.write(`RESULT painted=${painted.ink > 0} menu=${menu} button=${button} choice=${choice} radio=${radio} dialog=${dialog} editor=${editor}\n`);
-    if (!(painted.ink > 0 && menu && button && choice && radio && dialog && editor)) process.exitCode = 1;
+    process.stdout.write(`RESULT painted=${painted.ink > 0} menu=${menu} switchable=${switchable} button=${button} choice=${choice} radio=${radio} dialog=${dialog} editor=${editor}\n`);
+    if (!(painted.ink > 0 && menu && switchable && button && choice && radio && dialog && editor)) process.exitCode = 1;
   } finally {
     await browser.close();
     try { proc.kill('SIGTERM'); } catch {}

@@ -62,22 +62,44 @@ no per-canvas expose. That collides with two facts about editors:
   empty backing and only that line composites. Non-active lines blanked after a
   moment.
 
-Fix (`canvas.rkt`): each **opaque** canvas keeps a **persistent composite
-bitmap**, client-sized and initialised opaque to `bg-color`. Each `paint-self`
-folds the latest (often partial) backing into the composite via source-over
-(`paint-backing-onto dc composite-dc 0 0 w h` — transparent areas of the fresh
-backing leave prior content intact), then blits the whole composite onto the
-frame surface. One mechanism covers both: undrawn areas show the canvas
-background, and partial line redraws accumulate across flushes. `ensure-composite`
-reallocates on a client-size change. Transparent canvases keep the direct blit
-(nothing opaque to accumulate onto).
+Fix (`canvas.rkt`): every canvas keeps a **persistent composite bitmap**,
+client-sized. Each `paint-self` folds the latest backing into the composite,
+then blits the whole composite onto the frame surface. `on-backing-flush` only
+folds when the canvas actually redrew, so a repaint driven by another widget
+leaves the composite (hence the content) intact. `ensure-composite` reallocates
+on a client-size change.
 
-**Dead end worth remembering:** retaining the backing-dc's bitmap instead
-(`start-backing-retained`) also reuses its cairo context, which keeps the
-*clip* from the last partial line-redraw — so all later drawing gets clipped to
-that small rectangle (text cut off after a few chars). The transient backing
-must stay per-flush so clips are always fresh; persistence belongs in a separate
-canvas-owned bitmap.
+- **Opaque canvases (editors)** init the composite opaque to `bg-color` and
+  *accumulate*: a partial line redraw is source-over'd onto the composite so its
+  band updates and siblings persist (`paint-backing-onto dc composite-dc 0 0 w
+  h`). Undrawn areas show the canvas background, not the frame grey.
+- **Transparent canvases** (e.g. `switchable-button%` toolbar buttons, style
+  `'(transparent …)`) init the composite transparent and *replace* it each flush
+  (`clear-first?` — cairo `CLEAR` operator), so a prior hover/press state doesn't
+  ghost and the frame shows through where the canvas didn't draw.
+
+A transparent canvas also **records** its drawing (`record-dc`) instead of
+filling a bitmap, so its content is in the recorded commands, not the backing
+bitmap. `on-backing-flush` only returns the recorded command (a replay proc, for
+`backing-draw-bm` to replay onto the composite) on its **retained** branch — so
+transparent canvases call `start-backing-retained` once at construction.
+Otherwise the flush hands back an empty bitmap and the button is blank until a
+click forces a redraw. (Safe here: recording replays fresh each paint and
+`record-dc`'s `erase` resets the recording, so it doesn't grow; the stale-clip
+hazard below is specific to opaque/bitmap canvases.)
+
+A canvas also repaints on a **client-size change** (`on-size` → `queue-paint`
+when shown): a pure drawn canvas with no content to refresh is otherwise laid
+out to its real size *after* its show-paint with nothing to redraw it. The
+`last-cw`/`last-ch` fields must be declared before the constructor's `set-size`
+(which runs `on-size`), or construction hits "cannot use field before init".
+
+**Dead end worth remembering:** retaining the backing-dc's bitmap for an
+**opaque** canvas reuses its cairo context, which keeps the *clip* from the last
+partial line-redraw — so all later drawing gets clipped to that small rectangle
+(text cut off after a few chars). The transient backing must stay per-flush there
+so clips are fresh; persistence lives in the separate composite bitmap. (Retain
+is only for transparent/recording canvases, which have no such persistent clip.)
 
 ## Event routing: frame → panel → canvas (key design point)
 

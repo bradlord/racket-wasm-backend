@@ -12,7 +12,7 @@
          "../../lock.rkt"
          "../common/queue.rkt"
          "../common/canvas-mixin.rkt"
-         (only-in "../common/backing-dc.rkt" queue-backing-flush)
+         (only-in "../common/backing-dc.rkt" queue-backing-flush start-backing-retained)
          "../common/event.rkt"
          "window.rkt"
          "queue.rkt"
@@ -29,7 +29,7 @@
 
      (inherit get-client-size get-eventspace
               dispatch-on-event dispatch-on-char set-focus request-repaint
-              is-auto-scroll? reset-auto-scroll)
+              is-auto-scroll? reset-auto-scroll is-shown?)
 
      (define transparent? (and (memq 'transparent style) #t))
      (define transparentish? transparent?)
@@ -37,23 +37,40 @@
 
      (define dc #f)
 
-     ;; Persistent compositing bitmap (opaque canvases only). The frame rebuilds
-     ;; its whole surface every repaint and editors do *partial* redraws, so the
-     ;; transient backing only holds the last-redrawn region. We fold each flush's
-     ;; backing into this client-sized bitmap (kept across flushes) and blit the
-     ;; whole thing in paint-self, so partial line redraws accumulate instead of
-     ;; blanking the rest of a multiline buffer. Initialised opaque to bg-color so
-     ;; undrawn areas show the canvas background, not the frame grey.
+     ;; Persistent compositing bitmap. The frame rebuilds its whole surface every
+     ;; repaint and the backing-dc releases its store after each flush, so without
+     ;; this a canvas's content vanishes on any repaint it didn't itself drive
+     ;; (an editor's partial line redraw blanks its siblings; a transparent
+     ;; toolbar button blanks as soon as another widget repaints). We fold each
+     ;; flush's backing into this client-sized bitmap (kept across flushes) and
+     ;; blit it in paint-self. Opaque canvases init it to bg-color (so undrawn
+     ;; areas show the canvas background, not the frame grey); transparent ones
+     ;; leave it transparent and replace it each flush (see paint-self).
      (define composite-bm #f)
      (define composite-dc #f)
      (define comp-w 0)
      (define comp-h 0)
+
+     ;; Last client size seen by on-size (declared before the constructor's
+     ;; set-size call, which runs on-size -- fields must be initialised first).
+     (define last-cw #f)
+     (define last-ch #f)
 
      (super-new [parent parent]
                 [gtk (box 'canvas)]
                 [no-show? (and (memq 'deleted style) #t)])
 
      (set! dc (new dc% [canvas this] [transparentish? transparentish?]))
+
+     ;; A transparent canvas (e.g. switchable-button%) records its drawing rather
+     ;; than rendering to a backing bitmap, so the content lives in the recorded
+     ;; commands, not the bitmap. on-backing-flush only hands back the recorded
+     ;; command (for replay onto our composite) on its retained branch, so keep
+     ;; the backing retained -- otherwise the flush hands us an empty bitmap and
+     ;; the button is blank until a click forces a redraw. (No stale-clip problem
+     ;; as with opaque/bitmap canvases: recording mode replays fresh, and erase
+     ;; resets the recording each paint, so it doesn't grow.)
+     (when transparent? (send dc start-backing-retained))
 
      (set-size x y w h)
 
@@ -127,24 +144,26 @@
      ;; Draw this canvas's content onto the frame's surface at (dx, dy). GTK
      ;; clears each canvas to its background in its own draw handler; we have no
      ;; per-canvas expose -- the frame clears the whole surface to grey (236) and
-     ;; composites children here -- so we keep our own persistent composite (see
-     ;; above) and blit that. Fold the latest backing (often a partial line
-     ;; redraw) into the composite first; transparent areas of the fresh backing
-     ;; leave prior content intact, so siblings of the redrawn line persist.
+     ;; composites children here, and the backing-dc releases its store after each
+     ;; flush -- so we keep our own persistent composite (see above) and blit
+     ;; that. Fold the latest backing into the composite first; on-backing-flush
+     ;; only does so when the canvas actually redrew, so a repaint driven by some
+     ;; other widget leaves our composite (hence our content) intact.
+     ;;
+     ;; Opaque canvases (editors) accumulate: a partial line redraw overwrites
+     ;; only its band and siblings persist. Transparent canvases (e.g. toolbar
+     ;; switchable-button%) fully repaint each time and must show what's beneath,
+     ;; so they use replace semantics (clear-first) onto a transparent composite,
+     ;; which both avoids ghosting a prior hover/press state and lets the frame
+     ;; show through where the canvas didn't draw.
      (define/override (paint-self fdc dx dy)
        (define wb (box 0)) (define hb (box 0))
        (get-client-size wb hb)
        (define w (max 1 (unbox wb)))
        (define h (max 1 (unbox hb)))
-       (cond
-         [transparent?
-          ;; transparent canvas: composite the backing directly so what's beneath
-          ;; shows through (no opaque background to accumulate onto).
-          (paint-backing-onto dc fdc dx dy w h)]
-         [else
-          (ensure-composite w h)
-          (paint-backing-onto dc composite-dc 0 0 w h)
-          (send fdc draw-bitmap composite-bm dx dy)]))
+       (ensure-composite w h)
+       (paint-backing-onto dc composite-dc 0 0 w h transparent?)
+       (send fdc draw-bitmap composite-bm dx dy))
 
      (define/override (refresh) (queue-paint))
      (define/override (reset-child-dcs) (queue-paint))
@@ -152,7 +171,24 @@
      (define/public (begin-refresh-sequence) (void))
      (define/public (end-refresh-sequence) (void))
 
-     (define/public (on-size) (void))
+     ;; Repaint when the client size actually changes. A canvas's first paint is
+     ;; driven by show (reset-child-dcs -> queue-paint); but a pure drawn canvas
+     ;; with no content to refresh (e.g. a switchable-button% toolbar button) is
+     ;; laid out to its real size *after* that first paint, and nothing else
+     ;; triggers a repaint -- so it stays blank (drawn at its pre-layout size)
+     ;; until a mouse event forces a refresh. GTK gets a configure->expose here;
+     ;; we queue a paint on the size change so the canvas redraws at its new size.
+     (define/public (on-size)
+       (define wb (box 0)) (define hb (box 0))
+       (get-client-size wb hb)
+       (define cw (unbox wb)) (define ch (unbox hb))
+       (unless (and (equal? last-cw cw) (equal? last-ch ch))
+         (set! last-cw cw)
+         (set! last-ch ch)
+         ;; Only when shown: the initial paint is driven by show; this is for a
+         ;; later relayout. Skipping the unshown case also avoids painting during
+         ;; the constructor's set-size, before the eventspace is fully ready.
+         (when (is-shown?) (queue-paint))))
      (define/public (on-client-size w h) (void))
 
      ;; --- scrolling (stubbed for the milestone) ---

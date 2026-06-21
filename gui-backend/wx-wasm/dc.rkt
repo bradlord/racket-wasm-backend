@@ -67,16 +67,28 @@
           (send target release-bitmap-storage))))
 
 ;; Composite a canvas's backing store onto ANOTHER dc's surface (the frame's
-;; backing bitmap) at client offset (dx, dy). This is the unified-compositing
-;; path: rather than each canvas independently blitting to the page (which
-;; fights the frame's whole-surface blit when controls + a canvas share a frame),
-;; the frame's repaint walks paint-self and a canvas draws its recorded content
-;; into the frame surface here. `target-dc` is the frame's bitmap-dc%.
-(define (paint-backing-onto dc target-dc dx dy w h)
+;; backing bitmap, or the canvas's own persistent composite) at offset (dx, dy).
+;; This is the unified-compositing path: rather than each canvas independently
+;; blitting to the page (which fights the frame's whole-surface blit when
+;; controls + a canvas share a frame), the frame's repaint walks paint-self and a
+;; canvas folds its recorded content in here. `target-dc` is a bitmap-dc%.
+;;
+;; With `clear-first?`, the target is erased to fully transparent (cairo CLEAR
+;; operator) before the backing is drawn -- "replace" semantics for transparent
+;; canvases that fully repaint each time (e.g. switchable-button%), so a prior
+;; hover/press state doesn't ghost under the new one. Note on-backing-flush only
+;; runs the proc when the canvas actually drew since the last flush, so a repaint
+;; with no new content leaves the target untouched (content persists).
+(define (paint-backing-onto dc target-dc dx dy w h [clear-first? #f])
   (send dc on-backing-flush
         (lambda (bm)
           (define surface (send (send target-dc get-bitmap) get-cairo-surface))
           (define cr (cairo_create surface))
+          (when clear-first?
+            (cairo_save cr)
+            (cairo_set_operator cr CAIRO_OPERATOR_CLEAR)
+            (cairo_paint cr)
+            (cairo_restore cr))
           (backing-draw-bm bm cr w h dx dy 1.0)
           (cairo_surface_flush surface)
           (cairo_destroy cr))))

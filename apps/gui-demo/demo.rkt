@@ -1,4 +1,5 @@
 #lang racket/gui
+(require mrlib/switchable-button)
 ;; demo.rkt -- the racket/gui program the gui-demo page runs in the browser.
 ;;
 ;; This file is NOT compiled into the app; it is read verbatim by the
@@ -53,6 +54,20 @@
                    [border 12] [spacing 8] [alignment '(left top)]))
 
 (define status (new message% [parent panel] [label "ready                          "]))
+
+;; A switchable-button% (mrlib) -- a transparent canvas% subclass, like the
+;; DrRacket Run/Stop toolbar buttons. Reproduces the "blank until clicked"
+;; toolbar bug here so the Playwright driver can check it renders on load.
+(define sb-bmp
+  (let* ([bm (make-object bitmap% 16 16)]
+         [bdc (new bitmap-dc% [bitmap bm])])
+    (send bdc set-brush "forestgreen" 'solid)
+    (send bdc set-pen "black" 1 'transparent)
+    (send bdc draw-ellipse 1 1 14 14)
+    (send bdc set-bitmap #f)
+    bm))
+(new switchable-button% [parent panel] [label "Switch"] [bitmap sb-bmp]
+     [callback (lambda (b) (printf "switchable clicked\n") (flush-output))])
 
 ;; --- interactive controls (deterministic positions, top of the panel) ---
 (define clicks 0)
