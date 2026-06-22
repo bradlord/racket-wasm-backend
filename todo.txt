@@ -25,14 +25,22 @@
 
 - Investigate a separate build for a main thread version vs the worker thread version.
 
-- Confirm whether the libffi 3.5.x dep is really necessary or if we can somehow ignore deprecation warning with the bundle libffi
+- ~Confirm whether the libffi 3.5.x dep is really necessary or if we can somehow ignore deprecation warning with the bundle libffi~
   - "3.5.x is required; 3.4.x uses deprecated Emscripten JS-library names (generateFuncType, uleb128Encode) that newer emsdk renames."
+  - It is required.
 
 - Allow pointing to a built pkg catalog instead of rebuilding/caching it
 
 - Host on github pages. Use service worker to add COOP/COEP headers?
 
 - I think we end up cross-compiling draw-lib/gui-lib (plus anything depending on them) multiple times, since we install from the catalog before applying patches and reinstalling. Can we adjust consume.rkt to fix that?
+
+- Harden consume.rkt's run-install benign-error tolerance (~line 301). The
+  "packages installed, although setup reported errors" regex is meant for the
+  benign rhombus .rhm launcher-template case, but it ALSO swallows a real
+  web-repl compile error and silently ships share.data without print.zo/main.zo.
+  Make "error: during making for <pkg>" fatal while still tolerating the
+  launcher-template case. (Surfaced while fixing the pict border clipping.)
 
 - Come up with a more systematic way of fixing function signature mismatches before they happen.
     - and/or improve error messages to make finding/fixing these easier when they occur. 

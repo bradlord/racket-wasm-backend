@@ -2112,9 +2112,49 @@ versioned package). Modules:
 - `web-repl/http` -- `(http-get url)` -> `(values status body)`.
 - `web-repl/print` -- `install-bitmap-printer!`, a `current-print`
   hook that renders bitmap-valued results via `display-bm` (the IDE
-  installs it as a prelude). Duck-typed on `get-argb-pixels`, so it
-  pulls in `racket/class` but not `racket/draw`.
+  installs it as a prelude). Bitmap detection is duck-typed on
+  `get-argb-pixels` (only `racket/class`); picts are rendered with
+  `pict?`/`pict->bitmap`/`inset`, bound via **`dynamic-require` at module
+  load** (not a static `require`) -- see "pict printing" below.
 - `web-repl` (`main.rkt`) re-provides all five.
+
+> **pict printing: `dynamic-require`-at-load + a 1px inset.** Two
+> non-obvious constraints shape `web-repl/print`:
+>
+> 1. **Why not `(require pict)` / `(require pict/convert)` statically.**
+>    `pict-balloon2` (pulled transitively by `rhombus-pict-lib`) is a
+>    *single-collection* package literally named `pict`
+>    (`(define collection "pict")`, `assume-virtual-sources #t`). In the
+>    cross `raco setup` that compiles the local `web-repl` source package,
+>    its directory shadows the `pict` collection: resolving any `pict` /
+>    `pict/convert` module path lands in `pict-balloon2/<x>.rkt` (which
+>    doesn't exist) and errors -- and because `assume-virtual-sources`
+>    makes setup *believe* the file is there, it doesn't fall through to
+>    `pict-lib`. Worse, `run-install`'s benign-error tolerance
+>    (`consume.rkt`, the "packages installed, although setup reported
+>    errors" launcher-template case) swallows this *real* compile error,
+>    so the build silently ships `share.data` **without** `print.zo` /
+>    `main.zo`. Binding the entry points through `dynamic-require` (a
+>    runtime call) means compiling `web-repl` never resolves `pict`; the
+>    runtime module resolver in the packed image resolves it fine. (If you
+>    touch this and see picts stop rendering, check the manifest:
+>    `grep -o 'web-repl/compiled/print_rkt.zo' dist/share.data.js`.)
+> 2. **Why `dynamic-require` at *module load*, not at print time.**
+>    Deferring the `dynamic-require` into the `current-print` lambda trips
+>    a draw-lib init-order bug under WASM (`cairo-lock-name` referenced
+>    before `cairo.rkt`'s instance initializes `pango.rkt`'s import) when
+>    draw-lib is first instantiated lazily mid-REPL. Resolving the
+>    bindings at module instantiation -- the prelude loads `web-repl/print`
+>    before `enter!` runs the user program, in the clean REPL namespace --
+>    instantiates cairo/pango once, in order, exactly as the old static
+>    `(require pict)` did.
+> 3. **The 1px inset.** `pict->bitmap` sizes the bitmap to exactly
+>    `ceiling(width) x ceiling(height)`, so a border drawn on the pict's
+>    bounding edge (e.g. `frame`) sits on the last pixel boundary. The
+>    WASM cairo build's `'aligned` snapping rounds that stroke *outward*
+>    and clips the right/bottom border (desktop cairo rounds inward, so it
+>    shows there). Rendering `(inset v 1)` gives a 1px transparent margin
+>    so the edge stroke always has a pixel column to land in.
 
 Each wraps a `Sforeign_symbol`-registered primitive through
 `ffi/unsafe/vm` (`vm-eval` + `foreign-procedure`), the only FFI path
