@@ -102,9 +102,40 @@
     if (atBottom) outputPre.scrollTop = outputPre.scrollHeight;
   }
 
+  // Addressable canvases: id > 0 owns a persistent <canvas> that updates in
+  // place (a web-repl canvas-window, or a GUI frame). The page owns placement
+  // -- here they're appended inline like ephemeral ones, but tracked by id so
+  // repeated blits reuse the same element instead of stacking up.
+  var canvasesById = new Map();
+  function blitCanvas(id, w, h, pixels) {
+    if (!(w > 0 && h > 0)) return;
+    var canvas = canvasesById.get(id);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      canvas.style.cssText =
+        "display:block;margin:8px 0;max-width:100%;image-rendering:pixelated;";
+      canvasesById.set(id, canvas);
+    }
+    // Re-attach if absent (first blit, or pruned by the #output node cap).
+    if (!canvas.parentNode) outputPre.appendChild(canvas);
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    var image = new ImageData(new Uint8ClampedArray(pixels), w, h);
+    canvas.getContext("2d").putImageData(image, 0, 0);
+  }
+
+  function destroyCanvas(id) {
+    var canvas = canvasesById.get(id);
+    if (canvas) {
+      if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
+      canvasesById.delete(id);
+    }
+  }
+
   function clearOutput() {
     // textContent = "" also drops any <canvas> nodes appended inline.
     outputPre.textContent = "";
+    canvasesById.clear();
   }
 
   /* ---- bail out if not cross-origin isolated ---------------------- */
@@ -420,7 +451,14 @@
         return;
       }
       case "canvas": {
-        appendCanvas(msg.w, msg.h, msg.pixels);
+        // id 0 (or absent) -> ephemeral: append a fresh inline canvas.
+        // id > 0 -> addressable: create-or-update a persistent canvas.
+        if (msg.id) blitCanvas(msg.id, msg.w, msg.h, msg.pixels);
+        else appendCanvas(msg.w, msg.h, msg.pixels);
+        return;
+      }
+      case "canvas-destroy": {
+        destroyCanvas(msg.id);
         return;
       }
       case "abort": {

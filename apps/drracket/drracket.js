@@ -4,13 +4,15 @@
  * drracket/private/drracket-normal, and wires the two browser-specific
  * halves of the mred backend (same as gui-demo):
  *
- *   blit-out: each { type:"canvas", w, h, pixels } message from the runtime
- *     (wasm_canvas_blit_argb, driven by the backend's dc% flush) is the frame's
- *     full surface; we putImageData it onto ONE persistent <canvas>.
+ *   blit-out: each { type:"canvas", id, w, h, pixels } message from the runtime
+ *     (wasm_canvas_blit_argb, driven by the backend's dc% flush) is one window's
+ *     full surface; we putImageData it onto that window's own <canvas> (keyed by
+ *     id, created on first blit, removed on a "canvas-destroy" message).
  *
- *   event-in: DOM mouse/key events on that <canvas> are encoded into the GUI
- *     input ring (wasm_gui_events.c) and Atomics.notify'd; the backend's pump
- *     (wx/wasm/queue.rkt) drains them into mouse-event%/key-event%.
+ *   event-in: DOM mouse/key events on each <canvas> are encoded into the GUI
+ *     input ring (wasm_gui_events.c) tagged with that canvas's id and
+ *     Atomics.notify'd; the backend's pump (wx/wasm/queue.rkt) drains them into
+ *     mouse-event%/key-event% routed to the matching frame.
  *
  * The runtime is started with argv that set PLT_WASM_GUI before racket/gui loads.
  */
@@ -19,8 +21,11 @@
 (function () {
   var runBtn = document.getElementById("run");
   var statusEl = document.getElementById("status");
-  var frameCanvas = document.getElementById("frame");
-  var frameCtx = frameCanvas.getContext("2d");
+  // Each GUI window owns its own <canvas>, keyed by frame id (= canvas id).
+  // The static #frame is just the container anchor; we manage canvases
+  // dynamically (the page owns placement -- here, stacked in #frame's parent).
+  var stageEl = document.getElementById("frame").parentNode;
+  document.getElementById("frame").remove();
   var logEl = document.getElementById("log");
 
   function setStatus(s) { statusEl.textContent = s; }
@@ -35,7 +40,11 @@
   /* ---- GUI event protocol (mirror of wx/wasm/queue.rkt) ----------- */
   var EVT_MOUSE_DOWN = 1, EVT_MOUSE_UP = 2, EVT_MOUSE_MOVE = 3,
       EVT_KEY_DOWN = 4, EVT_ENTER = 7, EVT_LEAVE = 8;
-  var FRAME_ID = 1;  // DrRacket's main frame gets id 1
+
+  // id -> <canvas> for each shown window; focusedId routes keyboard (which is
+  // a window-level event with no canvas under it) to the active window.
+  var framesById = new Map();
+  var focusedId = 0;
 
   /* ---- ring bookkeeping (ints filled in on "ready") --------------- */
   var HEAD = 0, TAIL = 1, DATA = 2;
@@ -70,13 +79,13 @@
   }
 
   /* ---- event-in: write a record into the GUI ring ----------------- */
-  function pushGuiEvent(type, x, y, k, mods) {
+  function pushGuiEvent(type, id, x, y, k, mods) {
     if (!ioReady || !gui) return;
     var H = HEAP32, base = gui.base, cap = gui.cap, F = gui.fields;
     var tail = Atomics.load(H, base + 1);
     var slot = base + 2 + ((tail % cap) * F);
     H[slot]     = type;
-    H[slot + 1] = FRAME_ID;
+    H[slot + 1] = id | 0;     // which window/canvas the event is for
     H[slot + 2] = x | 0;
     H[slot + 3] = y | 0;
     H[slot + 4] = k | 0;
@@ -91,26 +100,49 @@
   }
   function btnCode(e) { return e.button === 1 ? 1 : e.button === 2 ? 2 : 0; }
 
-  frameCanvas.addEventListener("mousedown", function (e) {
-    var r = frameCanvas.getBoundingClientRect();
-    pushGuiEvent(EVT_MOUSE_DOWN, (e.clientX - r.left)|0, (e.clientY - r.top)|0, btnCode(e), modBits(e));
-    e.preventDefault();
-  });
-  frameCanvas.addEventListener("mouseup", function (e) {
-    var r = frameCanvas.getBoundingClientRect();
-    pushGuiEvent(EVT_MOUSE_UP, (e.clientX - r.left)|0, (e.clientY - r.top)|0, btnCode(e), modBits(e));
-    e.preventDefault();
-  });
-  frameCanvas.addEventListener("mousemove", function (e) {
-    var r = frameCanvas.getBoundingClientRect();
-    pushGuiEvent(EVT_MOUSE_MOVE, (e.clientX - r.left)|0, (e.clientY - r.top)|0, 0, modBits(e));
-  });
-  frameCanvas.addEventListener("mouseenter", function (e) {
-    pushGuiEvent(EVT_ENTER, 0, 0, 0, 0);
-  });
-  frameCanvas.addEventListener("mouseleave", function (e) {
-    pushGuiEvent(EVT_LEAVE, 0, 0, 0, 0);
-  });
+  // Create (or fetch) the <canvas> for a window id, wiring its own input
+  // listeners so each canvas tags events with its own id.
+  function ensureFrame(id) {
+    var c = framesById.get(id);
+    if (c) return c;
+    c = document.createElement("canvas");
+    c.style.cssText = "display:block;image-rendering:pixelated;margin:8px;";
+    framesById.set(id, c);
+    if (!focusedId) focusedId = id;
+    c.addEventListener("mousedown", function (e) {
+      focusedId = id;
+      var r = c.getBoundingClientRect();
+      pushGuiEvent(EVT_MOUSE_DOWN, id, (e.clientX - r.left)|0, (e.clientY - r.top)|0, btnCode(e), modBits(e));
+      e.preventDefault();
+    });
+    c.addEventListener("mouseup", function (e) {
+      var r = c.getBoundingClientRect();
+      pushGuiEvent(EVT_MOUSE_UP, id, (e.clientX - r.left)|0, (e.clientY - r.top)|0, btnCode(e), modBits(e));
+      e.preventDefault();
+    });
+    c.addEventListener("mousemove", function (e) {
+      var r = c.getBoundingClientRect();
+      pushGuiEvent(EVT_MOUSE_MOVE, id, (e.clientX - r.left)|0, (e.clientY - r.top)|0, 0, modBits(e));
+    });
+    c.addEventListener("mouseenter", function () {
+      focusedId = id;
+      pushGuiEvent(EVT_ENTER, id, 0, 0, 0, 0);
+    });
+    c.addEventListener("mouseleave", function () {
+      pushGuiEvent(EVT_LEAVE, id, 0, 0, 0, 0);
+    });
+    stageEl.appendChild(c);
+    return c;
+  }
+
+  function destroyFrame(id) {
+    var c = framesById.get(id);
+    if (c) { if (c.parentNode) c.parentNode.removeChild(c); framesById.delete(id); }
+    if (focusedId === id) {
+      var it = framesById.keys().next();
+      focusedId = it.done ? 0 : it.value;
+    }
+  }
 
   /* Map keydown to the key-code integer the mred backend expects. */
   function keyCode(e) {
@@ -135,18 +167,18 @@
 
   window.addEventListener("keydown", function (e) {
     var k = keyCode(e);
-    if (k === 0) return;
-    pushGuiEvent(EVT_KEY_DOWN, 0, 0, k, modBits(e));
+    if (k === 0 || !focusedId) return;
+    pushGuiEvent(EVT_KEY_DOWN, focusedId, 0, 0, k, modBits(e));
     e.preventDefault();
   });
 
-  /* ---- blit-out: mirror the frame surface onto #frame ------------- */
-  function blit(w, h, pixels) {
-    if (frameCanvas.width !== w || frameCanvas.height !== h) {
-      frameCanvas.width = w;
-      frameCanvas.height = h;
-    }
-    frameCtx.putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
+  /* ---- blit-out: render a window's surface onto its own canvas ---- */
+  function blit(id, w, h, pixels) {
+    if (!(w > 0 && h > 0)) return;
+    var c = ensureFrame(id);
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
   }
 
   /* ---- worker lifecycle ------------------------------------------- */
@@ -154,6 +186,9 @@
     if (pollHandle) { cancelAnimationFrame(pollHandle); pollHandle = 0; }
     if (worker) { try { worker.terminate(); } catch (_) {} worker = null; }
     ioReady = false; HEAP32 = null; gui = null;
+    framesById.forEach(function (c) { if (c.parentNode) c.parentNode.removeChild(c); });
+    framesById.clear();
+    focusedId = 0;
     runBtn.disabled = false;
   }
 
@@ -183,8 +218,12 @@
         return;
       }
       case "canvas": {
-        blit(msg.w, msg.h, msg.pixels);
+        blit(msg.id || 0, msg.w, msg.h, msg.pixels);
         if (statusEl.textContent === "DrRacket starting…") setStatus("Running");
+        return;
+      }
+      case "canvas-destroy": {
+        destroyFrame(msg.id);
         return;
       }
       case "abort": {

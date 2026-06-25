@@ -83,15 +83,23 @@
 }
 
 {
-  extern int wasm_canvas_blit(int, int, const void *);
+  extern int wasm_canvas_blit(int, int, int, const void *);
   Sforeign_symbol("wasm_canvas_blit", (void *)wasm_canvas_blit);
 }
 
 {
-  extern int wasm_canvas_blit_bgra(int, int, const void *);
-  extern int wasm_canvas_blit_argb(int, int, const void *);
+  extern int wasm_canvas_blit_bgra(int, int, int, const void *);
+  extern int wasm_canvas_blit_argb(int, int, int, const void *);
   Sforeign_symbol("wasm_canvas_blit_bgra", (void *)wasm_canvas_blit_bgra);
   Sforeign_symbol("wasm_canvas_blit_argb", (void *)wasm_canvas_blit_argb);
+}
+
+{
+  /* Canvas id allocation + teardown -- see racket/src/cs/c/wasm_canvas.c. */
+  extern int wasm_canvas_alloc_id(void);
+  extern int wasm_canvas_destroy(int);
+  Sforeign_symbol("wasm_canvas_alloc_id", (void *)wasm_canvas_alloc_id);
+  Sforeign_symbol("wasm_canvas_destroy", (void *)wasm_canvas_destroy);
 }
 
 {

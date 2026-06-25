@@ -3,11 +3,12 @@
 ;;
 ;; A top-level window. There is no native window: a frame owns a logical
 ;; client area and a "frame id" that the event pump uses to route the page's
-;; input records here (register-gui-window!). Native window operations
-;; (resize/iconize/title/icon/decorations) reduce to state tracking; per-frame
-;; <canvas> management on the page is deferred (the canvas's blit already
-;; postMessages pixels to the page). The client-size-mixin behaviour is folded
-;; in directly. handle-gui-event routes to the single child (the canvas).
+;; input records here (register-gui-window!). That id doubles as the frame's
+;; CANVAS id: do-repaint blits the whole client area to the page <canvas> for
+;; that id, and direct-show #f tears it down via canvas-destroy, so each frame
+;; gets its own page canvas. Native window operations (resize/iconize/title/
+;; icon/decorations) reduce to state tracking. The client-size-mixin behaviour
+;; is folded in directly. handle-gui-event routes to the single child.
 
 (require racket/class
          racket/draw
@@ -133,7 +134,9 @@
           (begin (hash-set! all-frames this #t) (register-gui-window! frame-id this)
                  (window-shown! this))
           (begin (hash-remove! all-frames this) (unregister-gui-window! frame-id)
-                 (window-hidden! this)))
+                 (window-hidden! this)
+                 ;; drop this frame's <canvas> on the page (id == frame-id).
+                 (canvas-destroy frame-id)))
       (super direct-show on?)
       (when on? (request-repaint)))
 
@@ -322,7 +325,8 @@
       (for ([e (in-list (reverse menu-stack))]) (draw-popup dc e))
       (define px (make-bytes (* w h 4)))
       (send target get-argb-pixels 0 0 w h px)
-      (canvas-blit-argb w h px)
+      ;; blit to this frame's own page <canvas> (id == frame-id).
+      (canvas-blit-argb frame-id w h px)
       (send dc set-bitmap #f))
 
     (define (draw-menu-bar dc w)

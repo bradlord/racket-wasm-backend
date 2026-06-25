@@ -52,36 +52,34 @@
 (define MOD-ALT     4)
 (define MOD-META    8)
 
-;; frame-id -> wx object (a frame%, which routes to its canvas).
+;; frame-id -> wx object (a frame%, which routes to its canvas). A frame's
+;; id doubles as its CANVAS id (the page keys its id->element map on it and
+;; tags that canvas's input events with it), so we draw it from the shared
+;; global allocator (canvas-alloc-id) -- the same space web-repl canvas-
+;; windows use, so the two never collide. Ids are >= 1; 0 is the ephemeral
+;; REPL path.
 (define windows (make-hasheqv))
-(define frame-id-counter 0)
-(define (next-frame-id)
-  (set! frame-id-counter (add1 frame-id-counter))
-  frame-id-counter)
+(define (next-frame-id) (canvas-alloc-id))
 (define (register-gui-window! id wx) (hash-set! windows id wx))
 (define (unregister-gui-window! id) (hash-remove! windows id))
 
-;; z-order of shown top-level windows (most-recently-shown first). The page has
-;; a SINGLE <canvas>, so only the topmost shown window is displayed; and if that
-;; window is modal (a dialog%, dialog-level > 0) it also GRABS all input,
-;; regardless of the frame id the page tagged events with. That is what lets a
-;; modal dialog -- which is a second frame% with its own id -- take over the
-;; canvas and round-trip clicks without per-frame canvases or a frame-tagged
-;; blit. (Carrying a frame id through the blit -- the "real" multi-window path --
-;; is a C-side change; deferred. Stacked modals work; truly concurrent non-modal
-;; frames don't -- only the top one is visible.)
+;; z-order of shown top-level windows (most-recently-shown first). Each shown
+;; window now owns its OWN page <canvas> (keyed by frame id; see
+;; next-frame-id), so every shown window paints -- window-can-blit? is true for
+;; all of them. The z-order is still tracked for INPUT routing: if the topmost
+;; shown window is modal (a dialog%, dialog-level > 0) it GRABS all input,
+;; regardless of which canvas's id the page tagged the event with. That is what
+;; lets a modal dialog take over and round-trip clicks. (Truly concurrent non-
+;; modal frames now render side by side, each on its own canvas; the page owns
+;; their placement.)
 (define shown-windows '())
 (define (window-shown! wx)
   (set! shown-windows (cons wx (remq wx shown-windows))))
 (define (window-hidden! wx)
-  (set! shown-windows (remq wx shown-windows))
-  ;; whoever is now on top reclaims the canvas
-  (let ([t (and (pair? shown-windows) (car shown-windows))])
-    (when t (send t request-repaint))))
+  (set! shown-windows (remq wx shown-windows)))
 (define (display-top-window) (and (pair? shown-windows) (car shown-windows)))
-;; Only the topmost shown window may paint to the (single) canvas.
-(define (window-can-blit? wx)
-  (let ([t (display-top-window)]) (or (not t) (eq? t wx))))
+;; Each shown window owns its own canvas, so any window may paint.
+(define (window-can-blit? wx) #t)
 
 ;; Scratch buffer for a batch of records (reused across drains).
 (define MAX-BATCH 64)

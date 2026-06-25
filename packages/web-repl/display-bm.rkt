@@ -24,6 +24,8 @@
   ;; get-argb-pixels writes A R G B, non-premultiplied -- exactly the
   ;; layout canvas-blit-argb rotates to RGBA for putImageData.
   (send bm get-argb-pixels 0 0 w h px)
-  (when (negative? (canvas-blit-argb w h px))
+  ;; id 0 -- ephemeral: the page appends a fresh <canvas> per call, so N
+  ;; (display-bm ...) calls read back as N inline images.
+  (when (negative? (canvas-blit-argb 0 w h px))
     (eprintf "display-bm: no canvas surface (not running in the browser shell?)\n"))
   (void))

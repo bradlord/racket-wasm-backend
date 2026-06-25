@@ -10,6 +10,8 @@
 (require ffi/unsafe/vm)
 
 (provide canvas-blit-argb
+         canvas-alloc-id
+         canvas-destroy
          gui-events-poll-raw
          GUI-EVT-FIELDS)
 
@@ -25,12 +27,22 @@
       (apply cached args))))
 
 ;; Copy a straight-ARGB pixel buffer (racket/draw `get-argb-pixels` order)
-;; out to the page; the page putImageData's it onto a <canvas>. Returns 0 in
-;; the browser worker, -1 where self.postMessage is unavailable (node).
-;; (Frame-tagged / dirty-rect blitting is a Step-4 extension of the C side;
-;;  the first milestone uses the single-surface blit.)
+;; out to the page, tagged with a canvas id; the page putImageData's it onto
+;; the <canvas> for that id (creating it on first blit). Returns 0 in the
+;; browser worker, -1 where self.postMessage is unavailable (node). A frame's
+;; canvas id is its frame-id (see queue.rkt next-frame-id); id 0 is the
+;; ephemeral REPL path.
 (define-foreign canvas-blit-argb
-  (foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int))
+  (foreign-procedure "wasm_canvas_blit_argb" (int int int u8*) int))
+
+;; Allocate a fresh global canvas/window id (>= 1). Shared with web-repl so
+;; ids never collide in the page's id->element map.
+(define-foreign canvas-alloc-id
+  (foreign-procedure "wasm_canvas_alloc_id" () int))
+
+;; Tell the page to drop the <canvas> for `id` (window closed).
+(define-foreign canvas-destroy
+  (foreign-procedure "wasm_canvas_destroy" (int) int))
 
 ;; Must match GUI_EVT_FIELDS in racket/src/cs/c/wasm_gui_events.c.
 (define GUI-EVT-FIELDS 6)

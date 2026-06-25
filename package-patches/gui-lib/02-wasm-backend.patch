@@ -1,6 +1,6 @@
 diff --git a/gui-lib/mred/private/wx/wasm/base.rkt b/gui-lib/mred/private/wx/wasm/base.rkt
 new file mode 100644
-index 00000000..809c63b9
+index 0000000..809c63b
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/base.rkt
 @@ -0,0 +1,33 @@
@@ -39,7 +39,7 @@ index 00000000..809c63b9
 +(define (gtk->wx gtk) #f)
 diff --git a/gui-lib/mred/private/wx/wasm/canvas.rkt b/gui-lib/mred/private/wx/wasm/canvas.rkt
 new file mode 100644
-index 00000000..ca56882d
+index 0000000..839ca9c
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/canvas.rkt
 @@ -0,0 +1,292 @@
@@ -337,7 +337,7 @@ index 00000000..ca56882d
 +      (for ([c (in-list children)]) (send c notify-children-top-realize)))))
 diff --git a/gui-lib/mred/private/wx/wasm/control.rkt b/gui-lib/mred/private/wx/wasm/control.rkt
 new file mode 100644
-index 00000000..cf432b90
+index 0000000..cf432b9
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/control.rkt
 @@ -0,0 +1,215 @@
@@ -558,7 +558,7 @@ index 00000000..cf432b90
 +      (send dc draw-text (get-label) x (+ y (/ (- h th) 2))))))
 diff --git a/gui-lib/mred/private/wx/wasm/controls-extra.rkt b/gui-lib/mred/private/wx/wasm/controls-extra.rkt
 new file mode 100644
-index 00000000..279cb837
+index 0000000..279cb83
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/controls-extra.rkt
 @@ -0,0 +1,490 @@
@@ -1054,10 +1054,10 @@ index 00000000..279cb837
 +      (super paint-self dc dx (+ dy tab-h)))))
 diff --git a/gui-lib/mred/private/wx/wasm/dc.rkt b/gui-lib/mred/private/wx/wasm/dc.rkt
 new file mode 100644
-index 00000000..5815d10d
+index 0000000..859ee7d
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/dc.rkt
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,107 @@
 +#lang racket/base
 +;; dc.rkt -- the wasm backend drawing context.
 +;;
@@ -1074,6 +1074,19 @@ index 00000000..5815d10d
 +         racket/draw/unsafe/cairo
 +         "../common/backing-dc.rkt"
 +         "ffi.rkt")
++
++;; Walk up from a canvas to its top-level frame and return that frame's canvas
++;; id, so a standalone blit lands on the frame's own page <canvas>. Falls back
++;; to 0 (the ephemeral append path) when no frame is reachable.
++(define (canvas->canvas-id canvas)
++  (let loop ([w canvas])
++    (cond
++      [(not w) 0]
++      [(method-in-interface? 'get-frame-id (object-interface w))
++       (send w get-frame-id)]
++      [(method-in-interface? 'get-parent (object-interface w))
++       (loop (send w get-parent))]
++      [else 0])))
 +
 +(provide (protect-out dc%
 +                      do-backing-flush
@@ -1123,7 +1136,7 @@ index 00000000..5815d10d
 +          (cairo_destroy cr)
 +          (define px (make-bytes (* w h 4)))
 +          (send target get-argb-pixels 0 0 w h px)
-+          (canvas-blit-argb w h px)
++          (canvas-blit-argb (canvas->canvas-id canvas) w h px)
 +          (send target release-bitmap-storage))))
 +
 +;; Composite a canvas's backing store onto ANOTHER dc's surface (the frame's
@@ -1154,7 +1167,7 @@ index 00000000..5815d10d
 +          (cairo_destroy cr))))
 diff --git a/gui-lib/mred/private/wx/wasm/dialog.rkt b/gui-lib/mred/private/wx/wasm/dialog.rkt
 new file mode 100644
-index 00000000..cab30978
+index 0000000..cab3097
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/dialog.rkt
 @@ -0,0 +1,26 @@
@@ -1186,10 +1199,10 @@ index 00000000..cab30978
 +    (super-new [is-dialog? #t])))
 diff --git a/gui-lib/mred/private/wx/wasm/ffi.rkt b/gui-lib/mred/private/wx/wasm/ffi.rkt
 new file mode 100644
-index 00000000..b9bb3db2
+index 0000000..bbdf0c2
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/ffi.rkt
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,54 @@
 +#lang racket/base
 +;; ffi.rkt -- the wasm backend's foreign entry points.
 +;;
@@ -1202,6 +1215,8 @@ index 00000000..b9bb3db2
 +(require ffi/unsafe/vm)
 +
 +(provide canvas-blit-argb
++         canvas-alloc-id
++         canvas-destroy
 +         gui-events-poll-raw
 +         GUI-EVT-FIELDS)
 +
@@ -1217,12 +1232,22 @@ index 00000000..b9bb3db2
 +      (apply cached args))))
 +
 +;; Copy a straight-ARGB pixel buffer (racket/draw `get-argb-pixels` order)
-+;; out to the page; the page putImageData's it onto a <canvas>. Returns 0 in
-+;; the browser worker, -1 where self.postMessage is unavailable (node).
-+;; (Frame-tagged / dirty-rect blitting is a Step-4 extension of the C side;
-+;;  the first milestone uses the single-surface blit.)
++;; out to the page, tagged with a canvas id; the page putImageData's it onto
++;; the <canvas> for that id (creating it on first blit). Returns 0 in the
++;; browser worker, -1 where self.postMessage is unavailable (node). A frame's
++;; canvas id is its frame-id (see queue.rkt next-frame-id); id 0 is the
++;; ephemeral REPL path.
 +(define-foreign canvas-blit-argb
-+  (foreign-procedure "wasm_canvas_blit_argb" (int int u8*) int))
++  (foreign-procedure "wasm_canvas_blit_argb" (int int int u8*) int))
++
++;; Allocate a fresh global canvas/window id (>= 1). Shared with web-repl so
++;; ids never collide in the page's id->element map.
++(define-foreign canvas-alloc-id
++  (foreign-procedure "wasm_canvas_alloc_id" () int))
++
++;; Tell the page to drop the <canvas> for `id` (window closed).
++(define-foreign canvas-destroy
++  (foreign-procedure "wasm_canvas_destroy" (int) int))
 +
 +;; Must match GUI_EVT_FIELDS in racket/src/cs/c/wasm_gui_events.c.
 +(define GUI-EVT-FIELDS 6)
@@ -1234,20 +1259,21 @@ index 00000000..b9bb3db2
 +  (foreign-procedure "wasm_gui_events_poll" (u8* int) int))
 diff --git a/gui-lib/mred/private/wx/wasm/frame.rkt b/gui-lib/mred/private/wx/wasm/frame.rkt
 new file mode 100644
-index 00000000..c787a90e
+index 0000000..5eead3a
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/frame.rkt
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,390 @@
 +#lang racket/base
 +;; frame.rkt -- the wasm backend frame% (lean port of gtk/frame.rkt).
 +;;
 +;; A top-level window. There is no native window: a frame owns a logical
 +;; client area and a "frame id" that the event pump uses to route the page's
-+;; input records here (register-gui-window!). Native window operations
-+;; (resize/iconize/title/icon/decorations) reduce to state tracking; per-frame
-+;; <canvas> management on the page is deferred (the canvas's blit already
-+;; postMessages pixels to the page). The client-size-mixin behaviour is folded
-+;; in directly. handle-gui-event routes to the single child (the canvas).
++;; input records here (register-gui-window!). That id doubles as the frame's
++;; CANVAS id: do-repaint blits the whole client area to the page <canvas> for
++;; that id, and direct-show #f tears it down via canvas-destroy, so each frame
++;; gets its own page canvas. Native window operations (resize/iconize/title/
++;; icon/decorations) reduce to state tracking. The client-size-mixin behaviour
++;; is folded in directly. handle-gui-event routes to the single child.
 +
 +(require racket/class
 +         racket/draw
@@ -1373,7 +1399,9 @@ index 00000000..c787a90e
 +          (begin (hash-set! all-frames this #t) (register-gui-window! frame-id this)
 +                 (window-shown! this))
 +          (begin (hash-remove! all-frames this) (unregister-gui-window! frame-id)
-+                 (window-hidden! this)))
++                 (window-hidden! this)
++                 ;; drop this frame's <canvas> on the page (id == frame-id).
++                 (canvas-destroy frame-id)))
 +      (super direct-show on?)
 +      (when on? (request-repaint)))
 +
@@ -1562,7 +1590,8 @@ index 00000000..c787a90e
 +      (for ([e (in-list (reverse menu-stack))]) (draw-popup dc e))
 +      (define px (make-bytes (* w h 4)))
 +      (send target get-argb-pixels 0 0 w h px)
-+      (canvas-blit-argb w h px)
++      ;; blit to this frame's own page <canvas> (id == frame-id).
++      (canvas-blit-argb frame-id w h px)
 +      (send dc set-bitmap #f))
 +
 +    (define (draw-menu-bar dc w)
@@ -1626,7 +1655,7 @@ index 00000000..c787a90e
 +                              (when (is-shown?) (repaint))))))))
 diff --git a/gui-lib/mred/private/wx/wasm/init.rkt b/gui-lib/mred/private/wx/wasm/init.rkt
 new file mode 100644
-index 00000000..42d6119e
+index 0000000..42d6119
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/init.rkt
 @@ -0,0 +1,6 @@
@@ -1638,7 +1667,7 @@ index 00000000..42d6119e
 +(define pump-thread (wasm-start-event-pump))
 diff --git a/gui-lib/mred/private/wx/wasm/menu.rkt b/gui-lib/mred/private/wx/wasm/menu.rkt
 new file mode 100644
-index 00000000..c52bbf33
+index 0000000..c52bbf3
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/menu.rkt
 @@ -0,0 +1,230 @@
@@ -1874,7 +1903,7 @@ index 00000000..c52bbf33
 +    (define/public (count) (length entries))))
 diff --git a/gui-lib/mred/private/wx/wasm/panel.rkt b/gui-lib/mred/private/wx/wasm/panel.rkt
 new file mode 100644
-index 00000000..ba1a9043
+index 0000000..ba1a904
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/panel.rkt
 @@ -0,0 +1,83 @@
@@ -1963,7 +1992,7 @@ index 00000000..ba1a9043
 +    (set-size 0 0 1 1)))
 diff --git a/gui-lib/mred/private/wx/wasm/platform.rkt b/gui-lib/mred/private/wx/wasm/platform.rkt
 new file mode 100644
-index 00000000..e7e53c05
+index 0000000..e7e53c0
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/platform.rkt
 @@ -0,0 +1,45 @@
@@ -2014,7 +2043,7 @@ index 00000000..e7e53c05
 +   tab-panel-available?))
 diff --git a/gui-lib/mred/private/wx/wasm/procs.rkt b/gui-lib/mred/private/wx/wasm/procs.rkt
 new file mode 100644
-index 00000000..ac185dcf
+index 0000000..ac185dc
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/procs.rkt
 @@ -0,0 +1,127 @@
@@ -2147,10 +2176,10 @@ index 00000000..ac185dcf
 +(define (file-selector . _) #f)
 diff --git a/gui-lib/mred/private/wx/wasm/queue.rkt b/gui-lib/mred/private/wx/wasm/queue.rkt
 new file mode 100644
-index 00000000..1685c770
+index 0000000..eee917b
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/queue.rkt
-@@ -0,0 +1,136 @@
+@@ -0,0 +1,130 @@
 +#lang racket/base
 +;; queue.rkt -- the wasm backend event pump.
 +;;
@@ -2205,36 +2234,34 @@ index 00000000..1685c770
 +(define MOD-ALT     4)
 +(define MOD-META    8)
 +
-+;; frame-id -> wx object (a frame%, which routes to its canvas).
++;; frame-id -> wx object (a frame%, which routes to its canvas). A frame's
++;; id doubles as its CANVAS id (the page keys its id->element map on it and
++;; tags that canvas's input events with it), so we draw it from the shared
++;; global allocator (canvas-alloc-id) -- the same space web-repl canvas-
++;; windows use, so the two never collide. Ids are >= 1; 0 is the ephemeral
++;; REPL path.
 +(define windows (make-hasheqv))
-+(define frame-id-counter 0)
-+(define (next-frame-id)
-+  (set! frame-id-counter (add1 frame-id-counter))
-+  frame-id-counter)
++(define (next-frame-id) (canvas-alloc-id))
 +(define (register-gui-window! id wx) (hash-set! windows id wx))
 +(define (unregister-gui-window! id) (hash-remove! windows id))
 +
-+;; z-order of shown top-level windows (most-recently-shown first). The page has
-+;; a SINGLE <canvas>, so only the topmost shown window is displayed; and if that
-+;; window is modal (a dialog%, dialog-level > 0) it also GRABS all input,
-+;; regardless of the frame id the page tagged events with. That is what lets a
-+;; modal dialog -- which is a second frame% with its own id -- take over the
-+;; canvas and round-trip clicks without per-frame canvases or a frame-tagged
-+;; blit. (Carrying a frame id through the blit -- the "real" multi-window path --
-+;; is a C-side change; deferred. Stacked modals work; truly concurrent non-modal
-+;; frames don't -- only the top one is visible.)
++;; z-order of shown top-level windows (most-recently-shown first). Each shown
++;; window now owns its OWN page <canvas> (keyed by frame id; see
++;; next-frame-id), so every shown window paints -- window-can-blit? is true for
++;; all of them. The z-order is still tracked for INPUT routing: if the topmost
++;; shown window is modal (a dialog%, dialog-level > 0) it GRABS all input,
++;; regardless of which canvas's id the page tagged the event with. That is what
++;; lets a modal dialog take over and round-trip clicks. (Truly concurrent non-
++;; modal frames now render side by side, each on its own canvas; the page owns
++;; their placement.)
 +(define shown-windows '())
 +(define (window-shown! wx)
 +  (set! shown-windows (cons wx (remq wx shown-windows))))
 +(define (window-hidden! wx)
-+  (set! shown-windows (remq wx shown-windows))
-+  ;; whoever is now on top reclaims the canvas
-+  (let ([t (and (pair? shown-windows) (car shown-windows))])
-+    (when t (send t request-repaint))))
++  (set! shown-windows (remq wx shown-windows)))
 +(define (display-top-window) (and (pair? shown-windows) (car shown-windows)))
-+;; Only the topmost shown window may paint to the (single) canvas.
-+(define (window-can-blit? wx)
-+  (let ([t (display-top-window)]) (or (not t) (eq? t wx))))
++;; Each shown window owns its own canvas, so any window may paint.
++(define (window-can-blit? wx) #t)
 +
 +;; Scratch buffer for a batch of records (reused across drains).
 +(define MAX-BATCH 64)
@@ -2257,16 +2284,12 @@ index 00000000..1685c770
 +        (define y     (rec-field r 3))
 +        (define k     (rec-field r 4))
 +        (define mods  (rec-field r 5))
-+        ;; A modal window on top grabs input; otherwise route by the tagged id,
-+        ;; falling back to the topmost shown window when the id is not in the
-+        ;; registry (e.g. DrRacket, which creates many frames before the main
-+        ;; editor window, so the editor's frame-id is not 1 even though the page
-+        ;; always tags events with FRAME_ID=1).
++        ;; A modal window on top grabs input; otherwise route by the tagged id.
 +        (define top (display-top-window))
 +        (define wx
 +          (if (and top (positive? (send top get-dialog-level)))
 +              top
-+              (or (hash-ref windows id #f) top)))
++              (hash-ref windows id #f)))
 +        (when wx
 +          (define es (send wx get-eventspace))
 +          (queue-event es
@@ -2289,7 +2312,7 @@ index 00000000..1685c770
 +       (loop)))))
 diff --git a/gui-lib/mred/private/wx/wasm/stubs.rkt b/gui-lib/mred/private/wx/wasm/stubs.rkt
 new file mode 100644
-index 00000000..2a57f7ae
+index 0000000..2a57f7a
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/stubs.rkt
 @@ -0,0 +1,67 @@
@@ -2362,7 +2385,7 @@ index 00000000..2a57f7ae
 +    (define/public (ok?) #t)))
 diff --git a/gui-lib/mred/private/wx/wasm/window.rkt b/gui-lib/mred/private/wx/wasm/window.rkt
 new file mode 100644
-index 00000000..14f872b4
+index 0000000..14f872b
 --- /dev/null
 +++ b/gui-lib/mred/private/wx/wasm/window.rkt
 @@ -0,0 +1,270 @@

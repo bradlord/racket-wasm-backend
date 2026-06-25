@@ -2464,24 +2464,43 @@ Available primitives today (both reachable from Racket via the
 - `int wasm_http_get(const char *url, void *out_buf, int out_buf_len)`
   -- synchronous HTTP GET from the runtime worker; status as int32
   followed by body bytes.
-- `int wasm_canvas_blit(int w, int h, const void *rgba)` -- copy a
+- `int wasm_canvas_blit(int id, int w, int h, const void *rgba)` -- copy a
   `w*h*4` RGBA8888 buffer out of the WASM heap and `postMessage` it
   to the page; the canvas surface (`ide.js` today) renders it
   via `putImageData`. Returns 0 in a Worker, -1 in node / wherever
   `self.postMessage` is unavailable. This is the Tier 1 pixel-output
-  path for everything from manual byte-pushing to a future
-  `racket/draw` Cairo backend. The `_argb` / `_bgra` variants accept
+  path for everything from manual byte-pushing to the `racket/draw`
+  Cairo backend. The `_argb` / `_bgra` variants accept
   `racket/draw get-argb-pixels` output and Cairo `ARGB32` memory order
   respectively, rotating channels to RGBA during the copy out.
 
-  The page renders `{ type:"canvas" }` messages by appending a *fresh*
-  `<canvas>` into the `#output` pane per blit (`ide.js`'s
-  `appendCanvas`), so a run that draws N bitmaps reads back as N images
-  interleaved with its text output -- no single global canvas. The
-  `web-repl` collection wraps this: `(require web-repl/display-bm)`
-  then `(display-bm bm)` reads a `bitmap%` with `get-argb-pixels` and
-  calls `wasm_canvas_blit_argb`, dropping one image into the output per
-  call.
+  **Canvas id contract.** The leading `id` selects the destination canvas,
+  so output can address *multiple* canvases:
+
+  - `id == 0` -- *ephemeral*: the page appends a **fresh** `<canvas>` into
+    the `#output` pane per blit (`ide.js`'s `appendCanvas`), so a run that
+    draws N bitmaps reads back as N inline images. This is the REPL pict /
+    bitmap-printing path.
+  - `id > 0` -- *addressable*: the page creates the `<canvas>` on the first
+    blit for that id, then reuses + updates it in place. Each GUI window (a
+    `frame%`, see the GUI backend section) and each `web-repl` canvas-window
+    owns one such id. Ids come from a single global counter,
+    `wasm_canvas_alloc_id()` (shared by the GUI backend and `web-repl`, so
+    the two never collide in the page's id->element map); tear a canvas down
+    with `wasm_canvas_destroy(id)`, which posts `{ type:"canvas-destroy", id }`.
+
+  For GUI windows the id doubles as the event frame-id: each id'd `<canvas>`
+  carries its own input listeners that tag events with that id, so the page
+  owns where the windows sit (page-managed stacking) while the backend routes
+  input per window.
+
+  The `web-repl` collection wraps the ephemeral path: `(require
+  web-repl/display-bm)` then `(display-bm bm)` reads a `bitmap%` with
+  `get-argb-pixels` and calls `wasm_canvas_blit_argb` with id 0. For a
+  persistent, addressable canvas use `web-repl/window`:
+  `(open-canvas-window w h)` allocates an id, hands back a `bitmap-dc%` to
+  draw into, and `(canvas-window-flush! win)` updates that one canvas in
+  place; `(close-canvas-window win)` removes it.
   (Companion helpers in the same collection: `web-repl/canvas`,
   `web-repl/dom`, `web-repl/http` -- see "A `web-repl` helper
   collection" below.)
@@ -2606,12 +2625,17 @@ recipe to give users of the WASM REPL.
 ### Browser GUI backend (mred) -- in progress
 
 A `wx/wasm/` backend for `racket/gui` (mred) is being added to render to
-an HTML canvas: canvas-only (one `<canvas>` per top-level frame, every
-widget drawn by Racket via `racket/draw` onto a cairo image surface and
-blitted out with `wasm_canvas_blit_bgra`; editors/snips/picts draw through
-`dc<%>` so they come for free). The runtime-level foundation is wired into
-the delta; the mred backend itself + page event wiring are WIP. See
-`gui-backend/README.md`.
+HTML canvases: one `<canvas>` per top-level `frame%`, every widget drawn
+by Racket via `racket/draw` onto a cairo image surface and blitted out with
+`wasm_canvas_blit_argb` (editors/snips/picts draw through `dc<%>` so they
+come for free). Each frame's blit is tagged with its frame-id (= canvas id;
+see the canvas id contract above), so the page renders each window onto its
+own addressable canvas, created on first blit and removed via
+`wasm_canvas_destroy` when the frame hides. The page owns window placement
+(page-managed stacking); `wx/wasm/queue.rkt` keeps a z-order only to decide
+modal **input** grab, not which canvas paints. The runtime-level foundation
+is wired into the delta; the mred backend itself + page event wiring are WIP.
+See `gui-backend/README.md`.
 
 Page->worker GUI input rides a third SAB ring, the mirror of the stdin
 ring: **`racket/src/cs/c/wasm_gui_events.c`** holds a fixed-width record

@@ -15,6 +15,19 @@
          "../common/backing-dc.rkt"
          "ffi.rkt")
 
+;; Walk up from a canvas to its top-level frame and return that frame's canvas
+;; id, so a standalone blit lands on the frame's own page <canvas>. Falls back
+;; to 0 (the ephemeral append path) when no frame is reachable.
+(define (canvas->canvas-id canvas)
+  (let loop ([w canvas])
+    (cond
+      [(not w) 0]
+      [(method-in-interface? 'get-frame-id (object-interface w))
+       (send w get-frame-id)]
+      [(method-in-interface? 'get-parent (object-interface w))
+       (loop (send w get-parent))]
+      [else 0])))
+
 (provide (protect-out dc%
                       do-backing-flush
                       paint-backing-onto))
@@ -63,7 +76,7 @@
           (cairo_destroy cr)
           (define px (make-bytes (* w h 4)))
           (send target get-argb-pixels 0 0 w h px)
-          (canvas-blit-argb w h px)
+          (canvas-blit-argb (canvas->canvas-id canvas) w h px)
           (send target release-bitmap-storage))))
 
 ;; Composite a canvas's backing store onto ANOTHER dc's surface (the frame's
