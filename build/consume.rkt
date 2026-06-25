@@ -159,7 +159,7 @@
                      "-MCR" (format "~a:~a" (path->string hostzo) (path->string xtgt))
                      "--cross-compiler" target-machine (path->string cc-dir)
                      "-l-" "raco" "setup"
-                     "--no-docs" "--no-launcher" "--no-foreign-libs" "--no-pkg-deps"
+                     "--no-docs" "--no-launcher" "--no-foreign-libs" "--no-pkg-deps" "--no-install" "--no-post-install"
                      "--pkgs")
                names)))
 
@@ -490,11 +490,26 @@
   (for ([r (in-list (append pkg-names
                             (map (lambda (d) (path->string (file-name-from-path (real d))))
                                  local-pkgs)))])
-    (unless (and (member r new-names)
-                 (for/or ([p (in-directory (build-path ap r))])
-                   (and (file-exists? p) (regexp-match? #rx"\\.zo$" (path->string p)))))
+    (unless (member r new-names)
       (error 'cross-install
-             "requested package ~a did not install/cross-compile (no tpb32l .zo) -- see output above" r)))
+             "requested package ~a did not install -- see output above" r))
+    (define pkg-dir (build-path ap r))
+    (define has-zo?
+      (for/or ([p (in-directory pkg-dir)])
+        (and (file-exists? p) (regexp-match? #rx"\\.zo$" (path->string p)))))
+    ;; A meta/distribution package (e.g. rhombus-main-distribution) ships only an
+    ;; info.rkt -- there's no target source to compile, so it correctly yields no
+    ;; tpb32l .zo (info.rkt compiles to the host shadow, read by host setup, not
+    ;; the addon tree). Only flag a package that HAS compilable source yet produced
+    ;; no bytecode -- that's the genuine half-built-payload failure.
+    (define has-src?
+      (for/or ([p (in-directory pkg-dir)])
+        (and (file-exists? p)
+             (regexp-match? #rx"\\.(rkt|ss)$" (path->string p))
+             (not (equal? "info.rkt" (path->string (file-name-from-path p)))))))
+    (when (and has-src? (not has-zo?))
+      (error 'cross-install
+             "requested package ~a did not cross-compile (no tpb32l .zo) -- see output above" r)))
   ;; --- merge collection links + extend share.data -------------------------
   (define links-additions
     (for/list ([np (in-list new-pkgs)]) (pkg-link-entry (cdr np) (car np))))
