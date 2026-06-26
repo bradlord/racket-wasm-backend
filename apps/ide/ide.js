@@ -48,7 +48,55 @@
 
   /* ---- DOM hooks --------------------------------------------------- */
 
-  var editor       = document.getElementById("editor");
+  /* The Definitions editor is a CodeMirror 5 instance overlaid on the
+   * <textarea id="editor">. CM5 has no dedicated racket mode; `scheme`
+   * covers all the shared s-expression keywords (define, lambda, let,
+   * quote, ...) and renders Racket source faithfully. The mode is chosen
+   * from the #lang line (see detectMode below): lispy #langs use scheme,
+   * non-lisp #langs (rhombus, datalog) fall back to text/plain. The REPL
+   * input (#input) deliberately stays a plain textarea -- it's a single
+   * submission line, not an editing surface. */
+  var editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
+    mode: "scheme",
+    lineWrapping: false,
+    indentUnit: 2,
+    tabSize: 2,
+    indentWithTabs: false,
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    extraKeys: {
+      "Cmd-Enter":  function () { restart(); },
+      "Ctrl-Enter": function () { restart(); },
+      "Tab":        function (cm) { cm.replaceSelection("  ", "end"); }
+    }
+  });
+
+  /* #lang -> CM mode. scheme mode handles every s-expression #lang; the
+   * entries below are the non-lisp #langs the shipped examples use, plus
+   * the common lispy ones made explicit for clarity. An unknown #lang
+   * defaults to scheme (most Racket #langs are s-expr based). */
+  var LANG_MODE = {
+    "racket": "scheme", "racket/base": "scheme", "typed/racket": "scheme",
+    "typed/racket/base": "scheme", "lazy": "scheme", "r5rs": "scheme",
+    "r6rs": "scheme", "scheme": "scheme", "scheme/base": "scheme",
+    "at-exp": "scheme", "scribble": "text/plain",
+    "rhombus": "text/plain", "rhombus/non-space": "text/plain",
+    "datalog": "text/plain", "s-exp": "scheme"
+  };
+
+  function detectMode() {
+    var val = editor.getValue();
+    var m = /^[\s\n]*#lang\s+(\S+)/m.exec(val);
+    var lang = m ? m[1] : "racket";
+    var mode = LANG_MODE[lang] != null ? LANG_MODE[lang] : "scheme";
+    if (editor.getOption("mode") !== mode) editor.setOption("mode", mode);
+  }
+  var modeDebounce = 0;
+  editor.on("change", function () {
+    if (modeDebounce) clearTimeout(modeDebounce);
+    modeDebounce = setTimeout(detectMode, 300);
+  });
+
   var exampleSel   = document.getElementById("example");
   var runBtn       = document.getElementById("run");
   var stopBtn      = document.getElementById("stop");
@@ -241,7 +289,7 @@
       inputRow.classList.add("waiting");
       inputRow.classList.remove("busy");
       inputState.textContent = "⌨ waiting for input";
-      if (document.activeElement !== editor && document.activeElement !== inputArea) {
+      if (!editor.hasFocus() && document.activeElement !== inputArea) {
         inputArea.focus();
       }
     } else {
@@ -323,7 +371,7 @@
     worker.postMessage({
       type: "init",
       argv: [],
-      files: { "/tmp/main.rkt": editor.value },
+      files: { "/tmp/main.rkt": editor.getValue() },
     });
   }
 
@@ -491,9 +539,11 @@
   function loadExample(idx) {
     var ex = EXAMPLES[idx];
     if (!ex) return;
-    editor.value = ex.code;
+    editor.setValue(ex.code);
+    editor.clearHistory();
     loadedCode = ex.code;
     exampleSel.selectedIndex = idx;
+    detectMode();
   }
 
   EXAMPLES.forEach(function (ex, i) {
@@ -505,7 +555,7 @@
 
   exampleSel.addEventListener("change", function () {
     var idx = parseInt(exampleSel.value, 10);
-    if (editor.value !== loadedCode &&
+    if (editor.getValue() !== loadedCode &&
         !window.confirm("Discard your edits and load “" +
                         EXAMPLES[idx].name + "”?")) {
       // Revert the <select> to the example that's still in the editor.
@@ -528,17 +578,9 @@
   stopBtn.addEventListener("click", stop);
   evaluateBtn.addEventListener("click", evaluate);
 
-  editor.addEventListener("keydown", function (ev) {
-    if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) {
-      ev.preventDefault();
-      restart();
-    } else if (ev.key === "Tab") {
-      ev.preventDefault();
-      var s = editor.selectionStart, e = editor.selectionEnd;
-      editor.value = editor.value.slice(0, s) + "  " + editor.value.slice(e);
-      editor.selectionStart = editor.selectionEnd = s + 2;
-    }
-  });
+  /* The editor's Cmd/Ctrl+Enter (re-run) and Tab (insert two spaces) are
+   * bound via CodeMirror extraKeys above; the REPL input keeps its own
+   * keydown handler below. */
 
   inputArea.addEventListener("keydown", function (ev) {
     // Cmd/Ctrl+Enter submits; plain Enter inserts a newline.

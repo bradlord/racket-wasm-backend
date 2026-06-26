@@ -223,7 +223,44 @@
     }
     .site-footer a { color: var(--accent-2); text-decoration: none; }
     .site-footer a:hover { text-decoration: underline; }
+
+    /* CodeMirror (Definitions editor). fromTextArea overlays #editor; we
+       match the textarea's prior look (mono font, padding, min-height)
+       so the swap is invisible. height:auto + a min-height on the scroll
+       region lets the editor grow with content up to the panel's grid
+       row (which is minmax(0,1fr)), after which it scrolls internally. */
+    .CodeMirror {
+      height: auto;
+      min-height: 360px;
+      font-family: var(--mono);
+      font-size: 14px;
+      line-height: 1.5;
+      background: rgba(247, 249, 252, 0.9);
+      color: var(--text);
+      padding: 14px 16px;
+    }
+    .CodeMirror-scroll { min-height: 360px; }
+    /* Racket/scheme mode tokens -- a restrained palette that matches the
+       page's existing --accent/--accent-2/--muted. */
+    .cm-s-default .cm-comment     { color: var(--muted); font-style: italic; }
+    .cm-s-default .cm-string      { color: var(--accent); }
+    .cm-s-default .cm-number      { color: var(--accent-2); }
+    .cm-s-default .cm-atom        { color: var(--accent-2); }
+    .cm-s-default .cm-builtin     { color: var(--accent); }
+    .cm-s-default .cm-keyword     { color: var(--accent); font-weight: 600; }
+    .cm-s-default .cm-variable    { color: var(--text); }
+    .cm-s-default .cm-variable-2  { color: var(--accent-2); }
+    .cm-s-default .cm-bracket     { color: var(--text); }
+    .CodeMirror-matchingbracket { color: var(--accent) !important; background: rgba(217, 119, 6, 0.18); }
+    /* Hide the underlying textarea once CM is up; fromTextArea leaves it
+       in place for form submission, but we read via CM's API. */
+    .CodeMirror + textarea { display: none; }
   </style>
+  <link rel="stylesheet" href="./codemirror/lib/codemirror.css">
+  <script src="./codemirror/lib/codemirror.js"></script>
+  <script src="./codemirror/mode/scheme/scheme.js"></script>
+  <script src="./codemirror/addon/edit/matchbrackets.js"></script>
+  <script src="./codemirror/addon/edit/closebrackets.js"></script>
 </head>
 <body>
   <main class="page">

@@ -12,6 +12,15 @@
 ;; and gives its dropdown name: the leading `NN-` and the extension are dropped,
 ;; dashes become spaces, and the first letter is upcased -> "Hello world". The
 ;; file's full text (including its `#lang` line) is the program, verbatim.
+;;
+;; In addition to splicing examples, this hook vendors the CodeMirror 5 editor
+;; tree (apps/ide/vendor/codemirror/) into dist/codemirror/. The vendor dir
+;; lives outside public/ so collect-outputs doesn't ship it verbatim (it only
+;; copies flat files); we hand-copy the subtree here so the page's
+;; <script src="./codemirror/..."> tags resolve at runtime. Vendored, not
+;; CDN-loaded, to keep dist/ self-contained (the page needs COOP/COEP for
+;; SharedArrayBuffer; an external dependency would still work but breaks the
+;; "ship one directory" property).
 (require racket/string
          racket/path
          racket/file
@@ -57,5 +66,16 @@
   (define dest (build-path dist "ide.js"))
   (call-with-output-file dest #:exists 'replace
     (lambda (o) (write-string out o)))
+  ;; Vendor the CodeMirror 5 tree into dist/codemirror/. copy-directory/files
+  ;; is idempotent over a rebuild: it errors if a file exists at the dest, so
+  ;; wipe the dest first (a stale vendor file would otherwise survive a
+  ;; downgrade).
+  (define vendor-src (build-path app-dir "vendor" "codemirror"))
+  (define vendor-dest (build-path dist "codemirror"))
+  (unless (directory-exists? vendor-src)
+    (error 'build-ide-js "no codemirror vendor tree at ~a" vendor-src))
+  (when (directory-exists? vendor-dest) (delete-directory/files vendor-dest))
+  (copy-directory/files vendor-src vendor-dest)
   (printf "ide.js: merged ~a example~a into ~a\n"
-          (length examples) (if (= 1 (length examples)) "" "s") dest))
+          (length examples) (if (= 1 (length examples)) "" "s") dest)
+  (printf "codemirror: vendored ~a into ~a\n" vendor-src vendor-dest))

@@ -1473,9 +1473,12 @@ Notes / status:
 
 - Output (stdout and stderr) is currently merged into one ring and
   rendered without color; the input ring is line-buffered on the page.
-- The page is a plain `<textarea>` + scrolling `<pre>`, not a terminal
-  emulator -- the browser handles all editing; `ide.js` strips the few
-  ANSI CSI sequences Racket emits.
+- The Definitions editor is a **CodeMirror 5** instance (syntax
+  highlighting); the Interactions output is a scrolling `<pre>`, not a
+  terminal emulator -- `ide.js` strips the few ANSI CSI sequences Racket
+  emits. The REPL input box stays a plain `<textarea>` (a single
+  submission line, not an editing surface). See "Syntax highlighting"
+  below.
 - This cannot be validated under node: a headless harness can't drive
   the page+worker handshake. Test in a browser.
 
@@ -1602,6 +1605,42 @@ Run button so the inert state isn't confusing. The persistent-worker
 alternative (custodian shutdown + fresh namespace per Run, for sub-
 second re-runs) is deferred; process-per-run matches the latency users
 expect from comparable in-browser IDEs.
+
+**Syntax highlighting (CodeMirror 5).** The Definitions editor is a
+[CodeMirror 5](https://codemirror.net/5/) instance, overlaid on the
+`<textarea id="editor">` via `fromTextArea`. The REPL input (`#input`)
+deliberately stays a plain textarea -- it's a single submission line,
+not an editing surface.
+
+CM5 ships no racket mode; the editor uses the built-in **`scheme`**
+mode, which covers every shared s-expression keyword (`define`,
+`lambda`, `let`, `quote`, `cond`, ...) and renders Racket source
+faithfully. Racket-only tokens (`#lang`, `#f`/`#t`, `#'`, `#%app`,
+`#:keyword` args) render as plain text, which is fine. The mode is
+chosen from the buffer's `#lang` line by `detectMode()` in `ide.js`:
+lispy `#lang`s (`racket`, `typed/racket`, `scheme`, `at-exp`, ...)
+map to `scheme`; non-lisp `#lang`s (`rhombus`, `datalog`,
+`scribble`) map to `text/plain`. An unknown `#lang` defaults to
+`scheme` (most are s-expr based). `detectMode` runs on
+`loadExample` and on a 300 ms-debounced `change` event, so editing
+the `#lang` line re-highlights.
+
+The CM5 tree is **vendored** under `apps/ide/vendor/codemirror/` (not
+CDN-loaded) and copied into `dist/codemirror/` by the `build-ide-js`
+post-build hook (`build-examples.rkt`), alongside the examples splice.
+The vendor dir lives outside `public/` so `collect-outputs` doesn't
+ship it verbatim (it only copies flat files); the hook hand-copies the
+subtree. Vendoring keeps `dist/` self-contained -- the page needs
+COOP/COEP headers for SharedArrayBuffer, and a CDN dependency would
+work but break the "ship one directory" property. The loaded pieces:
+`lib/codemirror.{js,css}`, `mode/scheme/scheme.js`, and the
+`matchbrackets`/`closebrackets` addons. `extraKeys` wires
+Cmd/Ctrl+Enter to `restart()` and Tab to "insert two spaces",
+replacing the textarea's old `keydown` handler; `matchBrackets` and
+`autoCloseBrackets` are on. A small `.cm-s-default` palette in
+`index.html` recolors tokens to the page's existing
+`--accent`/`--accent-2`/`--muted` CSS variables so highlighting
+matches the page rather than CM's defaults.
 
 Serve and visit `http://127.0.0.1:8123/`.
 
