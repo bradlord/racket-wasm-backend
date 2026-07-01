@@ -1,7 +1,7 @@
 #lang racket/base
 ;; Collect every applicable license text into a `licenses/` tree.
 ;;
-;; The distributed runtime bundles this project (MIT), upstream Racket + Chez
+;; The distributed runtime bundles this project (MIT/Apache 2.0 dual-license), upstream Racket + Chez
 ;; (Apache/MIT/LGPL/GPL/libscheme), and a set of native C deps from wasm-deps/
 ;; (always libffi; the cairo/pango `draw` stack and others when selected). This
 ;; module assembles all of their license texts so dist/ and the SDK ship a
@@ -82,10 +82,13 @@
     (lambda (o) (write-string license-readme-text o))
     #:exists 'truncate)
 
-  ;; 2. This project's own MIT license.
-  (if (file-exists? repo-license-file)
-      (copy-file* repo-license-file (build-path lic "racket-wasm-MIT.txt"))
-      (warn "repo license file missing: ~a" repo-license-file))
+  ;; 2. This project's own dual (MIT + Apache 2.0) licenses.
+  (if (file-exists? repo-license-mit-file)
+      (copy-file* repo-license-mit-file (build-path lic "racket-wasm-MIT.txt"))
+      (warn "repo MIT license file missing: ~a" repo-license-mit-file))
+  (if (file-exists? repo-license-apache-file)
+      (copy-file* repo-license-apache-file (build-path lic "racket-wasm-APACHE.txt"))
+      (warn "repo Apache license file missing: ~a" repo-license-apache-file))
 
   ;; 3. Upstream Racket's license set: <clone>/racket/src/LICEN*.txt.
   (define racket-src (build-path clone "racket" "src"))

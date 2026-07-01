@@ -573,10 +573,11 @@ Every `dist/`, distributable package, and cross-SDK ships a **`licenses/`** tree
 so the distribution is license-compliant. `build/licenses.rkt`
 (`assemble-licenses!`) builds it; the grouped-by-origin layout is:
 
-- `README.txt` -- the MIT umbrella notice (`config.rkt` `license-readme-text`):
-  this project is MIT, the bundled components carry their own licenses, all
-  included here.
-- `racket-wasm-MIT.txt` -- this repo's `LICENSE.txt` (the project's own license).
+- `README.txt` -- the umbrella notice (`config.rkt` `license-readme-text`):
+  this project is dual MIT/Apache 2.0, the bundled components carry their own
+  licenses, all included here.
+- `racket-wasm-MIT.txt` -- this repo's `LICENSE-MIT.txt`.
+- `racket-wasm-APACHE.txt` -- this repo's `LICENSE-APACHE.txt`.
 - `racket/` -- upstream Racket's `LICENSE*.txt` set (Apache/MIT/LGPL/GPL/
   libscheme), globbed from `<clone>/racket/src`.
 - `deps/<name>/` -- one subdir per built native dep, holding its license file(s).
@@ -584,7 +585,7 @@ so the distribution is license-compliant. `build/licenses.rkt`
   links to every collected file, grouped into *This project* / *Racket* /
   *Dependencies* (per dep). Written last so it links the final tree.
 
-**Discovery is clone-driven and cache-keyed.** All texts except the repo MIT live
+**Discovery is clone-driven and cache-keyed.** All texts except the repo licenses live
 in the disposable clone (`<clone>/racket/src` + the extracted dep sources), which
 exists only on a build **miss**. So `assemble-licenses!` runs in
 `ensure-base-runtime!` (writing the tree into the **base cache**, keyed by

@@ -63,21 +63,25 @@
 ;;
 ;; The build collects every applicable license text into a `licenses/` tree in
 ;; dist/ and the SDK (see build/licenses.rkt). The texts come from three places,
-;; all clone-side except this project's own MIT license:
-;;   * this repo's LICENSE.txt (the project is MIT-licensed);
+;; all clone-side except this project's own licenses:
+;;   * this repo's LICENSE-MIT.txt and LICENSE-APACHE.txt (dual MIT/Apache 2.0);
 ;;   * upstream Racket's license set, under <clone>/racket/src;
 ;;   * each built native dep's license file(s), under the dep's extracted source
 ;;     dir (<clone>/racket/src/build-<name>-em/src).
-(define repo-license-file (at-root "LICENSE.txt"))
+(define repo-license-mit-file    (at-root "LICENSE-MIT.txt"))
+(define repo-license-apache-file (at-root "LICENSE-APACHE.txt"))
 
-;; The umbrella notice written to licenses/README.txt. Names this project's MIT
-;; license and points at the bundled component licenses.
+;; The umbrella notice written to licenses/README.txt. Names this project's
+;; dual MIT/Apache license and points at the bundled component licenses.
 (define license-readme-text #<<EOF
 racket-wasm license notice
 ==========================
 
-This project (racket-wasm) is licensed under the MIT License; its full text is
-in `racket-wasm-MIT.txt` in this directory.
+This project (racket-wasm) is licensed under the MIT License and the Apache
+License, Version 2.0, at your option. The full texts are in this directory:
+
+  * racket-wasm-MIT.txt    -- MIT License
+  * racket-wasm-APACHE.txt -- Apache License, Version 2.0
 
 The distributed runtime bundles other software, each under its own license. The
 full texts are included here:
