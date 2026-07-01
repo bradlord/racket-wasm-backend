@@ -53,9 +53,9 @@
    * covers all the shared s-expression keywords (define, lambda, let,
    * quote, ...) and renders Racket source faithfully. The mode is chosen
    * from the #lang line (see detectMode below): lispy #langs use scheme,
-   * non-lisp #langs (rhombus, datalog) fall back to text/plain. The REPL
-   * input (#input) deliberately stays a plain textarea -- it's a single
-   * submission line, not an editing surface. */
+   * rhombus and rhombus/* use the rhombus mode, others fall back to
+   * text/plain. The REPL input (#input) deliberately stays a plain
+   * textarea -- it's a single submission line, not an editing surface. */
   var editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
     mode: "scheme",
     lineWrapping: false,
@@ -73,14 +73,15 @@
 
   /* #lang -> CM mode. scheme mode handles every s-expression #lang; the
    * entries below are the non-lisp #langs the shipped examples use, plus
-   * the common lispy ones made explicit for clarity. An unknown #lang
-   * defaults to scheme (most Racket #langs are s-expr based). */
+   * the common lispy ones made explicit for clarity. Any #lang starting
+   * with "rhombus" (rhombus, rhombus/static, rhombus/non-space, etc.) uses
+   * the rhombus mode. An unknown #lang defaults to scheme (most Racket
+   * #langs are s-expr based). */
   var LANG_MODE = {
     "racket": "scheme", "racket/base": "scheme", "typed/racket": "scheme",
     "typed/racket/base": "scheme", "lazy": "scheme", "r5rs": "scheme",
     "r6rs": "scheme", "scheme": "scheme", "scheme/base": "scheme",
     "at-exp": "scheme", "scribble": "text/plain",
-    "rhombus": "text/plain", "rhombus/non-space": "text/plain",
     "datalog": "text/plain", "s-exp": "scheme"
   };
 
@@ -88,7 +89,14 @@
     var val = editor.getValue();
     var m = /^[\s\n]*#lang\s+(\S+)/m.exec(val);
     var lang = m ? m[1] : "racket";
-    var mode = LANG_MODE[lang] != null ? LANG_MODE[lang] : "scheme";
+    var mode;
+    if (LANG_MODE[lang] != null) {
+      mode = LANG_MODE[lang];
+    } else if (/^rhombus($|\/)/.test(lang)) {
+      mode = "rhombus";
+    } else {
+      mode = "scheme";
+    }
     if (editor.getOption("mode") !== mode) editor.setOption("mode", mode);
   }
   var modeDebounce = 0;

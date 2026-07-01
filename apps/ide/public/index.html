@@ -255,10 +255,16 @@
     /* Hide the underlying textarea once CM is up; fromTextArea leaves it
        in place for form submission, but we read via CM's API. */
     .CodeMirror + textarea { display: none; }
+    /* Rhombus mode tokens. */
+    .cm-s-default .cm-rh-string  { color: #2d7d46; }
+    .cm-s-default .cm-rh-number  { color: #2d7d46; }
+    .cm-s-default .cm-rh-ident   { color: #0284c7; }
+    .cm-s-default .cm-rh-paren   { color: #7c5c2e; }
   </style>
   <link rel="stylesheet" href="./codemirror/lib/codemirror.css">
   <script src="./codemirror/lib/codemirror.js"></script>
   <script src="./codemirror/mode/scheme/scheme.js"></script>
+  <script src="./codemirror/mode/rhombus/rhombus.js"></script>
   <script src="./codemirror/addon/edit/matchbrackets.js"></script>
   <script src="./codemirror/addon/edit/closebrackets.js"></script>
 </head>
