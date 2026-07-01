@@ -165,8 +165,9 @@ CodeMirror.defineMode("scheme", function () {
                         if (stream.eat("|")) {                    // Multi-line comment
                             state.mode = "comment"; // toggle to comment mode
                             returnType = COMMENT;
-                        } else if (stream.eat(/[tf]/i)) {            // #t/#f (atom)
-                            returnType = ATOM;
+                        } else if (stream.eat(/[tf]/i)) {            // #t/#f, #true/#false
+                            stream.eatWhile(/[a-zA-Z]/);             // consume rue/alse too
+                            returnType = "boolean";
                         } else if (stream.eat(';')) {                // S-Expr comment
                             state.mode = "s-expr-comment";
                             returnType = COMMENT;

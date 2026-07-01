@@ -57,6 +57,11 @@ CodeMirror.defineMode("rhombus", function() {
         return "rh-string";
       }
 
+      // Boolean literal: #true, #false, #t, #f
+      if (stream.match(/^#(?:true|false)\b/)) {
+        return "rh-boolean";
+      }
+
       // Number: #x hex, #b binary, #o octal, decimal/float
       if (stream.match(/^#[xXbBoO][0-9a-fA-F_]+/) ||
           stream.match(/^[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9]+)?/)) {

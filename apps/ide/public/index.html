@@ -225,13 +225,17 @@
     .site-footer a:hover { text-decoration: underline; }
 
     /* CodeMirror (Definitions editor). fromTextArea overlays #editor; we
-       match the textarea's prior look (mono font, padding, min-height)
-       so the swap is invisible. height:auto + a min-height on the scroll
-       region lets the editor grow with content up to the panel's grid
-       row (which is minmax(0,1fr)), after which it scrolls internally. */
-    .CodeMirror {
-      height: auto;
-      min-height: 360px;
+       match the textarea's prior look (mono font, padding, line-height) so
+       the swap is invisible. The .panel grid gives the editor's row
+       (minmax(0,1fr)) a definite size, so height:100% here makes the
+       CodeMirror wrapper (and its parent, the row itself) fill that row
+       exactly, scrolling internally past the panel's min-height.
+       Selector is `.panel .CodeMirror` (not just `.CodeMirror`) so this
+       beats codemirror.css's own `.CodeMirror { height: 300px }` on
+       specificity -- that stylesheet is <link>ed after this block, and same-
+       specificity source order would otherwise let its 300px win. */
+    .panel .CodeMirror {
+      height: 100%;
       font-family: var(--mono);
       font-size: 14px;
       line-height: 1.5;
@@ -239,13 +243,13 @@
       color: var(--text);
       padding: 14px 16px;
     }
-    .CodeMirror-scroll { min-height: 360px; }
     /* Racket/scheme mode tokens -- a restrained palette that matches the
        page's existing --accent/--accent-2/--muted. */
     .cm-s-default .cm-comment     { color: var(--muted); font-style: italic; }
     .cm-s-default .cm-string      { color: var(--accent); }
     .cm-s-default .cm-number      { color: var(--accent-2); }
     .cm-s-default .cm-atom        { color: var(--accent-2); }
+    .cm-s-default .cm-boolean     { color: #2d7d46; font-weight: 600; }
     .cm-s-default .cm-builtin     { color: var(--accent); }
     .cm-s-default .cm-keyword     { color: var(--accent); font-weight: 600; }
     .cm-s-default .cm-variable    { color: var(--text); }
@@ -260,6 +264,7 @@
     .cm-s-default .cm-rh-number  { color: #2d7d46; }
     .cm-s-default .cm-rh-ident   { color: #0284c7; }
     .cm-s-default .cm-rh-paren   { color: #7c5c2e; }
+    .cm-s-default .cm-rh-boolean { color: #2d7d46; }
   </style>
   <link rel="stylesheet" href="./codemirror/lib/codemirror.css">
   <script src="./codemirror/lib/codemirror.js"></script>
@@ -305,7 +310,7 @@
         <textarea id="editor" spellcheck="false" autocapitalize="off"
           autocorrect="off" autocomplete="off"></textarea>
         <footer class="panel-footer">
-          <span><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>
+          <span><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> or <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>R</kbd> runs · <kbd>Tab</kbd> inserts spaces</span>
         </footer>
       </section>
 

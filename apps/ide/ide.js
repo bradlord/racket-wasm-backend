@@ -27,7 +27,8 @@
  *   - The Interactions input box is both the REPL (Cmd/Ctrl+Enter submits
  *     an expression) and the program's stdin (a submitted line reaches a
  *     blocked read-line). A second Run spawns a brand-new process;
- *     Cmd/Ctrl+Enter in the editor re-runs too, stopping a live run first.
+ *     Cmd/Ctrl+Enter (or Cmd/Ctrl+R) in the editor re-runs too, stopping a
+ *     live run first.
  *
  * Shares all of the worker/ring/canvas/DOM-RPC plumbing with the pages it
  * replaces; see shell-worker.js, wasmfs-stdin.js, wasmfs-console.js,
@@ -58,6 +59,7 @@
    * textarea -- it's a single submission line, not an editing surface. */
   var editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
     mode: "scheme",
+    lineNumbers: true,
     lineWrapping: false,
     indentUnit: 2,
     tabSize: 2,
@@ -67,6 +69,8 @@
     extraKeys: {
       "Cmd-Enter":  function () { restart(); },
       "Ctrl-Enter": function () { restart(); },
+      "Cmd-R":      function () { restart(); },
+      "Ctrl-R":     function () { restart(); },
       "Tab":        function (cm) { cm.replaceSelection("  ", "end"); }
     }
   });
