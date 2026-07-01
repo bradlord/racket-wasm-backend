@@ -96,9 +96,25 @@ async function waitRunning(page, timeout) {
   );
 }
 
+// Set the Definitions editor content. The editor is a CodeMirror 5 instance
+// overlaid on the <textarea id="editor">, which CM hides; page.fill() on the
+// textarea times out because it requires the element to be visible. Use the
+// CM API via page.evaluate() instead. Falls back to page.fill() if CM is not
+// present (e.g. a stripped test page).
+async function setEditor(page, source) {
+  const hasCM = await page.evaluate(() => !!document.querySelector('.CodeMirror'));
+  if (hasCM) {
+    await page.evaluate((src) => {
+      document.querySelector('.CodeMirror').CodeMirror.setValue(src);
+    }, source);
+  } else {
+    await page.fill('#editor', source);
+  }
+}
+
 // Boot a REPL on a minimal module, ready for evalRepl(). Returns when quiescent.
 export async function bootRepl(page, { editor = '#lang racket/base\n', timeout = RUN_TIMEOUT } = {}) {
-  await page.fill('#editor', editor);
+  await setEditor(page, editor);
   await page.click('#run');
   await waitRunning(page, timeout);
   await submitMarker(page, 0, timeout); // drain the initial (empty) module run
@@ -107,7 +123,7 @@ export async function bootRepl(page, { editor = '#lang racket/base\n', timeout =
 // Run `source` (a full #lang module) as the Definitions program; return its
 // stdout (the module body's output), like clicking Run on a file.
 export async function loadAndRun(page, source, { timeout = RUN_TIMEOUT } = {}) {
-  await page.fill('#editor', source);
+  await setEditor(page, source);
   await page.click('#run');
   await waitRunning(page, timeout);
   // run() clears #output, so the transcript from 0 is just the module's output.

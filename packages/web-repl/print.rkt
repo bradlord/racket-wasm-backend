@@ -31,8 +31,11 @@
 ;;     instead trips a draw-lib init-order bug under WASM (`cairo-lock-name`
 ;;     referenced before cairo.rkt's instance initializes pango.rkt).
 ;;
-;; `pict?` (not the broader `pict-convertible?` from the shadowed
-;; pict/convert) is the predicate; it covers every pict the REPL produces.
+;; `pict-convertible?` (from the shadowed pict/convert, loaded via
+;; dynamic-require) is the predicate, not the narrower `pict?`. Rhombus
+;; picts are `StaticPict` structs that satisfy `pict-convertible?` but NOT
+;; `pict?`; using `pict-convertible?` + `pict-convert` handles both Racket
+;; picts and Rhombus picts uniformly.
 
 (require racket/class           ; object?, method-in-interface?, object-interface
          "display-bm.rkt")
@@ -45,9 +48,10 @@
 
 ;; Resolved at module instantiation -- see the header note on why this is
 ;; dynamic-require-at-load rather than a static require.
-(define pict?       (dynamic-require 'pict 'pict?))
-(define pict->bitmap (dynamic-require 'pict 'pict->bitmap))
-(define pict-inset  (dynamic-require 'pict 'inset))
+(define pict-convertible? (dynamic-require 'pict/convert 'pict-convertible?))
+(define pict-convert      (dynamic-require 'pict/convert 'pict-convert))
+(define pict->bitmap      (dynamic-require 'pict 'pict->bitmap))
+(define pict-inset        (dynamic-require 'pict 'inset))
 
 ;; Wrap the current `current-print` so bitmap-like results render as
 ;; images and everything else prints as before (the base handler also
@@ -59,7 +63,8 @@
     (lambda (v)
       (cond
         [(bitmap-like? v) (display-bm v)]
-        [(pict? v)
+        [(pict-convertible? v)
+         ;; pict-convert handles both Racket pict? and Rhombus StaticPict.
          ;; The 1px inset gives a transparent margin so a border drawn on
          ;; the pict's bounding edge (e.g. `frame`) always has a pixel
          ;; column to land in. pict->bitmap sizes the bitmap to exactly
@@ -67,5 +72,5 @@
          ;; sits on the last pixel boundary; the WASM cairo build snaps it
          ;; outward and clips the right/bottom border (desktop cairo snaps
          ;; inward, so it shows there).
-         (display-bm (pict->bitmap (pict-inset v 1)))]
+         (display-bm (pict->bitmap (pict-inset (pict-convert v) 1)))]
         [else (base v)]))))
