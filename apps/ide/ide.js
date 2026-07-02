@@ -479,12 +479,15 @@
         //      to `current-read-interaction` (e.g. rhombus's shrubbery
         //      reader), so ide-repl defers to it instead of feeding the
         //      language's surface syntax to its `#%top-interaction` as
-        //      s-exprs. Finally re-install the bitmap printer so it wraps
+        //      s-exprs. Then re-install the bitmap printer so it wraps
         //      whatever `current-print` the language set, keeping picts/
-        //      bitmaps rendering at the REPL. Everything after enter! must
-        //      live inside this begin: once the namespace has switched, the
-        //      REPL's `#%top-interaction` is the language's and would reject
-        //      these racket forms.
+        //      bitmaps rendering at the REPL. Finally, DrRacket/`racket`-style,
+        //      run the program's `main` submodule if it declared one (e.g.
+        //      via `module+`) -- after the printer reinstall, so images it
+        //      prints render through the finalized printer too. Everything
+        //      after enter! must live inside this begin: once the namespace
+        //      has switched, the REPL's `#%top-interaction` is the
+        //      language's and would reject these racket forms.
         // The trailing "\n" delimits the submission; the reader installed
         // in step 1 consumes it as the line terminator, leaving the stdin
         // buffer empty for the program's first real `read-line`.
@@ -501,7 +504,11 @@
                               '(quote configure-runtime))]) ' +
                 '(when (module-declared? cr #t) (dynamic-require cr #f)))) ' +
             '(with-handlers ([(lambda (e) #t) void]) ' +
-              '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))))\n');
+              '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))) ' +
+            '(with-handlers ([(lambda (e) #t) void]) ' +
+              '(let ([m (list (quote submod) (list (quote file) "/tmp/main.rkt") ' +
+                             '(quote main))]) ' +
+                '(when (module-declared? m #t) (dynamic-require m #f)))))\n');
         setControls(true, true);
         setStatus("Running", "run");
         inputArea.focus();
