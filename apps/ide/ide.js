@@ -110,6 +110,7 @@
   });
 
   var exampleSel   = document.getElementById("example");
+  var gistBtn      = document.getElementById("gist");
   var runBtn       = document.getElementById("run");
   var stopBtn      = document.getElementById("stop");
   var runIdleBtn   = document.getElementById("run-idle");
@@ -548,13 +549,19 @@
 
   var loadedCode = "";
 
+  // ALL_EXAMPLES extends the baked-in EXAMPLES with a single mutable "gist
+  // slot" (see setGistExample below), so a loaded gist behaves exactly like
+  // a built-in example in the dropdown -- same unsaved-edit confirm, same
+  // seed/history/mode-detect path through loadExample.
+  var ALL_EXAMPLES = EXAMPLES.slice();
+
   function loadExample(idx) {
-    var ex = EXAMPLES[idx];
+    var ex = ALL_EXAMPLES[idx];
     if (!ex) return;
     editor.setValue(ex.code);
     editor.clearHistory();
     loadedCode = ex.code;
-    exampleSel.selectedIndex = idx;
+    exampleSel.value = String(idx);
     detectMode();
   }
 
@@ -569,10 +576,10 @@
     var idx = parseInt(exampleSel.value, 10);
     if (editor.getValue() !== loadedCode &&
         !window.confirm("Discard your edits and load “" +
-                        EXAMPLES[idx].name + "”?")) {
+                        ALL_EXAMPLES[idx].name + "”?")) {
       // Revert the <select> to the example that's still in the editor.
-      for (var i = 0; i < EXAMPLES.length; i++) {
-        if (EXAMPLES[i].code === loadedCode) { exampleSel.selectedIndex = i; break; }
+      for (var i = 0; i < ALL_EXAMPLES.length; i++) {
+        if (ALL_EXAMPLES[i].code === loadedCode) { exampleSel.value = String(i); break; }
       }
       return;
     }
@@ -581,7 +588,116 @@
     editor.focus();
   });
 
-  loadExample(0);  // default: hello world
+  /* ---- load-from-gist ---------------------------------------------- */
+
+  var gistSlotIndex = -1;
+  var gistOptionEl = null;
+
+  // Installs/updates a single dynamic dropdown entry for the most recently
+  // loaded gist (reused across loads, not accumulated) and seeds the editor
+  // from it via the normal loadExample path.
+  function setGistExample(displayName, code) {
+    var entry = { name: "Gist: " + displayName, code: code };
+    if (gistSlotIndex === -1) {
+      gistSlotIndex = ALL_EXAMPLES.length;
+      ALL_EXAMPLES.push(entry);
+      gistOptionEl = document.createElement("option");
+      gistOptionEl.value = String(gistSlotIndex);
+      exampleSel.insertBefore(gistOptionEl, exampleSel.firstChild);
+    } else {
+      ALL_EXAMPLES[gistSlotIndex] = entry;
+    }
+    gistOptionEl.textContent = entry.name;
+    loadExample(gistSlotIndex);
+  }
+
+  // "Clear the interactions menu" for a fresh gist load: stop any live run
+  // and put the Interactions pane back in its pre-Run idle state (switching
+  // built-in examples only stops the worker today; loading a gist should
+  // look like a clean slate).
+  function resetInteractions() {
+    if (worker) stop();
+    clearOutput();
+    interactions.classList.add("idle");
+    setStatus("Idle", "idle");
+  }
+
+  function parseGistId(input) {
+    input = input.trim();
+    var m = /gist\.github\.com\/(?:[^\/]+\/)?([0-9a-f]+)/i.exec(input);
+    if (m) return m[1];
+    if (/^[0-9a-f]+$/i.test(input)) return input;
+    return null;
+  }
+
+  // Pick the file to load from a (possibly multi-file) gist: prefer a
+  // .rkt filename, then anything GitHub tagged as Racket, else the first
+  // file -- gists have no notion of an "entry point".
+  function pickGistFile(files) {
+    var names = Object.keys(files);
+    if (names.length === 0) return null;
+    var i;
+    for (i = 0; i < names.length; i++) {
+      if (/\.rkt$/i.test(names[i])) return files[names[i]];
+    }
+    for (i = 0; i < names.length; i++) {
+      if (files[names[i]].language === "Racket") return files[names[i]];
+    }
+    return files[names[0]];
+  }
+
+  function loadGistById(id) {
+    return fetch("https://api.github.com/gists/" + encodeURIComponent(id))
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        var file = pickGistFile(data.files || {});
+        if (!file) throw new Error("gist has no files");
+        if (file.truncated) {
+          return fetch(file.raw_url).then(function (r) { return r.text(); })
+            .then(function (text) { return { filename: file.filename, code: text }; });
+        }
+        return { filename: file.filename, code: file.content };
+      });
+  }
+
+  gistBtn.addEventListener("click", function () {
+    var input = window.prompt("Gist ID or URL:", "");
+    if (!input) return;
+    var id = parseGistId(input);
+    if (!id) { alert("Couldn't find a gist ID in that input."); return; }
+    gistBtn.disabled = true;
+    var prevLabel = gistBtn.textContent;
+    gistBtn.textContent = "Loading…";
+    loadGistById(id).then(function (result) {
+      resetInteractions();
+      setGistExample(result.filename, result.code);
+      editor.focus();
+      var url = new URL(window.location.href);
+      url.searchParams.set("gist", id);
+      history.replaceState(null, "", url);
+    }).catch(function (err) {
+      alert("Failed to load gist: " + (err && (err.message || err)));
+    }).then(function () {
+      gistBtn.disabled = false;
+      gistBtn.textContent = prevLabel;
+    });
+  });
+
+  loadExample(0);  // seed immediately so the editor isn't blank while a gist loads
+
+  var gistParam = new URLSearchParams(window.location.search).get("gist");
+  if (gistParam) {
+    var initialGistId = parseGistId(gistParam) || gistParam;
+    loadGistById(initialGistId).then(function (result) {
+      resetInteractions();
+      setGistExample(result.filename, result.code);
+    }).catch(function (err) {
+      alert("Failed to load gist from URL: " + (err && (err.message || err)));
+    });
+  }
 
   /* ---- wiring ----------------------------------------------------- */
 
