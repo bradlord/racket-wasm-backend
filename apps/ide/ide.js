@@ -1,22 +1,30 @@
 /* ide.js -- page driver for the combined Racket WASM IDE (DrRacket-like).
  *
- * Layout: Definitions (editor) on the left, Interactions (output + REPL +
- * stdin) on the right. The Interactions pane is inert until you Run.
+ * Layout: Definitions (editor, with a file-tab strip for multi-file
+ * programs) on the left, Interactions (output + REPL + stdin) on the right.
+ * The Interactions pane is inert until you Run.
+ *
+ * Multiple files: the Definitions pane can hold any number of open files
+ * (tabs), all landing in the same directory (/tmp/) when a run starts, so
+ * one file can `(require "sibling.rkt")` another by name. Whichever tab is
+ * *active* is the entry point Run uses -- not a fixed main.rkt -- mirroring
+ * DrRacket's "run the front file" model but letting you pick which file is
+ * the front one.
  *
  * Run lifecycle (process-per-run, like the old playground):
  *   - Teardown any existing worker, clear the Interactions output.
  *   - Spawn a fresh shell-worker.js with
  *       { type:"init", argv:[],
- *         files:{"/tmp/main.rkt": <editor text>} }
+ *         files:{"/tmp/<name>": <tab text>, ...} }
  *     i.e. a plain interactive REPL (argv [] keeps the default
- *     racket/init, so the namespace has the full `racket` bindings). The
- *     editor text lands at /tmp/main.rkt. (The persistent home
+ *     racket/init, so the namespace has the full `racket` bindings). Every
+ *     open tab lands at /tmp/<its name>. (The persistent home
  *     /home/web_user is OPFS-backed by the runtime, durable on close, so
  *     a new run still sees files an earlier run wrote -- no opt-in flag.)
  *   - On "ready", inject one line into the stdin ring (not echoed):
  *       (require racket/enter)
  *       (install the web-repl bitmap printer, guarded)
- *       (enter! (file "/tmp/main.rkt"))
+ *       (enter! (file "/tmp/<active tab's name>"))
  *     The printer is a current-print hook (web-repl/print) that renders
  *     bitmap-valued top-level results via display-bm; installed before
  *     enter! so the program's own top-level expressions get it too.
@@ -38,25 +46,30 @@
   "use strict";
 
   /* ---- example programs ------------------------------------------- */
-  /* The Definitions editor is seeded from here (no hardcoded markup in
-   * index.html). Each entry is { name, code }; the first is the default.
-   * This array is GENERATED at build time from the one-per-file programs in
-   * apps/ide/examples/: the post-build hook (apps/ide/build-examples.rkt)
-   * splices the examples JSON in place of the placeholder token below. Edit
-   * the files under examples/, not this line. */
+  /* The Definitions pane is seeded from here (no hardcoded markup in
+   * index.html). Each entry is { name, files: [{ name, code }, ...] } --
+   * one or more files, one tab each; a single-file example is just a
+   * one-element files array. This array is GENERATED at build time from
+   * the programs in apps/ide/examples/: the post-build hook
+   * (apps/ide/build-examples.rkt) splices the examples JSON in place of the
+   * placeholder token below. Edit the files under examples/, not this
+   * line. */
 
   var EXAMPLES = __EXAMPLES__;
 
   /* ---- DOM hooks --------------------------------------------------- */
 
-  /* The Definitions editor is a CodeMirror 5 instance overlaid on the
-   * <textarea id="editor">. CM5 has no dedicated racket mode; `scheme`
-   * covers all the shared s-expression keywords (define, lambda, let,
-   * quote, ...) and renders Racket source faithfully. The mode is chosen
-   * from the #lang line (see detectMode below): lispy #langs use scheme,
-   * rhombus and rhombus/* use the rhombus mode, others fall back to
-   * text/plain. The REPL input (#input) deliberately stays a plain
-   * textarea -- it's a single submission line, not an editing surface. */
+  /* The Definitions editor is a single CodeMirror 5 instance overlaid on the
+   * <textarea id="editor">; each open file gets its own CodeMirror.Doc (own
+   * undo history + cursor), and switching tabs calls editor.swapDoc() to
+   * show the right one -- the DOM/CM instance itself never changes. CM5 has
+   * no dedicated racket mode; `scheme` covers all the shared s-expression
+   * keywords (define, lambda, let, quote, ...) and renders Racket source
+   * faithfully. The mode is chosen from the #lang line (see detectMode
+   * below): lispy #langs use scheme, rhombus and rhombus/* use the rhombus
+   * mode, others fall back to text/plain. The REPL input (#input)
+   * deliberately stays a plain textarea -- it's a single submission line,
+   * not an editing surface. */
   var editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
     mode: "scheme",
     lineNumbers: true,
@@ -121,6 +134,8 @@
   var inputState   = document.getElementById("input-state");
   var statusEl     = document.getElementById("status");
   var interactions = document.getElementById("interactions");
+  var tabsEl       = document.getElementById("tabs");
+  var addFileBtn   = document.getElementById("add-file");
 
   function setStatus(text, state) {
     statusEl.textContent = text;
@@ -213,6 +228,163 @@
     runIdleBtn.disabled = true;
     return;
   }
+
+  /* ---- multi-file Definitions state -------------------------------- */
+  /* files: [{ name, doc }] -- one CodeMirror.Doc per open tab, all shown
+   * through the single `editor` instance via swapDoc. active is the index
+   * of both the selected tab and the file Run treats as the entry point. */
+
+  var files = [];
+  var active = 0;
+  var renaming = -1;  // index of the tab currently being renamed, -1 = none
+
+  function activeFile() { return files[active]; }
+  function entryPath() { return "/tmp/" + activeFile().name; }
+
+  function makeDoc(code) {
+    return new CodeMirror.Doc(code, "scheme");
+  }
+
+  // Serialize a file list for unsaved-edit comparisons (see loadExample).
+  function snapshotFiles(list) {
+    return JSON.stringify(list.map(function (f) {
+      return { name: f.name, code: f.doc.getValue() };
+    }));
+  }
+  function currentSnapshot() { return snapshotFiles(files); }
+
+  // Replace the whole open-file set (example load / gist import).
+  function setFiles(newFiles, activeIdx) {
+    files = newFiles;
+    active = (activeIdx == null || activeIdx < 0 || activeIdx >= files.length)
+      ? 0 : activeIdx;
+    editor.swapDoc(files[active].doc);
+    detectMode();
+    renderTabs();
+  }
+
+  function selectTab(idx) {
+    if (idx === active || !files[idx]) return;
+    active = idx;
+    editor.swapDoc(files[active].doc);
+    detectMode();
+    renderTabs();
+  }
+
+  function nextUntitledName() {
+    var n = 1;
+    while (files.some(function (f) { return f.name === "untitled-" + n + ".rkt"; })) n++;
+    return "untitled-" + n + ".rkt";
+  }
+
+  // Seed text for a freshly-added file; also its "untouched" marker (see
+  // closeFile) -- a tab still holding exactly this text has nothing worth
+  // confirming a close over.
+  var NEW_FILE_SEED = "#lang racket\n";
+
+  function addFile() {
+    var name = nextUntitledName();
+    files.push({ name: name, doc: makeDoc(NEW_FILE_SEED), pristineSeed: NEW_FILE_SEED });
+    active = files.length - 1;
+    editor.swapDoc(files[active].doc);
+    detectMode();
+    // startRename focuses its inline input; don't steal that focus back to
+    // the editor here, or the input's blur handler commits the rename
+    // (a no-op, since it fires before the user types anything) immediately.
+    startRename(active);
+  }
+
+  function closeFile(idx) {
+    if (files.length <= 1) return;
+    var f = files[idx];
+    // Closing a tab deletes its content outright (there's no save/restore),
+    // so confirm -- unless it's a just-added file nobody has typed into yet.
+    var untouched = f.pristineSeed != null && f.doc.getValue() === f.pristineSeed;
+    if (!untouched && !window.confirm("Close " + f.name + "? This can't be undone.")) return;
+    files.splice(idx, 1);
+    if (idx < active) active--;
+    if (active >= files.length) active = files.length - 1;
+    if (active < 0) active = 0;
+    if (renaming === idx) renaming = -1;
+    editor.swapDoc(files[active].doc);
+    detectMode();
+    renderTabs();
+  }
+
+  function startRename(idx) {
+    renaming = idx;
+    renderTabs();
+    var input = tabsEl.querySelector(".tab-rename");
+    if (input) { input.focus(); input.select(); }
+  }
+
+  function commitRename(idx, value) {
+    var name = value.trim();
+    renaming = -1;
+    if (name && name !== files[idx].name) {
+      var collision = files.some(function (f, i) { return i !== idx && f.name === name; });
+      if (!collision) files[idx].name = name;
+    }
+    renderTabs();
+  }
+
+  function cancelRename() {
+    renaming = -1;
+    renderTabs();
+  }
+
+  // Rebuild the tab strip from `files`/`active`/`renaming`. Called after
+  // every mutation -- there is no incremental diffing, the strip is small.
+  function renderTabs() {
+    tabsEl.innerHTML = "";
+    files.forEach(function (f, i) {
+      var tab = document.createElement("div");
+      tab.className = "tab" + (i === active ? " active" : "");
+
+      var dot = document.createElement("span");
+      dot.className = "tab-dot";
+      tab.appendChild(dot);
+
+      if (renaming === i) {
+        var input = document.createElement("input");
+        input.className = "tab-rename";
+        input.value = f.name;
+        input.spellcheck = false;
+        input.addEventListener("keydown", function (ev) {
+          ev.stopPropagation();
+          if (ev.key === "Enter") { ev.preventDefault(); commitRename(i, input.value); }
+          else if (ev.key === "Escape") { ev.preventDefault(); cancelRename(); }
+        });
+        input.addEventListener("blur", function () { commitRename(i, input.value); });
+        input.addEventListener("click", function (ev) { ev.stopPropagation(); });
+        tab.appendChild(input);
+      } else {
+        var label = document.createElement("span");
+        label.className = "tab-name";
+        label.textContent = f.name;
+        tab.appendChild(label);
+      }
+
+      if (files.length > 1) {
+        var close = document.createElement("button");
+        close.type = "button";
+        close.className = "tab-close";
+        close.textContent = "×";
+        close.setAttribute("aria-label", "Close " + f.name);
+        close.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          closeFile(i);
+        });
+        tab.appendChild(close);
+      }
+
+      tab.addEventListener("click", function () { selectTab(i); });
+      tab.addEventListener("dblclick", function () { startRename(i); });
+      tabsEl.appendChild(tab);
+    });
+  }
+
+  addFileBtn.addEventListener("click", addFile);
 
   /* ---- shared-memory rings (filled in once the worker is ready) --- */
 
@@ -374,17 +546,22 @@
     // Plain interactive REPL (argv [] keeps the default racket/init, so
     // the REPL namespace has the full `racket` bindings -- passing a
     // startup action like `-l racket/enter` would suppress racket/init
-    // and leave the namespace bare). The editor text is dropped at
-    // /tmp/main.rkt before main() runs; we require racket/enter and
-    // `enter!` it once the REPL is ready (see "ready" below).
+    // and leave the namespace bare). Every open tab lands at /tmp/<its
+    // name> before main() runs; we require racket/enter and `enter!` the
+    // active tab once the REPL is ready (see "ready" below), so siblings
+    // resolve by name in the same directory.
     // The persistent home (/home/web_user) is mounted on OPFS by the runtime
     // itself (wasm_shell_io.c); it is durable on close(), so a new
     // process-per-run still sees files an earlier run wrote and closed -- no
     // opt-in flag and no save-on-exit handshake needed.
+    var filesPayload = {};
+    files.forEach(function (f) {
+      filesPayload["/tmp/" + f.name] = f.doc.getValue();
+    });
     worker.postMessage({
       type: "init",
       argv: [],
-      files: { "/tmp/main.rkt": editor.getValue() },
+      files: filesPayload,
     });
   }
 
@@ -471,7 +648,7 @@
         //      shows as an image. Set *before* enter! so the program's own
         //      top-level expressions get it too; guarded so a missing
         //      web-repl still lets the program run.
-        //   4. enter! the program -- runs its body and lands the REPL in
+        //   4. enter! the active tab -- runs its body and lands the REPL in
         //      its namespace -- then, in the SAME form (a begin, so it is
         //      read+compiled in the racket namespace before enter! switches
         //      it), run the entered #lang's `configure-runtime` submodule
@@ -482,7 +659,7 @@
         //      s-exprs. Then re-install the bitmap printer so it wraps
         //      whatever `current-print` the language set, keeping picts/
         //      bitmaps rendering at the REPL. Finally, DrRacket/`racket`-style,
-        //      run the program's `main` submodule if it declared one (e.g.
+        //      run the active tab's `main` submodule if it declared one (e.g.
         //      via `module+`) -- after the printer reinstall, so images it
         //      prints render through the finalized printer too. Everything
         //      after enter! must live inside this begin: once the namespace
@@ -491,6 +668,7 @@
         // The trailing "\n" delimits the submission; the reader installed
         // in step 1 consumes it as the line terminator, leaving the stdin
         // buffer empty for the program's first real `read-line`.
+        var entryLit = JSON.stringify(entryPath());
         sendText(
           '(with-handlers ([(lambda (e) #t) void]) ' +
             '((dynamic-require (quote web-repl/ide-repl) (quote install-ide-prompt-read!)))) ' +
@@ -498,15 +676,15 @@
           '(with-handlers ([(lambda (e) #t) void]) ' +
             '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))) ' +
           '(begin ' +
-            '(enter! (file "/tmp/main.rkt")) ' +
+            '(enter! (file ' + entryLit + ')) ' +
             '(with-handlers ([(lambda (e) #t) void]) ' +
-              '(let ([cr (list (quote submod) (list (quote file) "/tmp/main.rkt") ' +
+              '(let ([cr (list (quote submod) (list (quote file) ' + entryLit + ') ' +
                               '(quote configure-runtime))]) ' +
                 '(when (module-declared? cr #t) (dynamic-require cr #f)))) ' +
             '(with-handlers ([(lambda (e) #t) void]) ' +
               '((dynamic-require (quote web-repl/print) (quote install-bitmap-printer!)))) ' +
             '(with-handlers ([(lambda (e) #t) void]) ' +
-              '(let ([m (list (quote submod) (list (quote file) "/tmp/main.rkt") ' +
+              '(let ([m (list (quote submod) (list (quote file) ' + entryLit + ') ' +
                              '(quote main))]) ' +
                 '(when (module-declared? m #t) (dynamic-require m #f)))))\n');
         setControls(true, true);
@@ -549,28 +727,41 @@
   }
 
   /* ---- examples dropdown ------------------------------------------ */
-  /* Seed the editor from EXAMPLES and let the dropdown swap programs.
-   * loadedCode tracks the unedited text of the current example so we can
-   * tell whether the user has touched it; if so, picking another example
-   * confirms before discarding their edits. */
+  /* Seed the Definitions pane from EXAMPLES and let the dropdown swap
+   * programs. loadedSnapshot tracks the unedited file set of the current
+   * example so we can tell whether the user has touched it; if so, picking
+   * another example confirms before discarding their edits. loadedIdx is
+   * the dropdown index to revert to on cancel (-1 once a gist replaces the
+   * file set -- the dropdown then has nothing "current" to point at). */
 
-  var loadedCode = "";
-
-  // ALL_EXAMPLES extends the baked-in EXAMPLES with a single mutable "gist
-  // slot" (see setGistExample below), so a loaded gist behaves exactly like
-  // a built-in example in the dropdown -- same unsaved-edit confirm, same
-  // seed/history/mode-detect path through loadExample.
-  var ALL_EXAMPLES = EXAMPLES.slice();
+  var loadedIdx = -1;
+  var loadedSnapshot = null;
 
   function loadExample(idx) {
-    var ex = ALL_EXAMPLES[idx];
+    var ex = EXAMPLES[idx];
     if (!ex) return;
-    editor.setValue(ex.code);
-    editor.clearHistory();
-    loadedCode = ex.code;
+    var newFiles = ex.files.map(function (f) {
+      return { name: f.name, doc: makeDoc(f.code) };
+    });
+    var mainIdx = 0;
+    for (var i = 0; i < newFiles.length; i++) {
+      if (newFiles[i].name === "main.rkt") { mainIdx = i; break; }
+    }
+    setFiles(newFiles, mainIdx);
+    loadedIdx = idx;
+    loadedSnapshot = currentSnapshot();
     exampleSel.value = String(idx);
-    detectMode();
   }
+
+  // Placeholder shown while the open files came from a gist, not a built-in
+  // example -- value "" so `exampleSel.value = ""` (see importFilesAsTabs and
+  // the revert-on-cancel below) displays it instead of silently leaving
+  // whichever example option was last selected showing.
+  var gistPlaceholderOpt = document.createElement("option");
+  gistPlaceholderOpt.value = "";
+  gistPlaceholderOpt.disabled = true;
+  gistPlaceholderOpt.textContent = "Custom (from gist)";
+  exampleSel.appendChild(gistPlaceholderOpt);
 
   EXAMPLES.forEach(function (ex, i) {
     var opt = document.createElement("option");
@@ -581,13 +772,10 @@
 
   exampleSel.addEventListener("change", function () {
     var idx = parseInt(exampleSel.value, 10);
-    if (editor.getValue() !== loadedCode &&
+    if (currentSnapshot() !== loadedSnapshot &&
         !window.confirm("Discard your edits and load “" +
-                        ALL_EXAMPLES[idx].name + "”?")) {
-      // Revert the <select> to the example that's still in the editor.
-      for (var i = 0; i < ALL_EXAMPLES.length; i++) {
-        if (ALL_EXAMPLES[i].code === loadedCode) { exampleSel.value = String(i); break; }
-      }
+                        EXAMPLES[idx].name + "”?")) {
+      exampleSel.value = loadedIdx >= 0 ? String(loadedIdx) : "";
       return;
     }
     if (worker) stop();  // switching examples ends the current run
@@ -597,26 +785,12 @@
 
   /* ---- load-from-gist ---------------------------------------------- */
 
-  var gistSlotIndex = -1;
-  var gistOptionEl = null;
-
-  // Installs/updates a single dynamic dropdown entry for the most recently
-  // loaded gist (reused across loads, not accumulated) and seeds the editor
-  // from it via the normal loadExample path.
-  function setGistExample(displayName, code) {
-    var entry = { name: "Gist: " + displayName, code: code };
-    if (gistSlotIndex === -1) {
-      gistSlotIndex = ALL_EXAMPLES.length;
-      ALL_EXAMPLES.push(entry);
-      gistOptionEl = document.createElement("option");
-      gistOptionEl.value = String(gistSlotIndex);
-      exampleSel.insertBefore(gistOptionEl, exampleSel.firstChild);
-    } else {
-      ALL_EXAMPLES[gistSlotIndex] = entry;
-    }
-    gistOptionEl.textContent = entry.name;
-    loadExample(gistSlotIndex);
-  }
+  var gistOverlay   = document.getElementById("gist-modal-overlay");
+  var gistInput     = document.getElementById("gist-input");
+  var gistErrorEl   = document.getElementById("gist-error");
+  var gistCancelBtn = document.getElementById("gist-cancel");
+  var gistImportBtn = document.getElementById("gist-import");
+  var gistCloseBtn  = document.getElementById("gist-modal-close");
 
   // "Clear the interactions menu" for a fresh gist load: stop any live run
   // and put the Interactions pane back in its pre-Run idle state (switching
@@ -637,72 +811,120 @@
     return null;
   }
 
-  // Pick the file to load from a (possibly multi-file) gist: prefer a
-  // .rkt filename, then anything GitHub tagged as Racket, else the first
-  // file -- gists have no notion of an "entry point".
-  function pickGistFile(files) {
-    var names = Object.keys(files);
-    if (names.length === 0) return null;
-    var i;
-    for (i = 0; i < names.length; i++) {
-      if (/\.rkt$/i.test(names[i])) return files[names[i]];
-    }
-    for (i = 0; i < names.length; i++) {
-      if (files[names[i]].language === "Racket") return files[names[i]];
-    }
-    return files[names[0]];
+  // "shapes.rkt" collides -> "shapes-2.rkt", "shapes-3.rkt", ...
+  function dedupeName(name, used) {
+    if (!used[name]) { used[name] = true; return name; }
+    var m = /^(.*?)(\.[^./]*)?$/.exec(name);
+    var base = m[1], ext = m[2] || "";
+    var n = 2, candidate;
+    do {
+      candidate = base + "-" + n + ext;
+      n++;
+    } while (used[candidate]);
+    used[candidate] = true;
+    return candidate;
   }
 
-  function loadGistById(id) {
-    return fetch("https://api.github.com/gists/" + encodeURIComponent(id))
-      .then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      })
-      .then(function (data) {
-        var file = pickGistFile(data.files || {});
-        if (!file) throw new Error("gist has no files");
+  // Fetch every file in a gist as { name, code }, fetching raw_url for any
+  // file GitHub truncated in the summary response. Rejects with an object
+  // carrying a user-facing `userMessage` for the modal's error line.
+  function loadGistFiles(id) {
+    return fetch("https://api.github.com/gists/" + encodeURIComponent(id), {
+      headers: { Accept: "application/vnd.github+json" }
+    }).then(function (r) {
+      if (r.status === 404) return Promise.reject({ userMessage: "No gist found with that ID." });
+      if (!r.ok) return Promise.reject({ userMessage: "GitHub returned " + r.status + "." });
+      return r.json();
+    }).then(function (data) {
+      var names = Object.keys(data.files || {});
+      if (names.length === 0) return Promise.reject({ userMessage: "That gist has no files." });
+      var used = {};
+      return Promise.all(names.map(function (name) {
+        var file = data.files[name];
+        var finalName = dedupeName(file.filename || name, used);
         if (file.truncated) {
           return fetch(file.raw_url).then(function (r) { return r.text(); })
-            .then(function (text) { return { filename: file.filename, code: text }; });
+            .then(function (text) { return { name: finalName, code: text }; });
         }
-        return { filename: file.filename, code: file.content };
-      });
+        return { name: finalName, code: file.content };
+      }));
+    });
   }
 
-  gistBtn.addEventListener("click", function () {
-    var input = window.prompt("Gist ID or URL:", "");
-    if (!input) return;
-    var id = parseGistId(input);
-    if (!id) { alert("Couldn't find a gist ID in that input."); return; }
-    gistBtn.disabled = true;
-    var prevLabel = gistBtn.textContent;
-    gistBtn.textContent = "Loading…";
-    loadGistById(id).then(function (result) {
-      resetInteractions();
-      setGistExample(result.filename, result.code);
-      editor.focus();
-      var url = new URL(window.location.href);
-      url.searchParams.set("gist", id);
-      history.replaceState(null, "", url);
-    }).catch(function (err) {
-      alert("Failed to load gist: " + (err && (err.message || err)));
-    }).then(function () {
-      gistBtn.disabled = false;
-      gistBtn.textContent = prevLabel;
+  function showGistError(msg) {
+    gistErrorEl.textContent = "⚠ " + msg;
+    gistErrorEl.hidden = false;
+  }
+  function clearGistError() {
+    gistErrorEl.hidden = true;
+    gistErrorEl.textContent = "";
+  }
+  function openGistModal() {
+    gistInput.value = "";
+    clearGistError();
+    gistOverlay.hidden = false;
+    gistInput.focus();
+  }
+  function closeGistModal() {
+    gistOverlay.hidden = true;
+  }
+
+  function importFilesAsTabs(fileList, gistId) {
+    resetInteractions();
+    var newFiles = fileList.map(function (f) {
+      return { name: f.name, doc: makeDoc(f.code) };
     });
+    setFiles(newFiles, 0);
+    loadedIdx = -1;
+    loadedSnapshot = currentSnapshot();
+    exampleSel.value = "";
+    var url = new URL(window.location.href);
+    url.searchParams.set("gist", gistId);
+    history.replaceState(null, "", url);
+  }
+
+  function submitGistImport() {
+    var raw = gistInput.value;
+    var id = parseGistId(raw);
+    if (!raw.trim() || !id) { showGistError("Enter a gist URL or ID."); return; }
+    clearGistError();
+    gistImportBtn.disabled = true;
+    gistImportBtn.textContent = "Importing…";
+    loadGistFiles(id).then(function (fileList) {
+      importFilesAsTabs(fileList, id);
+      closeGistModal();
+      editor.focus();
+    }).catch(function (err) {
+      showGistError((err && err.userMessage) || "Failed to load gist: " + (err && (err.message || err)));
+    }).then(function () {
+      gistImportBtn.disabled = false;
+      gistImportBtn.textContent = "Import";
+    });
+  }
+
+  gistBtn.addEventListener("click", openGistModal);
+  gistCancelBtn.addEventListener("click", closeGistModal);
+  gistCloseBtn.addEventListener("click", closeGistModal);
+  gistOverlay.addEventListener("click", function (ev) {
+    if (ev.target === gistOverlay) closeGistModal();
   });
+  gistInput.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") { ev.preventDefault(); submitGistImport(); }
+  });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && !gistOverlay.hidden) closeGistModal();
+  });
+  gistImportBtn.addEventListener("click", submitGistImport);
 
   loadExample(0);  // seed immediately so the editor isn't blank while a gist loads
 
   var gistParam = new URLSearchParams(window.location.search).get("gist");
   if (gistParam) {
     var initialGistId = parseGistId(gistParam) || gistParam;
-    loadGistById(initialGistId).then(function (result) {
-      resetInteractions();
-      setGistExample(result.filename, result.code);
+    loadGistFiles(initialGistId).then(function (fileList) {
+      importFilesAsTabs(fileList, initialGistId);
     }).catch(function (err) {
-      alert("Failed to load gist from URL: " + (err && (err.message || err)));
+      alert("Failed to load gist from URL: " + ((err && err.userMessage) || (err && err.message) || err));
     });
   }
 

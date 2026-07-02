@@ -1,17 +1,24 @@
 #lang racket/base
 ;; Post-build hook for the IDE app (wired in via `app.rkt`'s `hooks` field).
 ;;
-;; The IDE's example programs live one-per-file under `examples/`, and the page
-;; driver source lives at `ide.js` (next to this module, *outside* `public/` so
-;; collect-outputs doesn't copy it verbatim). This hook runs once dist/ is
-;; assembled: it reads every example file, builds the `EXAMPLES` array the page
-;; expects (`[{name, code}, ...]`), splices it into `ide.js` in place of the
-;; `__EXAMPLES__` token, and writes the result to `dist/ide.js`.
+;; The IDE's example programs live under `examples/`, one entry per example,
+;; and the page driver source lives at `ide.js` (next to this module, *outside*
+;; `public/` so collect-outputs doesn't copy it verbatim). This hook runs once
+;; dist/ is assembled: it reads every example, builds the `EXAMPLES` array the
+;; page expects (`[{name, files:[{name, code}, ...]}, ...]`), splices it into
+;; `ide.js` in place of the `__EXAMPLES__` token, and writes the result to
+;; `dist/ide.js`.
 ;;
-;; A filename like `01-hello-world.rkt` orders the example (sorted by filename)
-;; and gives its dropdown name: the leading `NN-` and the extension are dropped,
-;; dashes become spaces, and the first letter is upcased -> "Hello world". The
-;; file's full text (including its `#lang` line) is the program, verbatim.
+;; An entry under `examples/` is either a **flat file** (`01-hello-world.rkt`,
+;; a single-file example whose one tab is named `hello-world.rkt` -- the
+;; ordering prefix stripped, extension kept) or a **directory**
+;; (`09-two-file-demo/`, a multi-file example whose contents -- real
+;; filenames, no ordering prefix -- become one tab each, sorted with
+;; `main.rkt` first since that's the initial active tab). Either way, the
+;; leading `NN-` ordering prefix on the entry itself picks the dropdown order
+;; and, minus the prefix (and, for a flat file, the extension), gives its
+;; display name: dashes become spaces, first letter upcased -> "Hello world".
+;; File contents (including `#lang` lines) are the program, verbatim.
 ;;
 ;; In addition to splicing examples, this hook vendors the CodeMirror 5 editor
 ;; tree (apps/ide/vendor/codemirror/) into dist/codemirror/. The vendor dir
@@ -28,16 +35,24 @@
 
 (provide build-ide-js)
 
-;; "01-hello-world.rkt" -> "Hello world"
-(define (display-name file-name)
-  (define stem (path->string (path-replace-extension file-name #"")))
-  ;; Drop a leading ordering prefix: one-or-more digits then a dash.
-  (define unprefixed (regexp-replace #rx"^[0-9]+-" stem ""))
-  (define spaced (string-replace unprefixed "-" " "))
+;; Drop a leading ordering prefix ("NN-") from a stem or filename.
+(define (strip-order-prefix s)
+  (regexp-replace #rx"^[0-9]+-" s ""))
+
+;; "01-hello-world" -> "Hello world" (stem, no extension, no ordering prefix)
+(define (display-name stem)
+  (define spaced (string-replace (strip-order-prefix stem) "-" " "))
   (if (= 0 (string-length spaced))
       spaced
       (string-append (string-upcase (substring spaced 0 1))
                      (substring spaced 1))))
+
+;; Sort a multi-file example's filenames with main.rkt first, else alphabetic.
+(define (file-order a b)
+  (cond
+    [(string=? a "main.rkt") #t]
+    [(string=? b "main.rkt") #f]
+    [else (string<? a b)]))
 
 (define (build-ide-js ctx)
   (define app-dir (hash-ref ctx 'app-dir))
@@ -48,16 +63,34 @@
     (error 'build-ide-js "no examples dir at ~a" examples-dir))
   (unless (file-exists? src)
     (error 'build-ide-js "no ide.js source at ~a" src))
-  ;; Sorted by filename so the `NN-` prefixes order the dropdown.
-  (define files
-    (sort (for/list ([p (in-list (directory-list examples-dir))]
-                     #:when (file-exists? (build-path examples-dir p)))
-            p)
-          string<? #:key path->string))
+  ;; Sorted by entry name so the `NN-` prefixes order the dropdown.
+  (define entries
+    (sort (directory-list examples-dir) string<? #:key path->string))
   (define examples
-    (for/list ([f (in-list files)])
-      (hasheq 'name (display-name f)
-              'code (file->string (build-path examples-dir f)))))
+    (for/list ([e (in-list entries)])
+      (define e-path (build-path examples-dir e))
+      (define e-name (path->string e))
+      (cond
+        [(directory-exists? e-path)
+         (define stem (strip-order-prefix e-name))
+         (define file-names
+           (sort (for/list ([p (in-list (directory-list e-path))]
+                            #:when (file-exists? (build-path e-path p)))
+                   (path->string p))
+                 file-order))
+         (hasheq 'name (display-name stem)
+                 'files (for/list ([fn (in-list file-names)])
+                          (hasheq 'name fn
+                                  'code (file->string (build-path e-path fn)))))]
+        [else
+         (define stem (path->string (path-replace-extension e #"")))
+         (define ext (path-get-extension e))
+         (define tab-name
+           (string-append (strip-order-prefix stem)
+                           (if ext (bytes->string/utf-8 ext) "")))
+         (hasheq 'name (display-name stem)
+                 'files (list (hasheq 'name tab-name
+                                      'code (file->string e-path))))])))
   (define template (file->string src))
   (define n-tokens (length (regexp-match-positions* #rx"__EXAMPLES__" template)))
   (unless (= n-tokens 1)
