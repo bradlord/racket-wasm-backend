@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Reproduce the forked-thread (place) foreign-call trap in the browser build.
-// Boots the IDE dist (dist/), runs a Definitions module that spawns a trivial
-// place via dynamic-place, and captures any trap from ANY target -- including
-// the nested pthread workers where the trap fires -- via raw CDP auto-attach.
-// (dist/shell-worker.js must have its printErr forward to console for the
-// emscripten "worker sent an error!" text to surface.)
+// Boots the IDE dist (apps/ide/dist/), runs a Definitions module that spawns a
+// trivial place via dynamic-place, and captures any trap from ANY target --
+// including the nested pthread workers where the trap fires -- via raw CDP
+// auto-attach. (apps/ide/dist/shell-worker.js must have its printErr forward
+// to console for the emscripten "worker sent an error!" text to surface.)
 //
 //   node tools/place-crash-cdp.mjs [--timeout 180]
 import { spawn } from 'node:child_process';
@@ -14,7 +14,7 @@ import { dirname, resolve } from 'node:path';
 import { chromium } from 'playwright';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const DIST = 'dist';
+const DIST = 'apps/ide/dist';
 const CHROME = chromium.executablePath();
 
 const o = { timeout: 180 };

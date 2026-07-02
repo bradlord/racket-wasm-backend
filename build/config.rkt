@@ -23,9 +23,10 @@
 (define overlay-dir       (at-root "overlay"))
 (define overlay-local-dir (at-root "overlay-local"))
 ;; Repo-side, NOT copied into the clone: runtime glue. Holds (a) host-side glue
-;; (browser worker bootstrap + dev server), copied into dist/ by the
-;; orchestrator's collect-outputs so a surface can be swapped without touching
-;; the (expensive) link; and (b) the built-in emcc link-JS glue
+;; (browser worker bootstrap + dev server), copied into an app's dist/ (default
+;; apps/ide/dist/) by the orchestrator's collect-outputs so a surface can be
+;; swapped without touching the (expensive) link; and (b) the built-in emcc
+;; link-JS glue
 ;; (`link-glue-names`), passed to cs/c/build.zuo's `wasm` link via the
 ;; RUNTIME_GLUE_DIR make var. See build-wasm.md and the project roadmap.
 (define runtime-glue-dir  (at-root "runtime-glue"))
@@ -46,13 +47,13 @@
 ;; (its tpb32l .zo depend on the patch). See build-wasm.md "Text / Pango".
 (define package-patches-dir (at-root "package-patches"))
 
-;; The repo's canonical app: the DrRacket-like IDE / web-repl. `build` builds
-;; this app (through the generic make-wasm-racket path -- it is the dogfood, not
-;; a bespoke build), and the binary-catalog rebuild reads its package/dep set.
-;; Its config lives in apps/ide/app.rkt; its page surface in apps/ide/public.
+;; The repo's canonical app: the DrRacket-like IDE / web-repl, built like any
+;; other app via `app apps/ide` (there is no bespoke `build` subcommand -- it
+;; is the dogfood of the generic make-wasm-racket path), landing in
+;; apps/ide/dist/ by default. The binary-catalog rebuild reads its package/dep
+;; set. Its config lives in apps/ide/app.rkt; its page surface in apps/ide/public.
 (define ide-app-dir (at-root "apps" "ide"))
 (define work-dir      (at-root ".work"))
-(define dist-dir      (at-root "dist"))
 ;; The cloned upstream tree.
 (define clone-dir     (build-path work-dir "racket"))
 ;; Where the wasm link target emits its output inside the clone.

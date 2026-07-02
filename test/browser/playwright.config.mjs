@@ -24,9 +24,9 @@ export default defineConfig({
     launchOptions: { args: ['--enable-features=SharedArrayBuffer'] },
     trace: 'on-first-retry',
   },
-  // Serve dist/ with the COOP/COEP headers SharedArrayBuffer needs.
+  // Serve apps/ide/dist/ with the COOP/COEP headers SharedArrayBuffer needs.
   webServer: {
-    command: `racket ${resolve(repoRoot, 'build/main.rkt')} serve dist ${PORT}`,
+    command: `racket ${resolve(repoRoot, 'build/main.rkt')} serve apps/ide/dist ${PORT}`,
     cwd: repoRoot,
     url: `${baseURL}/`,
     reuseExistingServer: !process.env.CI,

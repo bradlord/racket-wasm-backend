@@ -1,7 +1,7 @@
 # Browser tests for the Racket WASM IDE
 
 Headless-Chromium tests and an ad-hoc eval CLI that drive the real `index.html`
-browser surface from `dist/`. They exercise the whole browser stack: cross-origin
+browser surface from `apps/ide/dist/`. They exercise the whole browser stack: cross-origin
 isolation, the SharedArrayBuffer stdin/stdout rings, the submission REPL,
 `racket/draw` + the canvas blit channel, and the `web-repl` helpers.
 
@@ -10,7 +10,7 @@ Playwright is used because headless Chromium honors the COOP/COEP headers
 
 ## Prerequisites
 
-- A built `dist/` (`racket build/main.rkt build …` from the repo root).
+- A built `apps/ide/dist/` (`racket build/main.rkt app apps/ide …` from the repo root).
 - `racket` on `PATH` (to run `serve.rkt`).
 - Node 18+.
 
@@ -59,7 +59,7 @@ node tools/eval.mjs --shot /tmp/out.png '#lang racket
 (send dc draw-ellipse 2 2 56 56)
 (display-bm bm)'
 
-# reuse an already-running server (racket build/main.rkt serve dist 8123)
+# reuse an already-running server (racket build/main.rkt serve apps/ide/dist 8123)
 node tools/eval.mjs --url http://127.0.0.1:8123 '(+ 1 2)'
 
 # watch it happen
@@ -96,6 +96,6 @@ rather than guessing when buffered output has flushed.
 ## CI
 
 `.github/workflows/browser-tests.yml` installs racket + node + Chromium and runs
-the suite. It expects a prebuilt `dist/` (the WASM build needs emsdk + host
-toolchains, so it's produced by a separate job/release and downloaded here — see
-the workflow's "obtain dist" step).
+the suite. It expects a prebuilt `apps/ide/dist/` (the WASM build needs emsdk +
+host toolchains, so it's produced by a separate job/release and downloaded here
+— see the workflow's "obtain apps/ide/dist/" step).

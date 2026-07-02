@@ -6,8 +6,8 @@
 ;; Subcommands:
 ;;   sync                      clone/fast-forward upstream to the pinned commit
 ;;   apply [--check]           apply patches/ + overlay/ into the clone
-;;   build  [opts]             full cross-build (ensure clone+delta, then make) -> dist/
 ;;   app <dir> [opts]          build a custom app from <dir>/app.rkt -> <dir>/dist
+;;                             (the IDE is just an app: `app apps/ide`)
 ;;   package [<dir>] [opts]    emit a distributable binary package (runtime set +
 ;;                             metadata + .tar.gz) for <dir>'s config (default IDE)
 ;;   cross-sdk [<dir>] [opts]  emit a standalone cross-compiler SDK (retarget files
@@ -82,19 +82,6 @@
 
 (define (cmd-apply args)
   (apply-delta #:check-only? (and (member "--check" args) #t)))
-
-;; `build` builds the repo's canonical app -- the IDE (apps/ide) -- into dist/,
-;; through the same generic make-wasm-racket path any custom app uses (the
-;; dogfood). For a different config, write an app and use `app <dir>`.
-(define (cmd-build args)
-  (define opts (parse-build-opts args))
-  (run-app-manifest ide-app-dir
-                    #:dest dist-dir
-                    #:scheme (hash-ref opts 'scheme #f)
-                    #:racket (hash-ref opts 'racket #f)
-                    #:runtime-pkg (hash-ref opts 'runtime #f)
-                    #:force? (hash-ref opts 'force? #f)
-                    #:emcc-flags (hash-ref opts 'emcc-flags "")))
 
 ;; Build a custom app: `app <dir> [--dest <dir>] [--scheme <p>] [--racket <p>]`.
 ;; <dir>/app.rkt provides `app` (a hash); output lands in <dir>/dist (or --dest).
@@ -175,11 +162,12 @@
           (loop (cdr as) sdk share-data dest racket work catalog (cons (car as) pkgs) locals)])])))
 
 ;; Repack only the browser package data file (share.data/share.data.js) from
-;; the already-installed share/pkgs tree, then refresh dist/. The point of the
-;; split: this avoids the emcc relink, so changing packages is cheap.
+;; the already-installed share/pkgs tree, then refresh the IDE's dist/. The
+;; point of the split: this avoids the emcc relink, so changing packages is
+;; cheap.
 (define (cmd-pack-pkgs args)
   (pack-packages #:dest (clone-wasm-out) #:cross-root clone-dir)
-  (collect-outputs))
+  (collect-outputs #:dest (build-path ide-app-dir "dist")))
 
 (define (parse-serve-args args)
   (when (empty? args) (error "must specify directory to serve"))
@@ -212,7 +200,6 @@
 (define commands
   (list (cons "sync" cmd-sync)
         (cons "apply" cmd-apply)
-        (cons "build" cmd-build)
         (cons "app" cmd-app)
         (cons "package" cmd-package)
         (cons "cross-sdk" cmd-cross-sdk)

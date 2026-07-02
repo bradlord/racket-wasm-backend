@@ -75,12 +75,12 @@ web app where download size matters.
   `web-repl` (the DOM/canvas/REPL collection the browser IDE is built on).
 - `package-patches/` — patches applied to upstream Racket *packages* (as opposed
   to the core tree), e.g. a cairo font-options fix for `draw-lib`.
-- `apps/` — sample applications (`ide`, `node-repl`).
+- `apps/` — sample applications (`ide`, `node-repl`); each builds into its own
+  `<app>/dist/` (gitignored) — e.g. `apps/ide/dist/`.
 - `examples/` — minimal standalone example app (`hello`).
 - `test/node/` — WASM test/bench scripts, run against the built clone.
 - `upstream.lock` — the pinned upstream commit the delta applies onto.
 - `.work/` — the cloned tree + build artifacts (gitignored, disposable).
-- `dist/` — collected build outputs (gitignored).
 
 ## Prerequisites
 
@@ -94,10 +94,10 @@ web app where download size matters.
 ```sh
 racket build/main.rkt sync          # clone/fast-forward upstream to the pin
 racket build/main.rkt apply         # apply patches/ + overlay/ into the clone
-racket build/main.rkt build \
+racket build/main.rkt app apps/ide \
   --pkgs "draw-lib datalog pict-lib" --wasm-deps draw \
   --scheme <host-chez> --racket <host-racket>
-racket build/main.rkt serve dist 8123   # COOP/COEP server -> http://127.0.0.1:8123/
+racket build/main.rkt serve apps/ide/dist 8123   # COOP/COEP server -> http://127.0.0.1:8123/
 ```
 
 ## About `build-wasm.md`

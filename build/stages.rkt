@@ -108,7 +108,7 @@
 ;; node = racket.*), defaulting to browser. The surface dir defaults to the IDE
 ;; -- make-wasm-racket overrides #:surface-dir / #:dest / #:target to assemble an
 ;; arbitrary app from its own public/ dir.
-(define (collect-outputs #:dest        [dest dist-dir]
+(define (collect-outputs #:dest        [dest (build-path ide-app-dir "dist")]
                          #:surface-dir [surface-dir (build-path ide-app-dir "public")]
                          #:target      [target 'browser]
                          #:runtime-src [runtime-src (clone-wasm-out)]
@@ -322,7 +322,7 @@
                        #:pre-js [pre-js '()] #:post-js [post-js '()]
                        #:extern-pre-js [extern-pre-js '()]
                        #:scheme [scheme-opt #f] #:racket [racket-opt #f]
-                       #:dest [dest dist-dir]
+                       #:dest [dest (build-path ide-app-dir "dist")]
                        #:surface-dir [surface-dir (build-path ide-app-dir "public")]
                        #:target [target 'browser]
                        #:runtime-pkg [runtime-pkg #f]

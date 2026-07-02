@@ -7,7 +7,7 @@ name: ci
 # assemble in seconds. We persist that cache (see the `actions/cache` step) so
 # only the first run and delta/pin/pkg changes pay the ~30-45 min cold build.
 #
-# Deploy: on a green push to main, the `deploy` job publishes the `dist`
+# Deploy: on a green push to main, the `deploy` job publishes the `ide-dist`
 # artifact to Netlify (gated behind build + browser-tests). Needs
 # NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID repo secrets.
 
@@ -186,15 +186,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y meson ninja-build cmake pkg-config gperf
 
-      # Build the IDE (the default app). Warm = clone-free assemble (no toolchain
-      # flags needed); cold = full build using the host Chez/Racket above.
+      # Build the IDE (the repo's canonical app, apps/ide -- built like any other
+      # app via `app apps/ide`). Warm = clone-free assemble (no toolchain flags
+      # needed); cold = full build using the host Chez/Racket above.
       - name: Build IDE
         run: |
           args=()
           if [ -n "${HOST_SCHEME:-}" ]; then
             args+=(--scheme "$HOST_SCHEME" --racket "$HOST_RACKET")
           fi
-          racket build/main.rkt build "${args[@]}"
+          racket build/main.rkt app apps/ide "${args[@]}"
 
       # End-to-end cairo/png/freetype FFI smoke against the node base runtime.
       # Runs + asserts on a COLD build (clone present, FFI linkage could have
@@ -203,41 +204,42 @@ jobs:
       - name: FFI draw-stack test
         run: bash test/node/run-draw-stack.sh
 
-      - name: Sanity-check dist/
+      - name: Sanity-check apps/ide/dist/
         run: |
-          test -f dist/index.html && test -f dist/racket-web.js && test -f dist/racket-web.wasm \
-            || { echo "dist/ is missing the browser assets"; ls -la dist || true; exit 1; }
+          test -f apps/ide/dist/index.html && test -f apps/ide/dist/racket-web.js && test -f apps/ide/dist/racket-web.wasm \
+            || { echo "apps/ide/dist/ is missing the browser assets"; ls -la apps/ide/dist || true; exit 1; }
 
       - name: Upload dist
         uses: actions/upload-artifact@v7
         with:
-          name: dist
-          path: dist
+          name: ide-dist
+          path: apps/ide/dist
           if-no-files-found: error
 
-  # Reuses the existing reusable workflow: it downloads the `dist` artifact and
-  # runs the Playwright smoke suite (test/browser/) in headless Chromium.
+  # Reuses the existing reusable workflow: it downloads the `ide-dist` artifact
+  # and runs the Playwright smoke suite (test/browser/) in headless Chromium.
   browser-tests:
     needs: build
     uses: ./.github/workflows/browser-tests.yml
     with:
-      dist-artifact: dist
+      dist-artifact: ide-dist
 
   # --- deploy -----------------------------------------------------------------
-  # Publishes the same `dist` artifact to Netlify, gated behind a green build +
-  # browser-tests. MANUAL ONLY: runs solely on a workflow_dispatch from main, so
-  # pushes (and PRs) build+test but never deploy -- you trigger a release by
-  # hand. COOP/COEP headers ship in dist/_headers + dist/netlify.toml (from
-  # apps/ide/public/). Needs NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID repo secrets.
+  # Publishes the same `ide-dist` artifact to Netlify, gated behind a green
+  # build + browser-tests. MANUAL ONLY: runs solely on a workflow_dispatch from
+  # main, so pushes (and PRs) build+test but never deploy -- you trigger a
+  # release by hand. COOP/COEP headers ship in dist/_headers + dist/netlify.toml
+  # (from apps/ide/public/). Needs NETLIFY_AUTH_TOKEN + NETLIFY_SITE_ID repo
+  # secrets.
   deploy:
     needs: [build, browser-tests]
     if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
-        with: { name: dist, path: dist }
+        with: { name: ide-dist, path: apps/ide/dist }
       - name: Deploy to Netlify
-        run: npx netlify-cli deploy --dir=dist --prod
+        run: npx netlify-cli deploy --dir=apps/ide/dist --prod
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
