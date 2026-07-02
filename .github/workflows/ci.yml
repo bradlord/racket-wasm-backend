@@ -51,9 +51,17 @@ jobs:
 
       # Provides emcc/emconfigure for the cold path (the emcc link). The action
       # caches the emsdk install itself; harmless on warm runs (no link happens).
-      # Defaults to 'latest'; the repo's libffi 3.5.x is compatible with current
-      # emsdk. Pin `version:` here if a future emsdk breaks the link.
+      # Pinned to 5.0.7 (matching the locally-verified-working dev toolchain):
+      # 'latest' silently drifted to 6.0.2 during an 11-day CI gap and broke the
+      # racket-web.js PROXY_TO_PTHREAD proxied-main worker spawn (shell-worker.js's
+      # mainScriptUrlOrBlob fix no longer takes effect on 6.0.2), which races/
+      # aborts the racket-web.data preload fetch and hangs boot at "Preparing (1)"
+      # forever -- see the browser-tests failures on 2026-07-02. Re-verify against
+      # a newer emsdk deliberately (bump this pin + a manual workflow_dispatch)
+      # rather than free-floating on 'latest' again.
       - uses: mymindstorm/setup-emsdk@v16
+        with:
+          version: '5.0.7'
 
       # Persist the three content-addressed runtime cache layers -- NOT the clone
       # (.work/racket is huge, mutated, and re-synced on demand). The key mirrors
