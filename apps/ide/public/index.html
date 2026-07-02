@@ -75,8 +75,11 @@
     .panel-header {
       padding: 14px 16px;
       border-bottom: 1px solid rgba(27, 37, 48, 0.08);
-      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      display: flex; flex-direction: column; gap: 10px;
       font-family: var(--sans);
+    }
+    .panel-header-row {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
     }
     .panel-header h2 { margin: 0; font-size: 16px; }
     .panel-header .sub { color: var(--muted); font-size: 13px; }
@@ -295,17 +298,20 @@
       <!-- Definitions -->
       <section class="panel" aria-label="Definitions">
         <header class="panel-header">
-          <div>
+          <div class="panel-header-row">
             <h2>Definitions</h2>
-            <div class="sub">Saved to <code>/tmp/main.rkt</code>; run with a REPL in its namespace.</div>
+            <div class="toolbar-group">
+              <button class="button button--primary" id="run" type="button">▶ Run</button>
+              <button class="button button--danger" id="stop" type="button" disabled>Stop</button>
+            </div>
           </div>
-          <div class="toolbar-group">
-            <select class="select" id="example" aria-label="Load an example">
-              <!-- options injected by ide.js (single source of truth) -->
-            </select>
-            <button class="button" id="gist" type="button">Load Gist…</button>
-            <button class="button button--primary" id="run" type="button">▶ Run</button>
-            <button class="button button--danger" id="stop" type="button" disabled>Stop</button>
+          <div class="panel-header-row">
+            <div class="toolbar-group">
+              <select class="select" id="example" aria-label="Load an example">
+                <!-- options injected by ide.js (single source of truth) -->
+              </select>
+              <button class="button" id="gist" type="button">Load Gist…</button>
+            </div>
           </div>
         </header>
         <textarea id="editor" spellcheck="false" autocapitalize="off"
@@ -318,11 +324,13 @@
       <!-- Interactions -->
       <section class="panel interactions idle" id="interactions" aria-label="Interactions">
         <header class="panel-header">
-          <div>
-            <h2>Interactions</h2>
-            <div class="sub">output · the program's stdin · a REPL in its namespace</div>
+          <div class="panel-header-row">
+            <div>
+              <h2>Interactions</h2>
+              <div class="sub">output · the program's stdin · a REPL in its namespace</div>
+            </div>
+            <span class="chip" id="status" data-state="idle">Idle</span>
           </div>
-          <span class="chip" id="status" data-state="idle">Idle</span>
         </header>
 
         <div class="repl-idle">
